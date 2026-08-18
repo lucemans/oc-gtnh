@@ -4,10 +4,11 @@
 --   wget https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/programs/ocup.lua /bin/ocup.lua
 
 local component = require("component")
+local computer = require("computer")
 local filesystem = require("filesystem")
 local term = require("term")
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 
 local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/"
 local MANIFEST = "manifest.txt"
@@ -60,10 +61,20 @@ local function waitForConnect(handle)
   end
 end
 
+-- raw.githubusercontent.com holds a file for five minutes per edge node, and it
+-- ignores a Cache-Control: no-cache request header. A query string it has not
+-- seen before does miss the cache, so every fetch carries a unique one.
+local requests = 0
+
+local function fresh(url)
+  requests = requests + 1
+  return url .. "?ocup=" .. math.floor(computer.uptime() * 1000) .. "-" .. requests
+end
+
 -- the component handle is used directly: the "internet" library wraps it in a
 -- table whose close field shadows the real method and is not callable
 local function download(url)
-  local handle, reason = component.internet.request(url)
+  local handle, reason = component.internet.request(fresh(url))
   if not handle then
     return nil, tostring(reason)
   end

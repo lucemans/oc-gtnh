@@ -239,6 +239,29 @@ test("ocup installs nothing when one file fails", function()
   check(oc.files["/bin/ocdump.lua"] == nil, "installed a program despite the missing library")
 end)
 
+test("ocup asks for a fresh copy every time", function()
+  oc.components = { INTERNET }
+  oc.respond = serveProgram({
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+  })
+
+  oc.run("ocup")
+  check(#oc.requests > 1, "no requests were made")
+
+  local seen = {}
+  for _, request in ipairs(oc.requests) do
+    -- a plain URL would be answered from the edge cache for five minutes
+    check(request.url:find("?ocup=", 1, true) ~= nil,
+      "request carried no cache buster: " .. request.url)
+    check(seen[request.url] == nil, "two requests shared a URL: " .. request.url)
+    seen[request.url] = true
+  end
+end)
+
 test("ocup reports a failed download", function()
   oc.components = { INTERNET }
   oc.respond = function()
