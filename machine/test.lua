@@ -220,6 +220,25 @@ test("ocup reports unchanged programs", function()
   check(contains(oc.printed(), "up to date"), "did not report an unchanged program")
 end)
 
+test("ocup installs nothing when one file fails", function()
+  oc.components = { INTERNET }
+  -- the library is missing, exactly the state that broke the machine once:
+  -- programs newer than the library they require
+  oc.respond = serveProgram({
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+  })
+
+  oc.run("ocup")
+  local out = oc.printed()
+  check(contains(out, "lib/ocgt.lua"), "did not name the file that failed")
+  check(contains(out, "nothing was installed"), "did not say the machine is unchanged")
+  check(oc.files["/bin/ocdebug.lua"] == nil, "installed a program despite the missing library")
+  check(oc.files["/bin/ocdump.lua"] == nil, "installed a program despite the missing library")
+end)
+
 test("ocup reports a failed download", function()
   oc.components = { INTERNET }
   oc.respond = function()

@@ -7,7 +7,7 @@ local component = require("component")
 local filesystem = require("filesystem")
 local term = require("term")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 
 local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/"
 local MANIFEST = "manifest.txt"
@@ -219,39 +219,59 @@ for _, file in ipairs(FILES) do
   nameWidth = math.max(nameWidth, #file.source)
 end
 
-local failed = 0
+local function label(name)
+  return "  " .. name .. string.rep(" ", nameWidth - #name) .. "  "
+end
+
+-- Everything is fetched before anything is written. Writing as it goes would
+-- let one failed download leave the programs newer than the library they
+-- require, which breaks every one of them until the next run.
+local failure = nil
 for index, file in ipairs(FILES) do
   term.clearLine()
   write("  " .. bar(index - 1, #FILES, 12) .. " ", CYAN)
   write(file.source, DIM)
 
-  local existing = readFile(file.target)
   local contents, reason = download(BASE_URL .. file.source)
+  if not contents then
+    failure = { source = file.source, reason = reason }
+    break
+  end
+  file.contents = contents
+end
+
+if failure then
+  term.clearLine()
+  write(label(failure.source), WHITE)
+  write("failed      " .. failure.reason .. "\n", RED)
+  write("  nothing was installed, the machine is unchanged\n", RED)
+  paint(WHITE)
+  return 1
+end
+
+local failed = 0
+for _, file in ipairs(FILES) do
+  local existing = readFile(file.target)
+  -- overwriting a running program is safe: OpenOS loads the whole file first
+  local ok, writeReason = writeFile(file.target, file.contents)
 
   local status, color
-  if not contents then
-    status, color = "failed      " .. reason, RED
-    failed = failed + 1
+  if ok then
+    status, color = describe(existing, file.contents)
   else
-    -- overwriting a running program is safe: OpenOS loads the whole file first
-    local ok, writeReason = writeFile(file.target, contents)
-    if ok then
-      status, color = describe(existing, contents)
-    else
-      status, color = "failed      " .. writeReason, RED
-      failed = failed + 1
-    end
+    status, color = "failed      " .. writeReason, RED
+    failed = failed + 1
   end
 
   term.clearLine()
-  write("  " .. file.source .. string.rep(" ", nameWidth - #file.source) .. "  ", WHITE)
+  write(label(file.source), WHITE)
   write(status .. "\n", color)
 end
 
 term.clearLine()
 write("  " .. bar(#FILES, #FILES, 12) .. " ", CYAN)
 if failed > 0 then
-  write(failed .. " of " .. #FILES .. " failed\n", RED)
+  write(failed .. " of " .. #FILES .. " could not be written\n", RED)
   paint(WHITE)
   return 1
 end
