@@ -11,6 +11,7 @@ local INSTALL_DIR = "/bin"
 local PROGRAMS = {
   "ocup.lua",
   "ocdebug.lua",
+  "ocdump.lua",
 }
 
 local function waitForConnect(handle)
