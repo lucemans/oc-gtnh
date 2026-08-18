@@ -952,11 +952,13 @@ end)
 local SWEEPER_CELL_W = 3
 local TOP_LEFT = "\226\148\140"
 
--- mirrors the layout in programs/ocsweeper.lua: the board is boxed and centred,
--- so where a cell lands depends on the board size and the screen
+-- mirrors the layout in programs/ocsweeper.lua: the board is a full grid and is
+-- centred, so a cell owns two rows and three columns
+local SWEEPER_CELL_H = 2
+
 local function sweeperOrigin(width, height)
   local columns = width * SWEEPER_CELL_W + 1
-  local rows = height + 2
+  local rows = height * SWEEPER_CELL_H + 1
   local x = math.max(1, math.floor((oc.width - columns) / 2) + 1)
   local y = 2 + math.max(0, math.floor(((oc.height - 2) - (rows + 1)) / 2))
   return x, y
@@ -965,7 +967,8 @@ end
 local function cellTouch(boardW, boardH, x, y, button)
   local originX, originY = sweeperOrigin(boardW, boardH)
   oc.push("touch", "screen",
-    originX + (x - 1) * SWEEPER_CELL_W + 1, originY + y, button or 0)
+    originX + (x - 1) * SWEEPER_CELL_W + 1,
+    originY + (y - 1) * SWEEPER_CELL_H + 1, button or 0)
 end
 
 test("ocsweeper draws a board", function()
@@ -1097,24 +1100,231 @@ end)
 -- shows a 1 and the single mine is one of the three closed cells.
 local CHORD_GUESSES = { { 2, 1 }, { 1, 2 }, { 2, 2 } }
 
-test("ocsweeper opens around a finished number, and never detonates", function()
-  local cleared = 0
-  for _, guess in ipairs(CHORD_GUESSES) do
-    oc.reset()
-    oc.components = {}
-    cellTouch(2, 2, 1, 1)                          -- open the corner
-    cellTouch(2, 2, guess[1], guess[2], 1)         -- flag one of the three
-    cellTouch(2, 2, 1, 1)                          -- click the number
+-- Reads the board back off the screen the way a player sees it. Closed and
+-- opened-empty cells are both two spaces, so the background colour is what
+-- separates them.
+local HIDDEN_BG, OPEN_BG = 0x6E6E6E, 0x1A1A1A
 
-    oc.run("ocsweeper", "2", "2", "1")
-    local frame = oc.frame()
-    -- the whole point: guessing wrong costs nothing, it does not go boom
-    check(not contains(frame, "boom"), "a misplaced flag detonated")
-    if contains(frame, "cleared in") then
-      cleared = cleared + 1
+local function readBoard(w, h)
+  local rows = {}
+  for line in (oc.frame() .. "\n"):gmatch("([^\n]*)\n") do
+    rows[#rows + 1] = line
+  end
+
+  local originX, originY
+  for y = 1, #rows do
+    local at = rows[y]:find("\226\148\140", 1, true) -- the top-left corner
+    if at then
+      -- byte offset to character column
+      originX = utf8.len(rows[y]:sub(1, at - 1)) + 1
+      originY = y
+      break
     end
   end
-  check(cleared == 1, "expected the one correct flag to clear the board, got " .. cleared)
+  if not originX then
+    return nil
+  end
+
+  local board = {}
+  for y = 1, h do
+    board[y] = {}
+    for x = 1, w do
+      local column = originX + (x - 1) * 3 + 2
+      local row = originY + (y - 1) * 2 + 1
+      local colour = oc.colors[row] and oc.colors[row][column]
+      local char = " "
+      if rows[row] then
+        local offset = utf8.offset(rows[row], column)
+        if offset then
+          char = rows[row]:sub(offset, offset)
+        end
+      end
+      board[y][x] = {
+        digit = tonumber(char),
+        closed = colour ~= nil and colour.bg == HIDDEN_BG,
+        opened = colour ~= nil and colour.bg == OPEN_BG,
+        screenX = column,
+        screenY = row,
+      }
+    end
+  end
+  return board, originX, originY
+end
+
+local function neighboursOf(board, x, y, w, h)
+  local out = {}
+  for dy = -1, 1 do
+    for dx = -1, 1 do
+      local nx, ny = x + dx, y + dy
+      if (dx ~= 0 or dy ~= 0) and nx >= 1 and nx <= w and ny >= 1 and ny <= h then
+        out[#out + 1] = { nx, ny, board[ny][nx] }
+      end
+    end
+  end
+  return out
+end
+
+test("ocsweeper deals only boards that can be reasoned out", function()
+  -- reset again after resizing: the screen buffer is built to the size in effect
+  oc.width, oc.height = 160, 50
+  oc.reset()
+
+  -- ten fresh boards, each opened and then restarted
+  for _ = 1, 10 do
+    cellTouch(21, 21, 11, 11)
+    oc.push("key_down", "keyboard", 0, 0x13) -- r
+  end
+
+  local ok, reason = oc.run("ocsweeper", "21", "21")
+  check(ok, "ocsweeper crashed: " .. tostring(reason))
+  -- the header says so when a fair layout could not be found
+  local seen = table.concat(oc.frames, "\n")
+  check(not contains(seen, "guess required"), "dealt a board that needs a guess")
+  check(contains(seen, "21 x 21"), "did not deal the full 21 by 21")
+
+  oc.width, oc.height = 80, 20
+  oc.reset()
+end)
+
+-- A 2x2 board with one mine cannot be reasoned out, so the generator now eases
+-- its mines away and the old trick of enumerating three candidates no longer
+-- says anything. These play a real board instead, deducing from the screen the
+-- way a player would, and rely on the harness's fixed clock to deal the same
+-- board twice.
+local BOARD_W, BOARD_H, BOARD_MINES = 9, 8, 10
+
+local function openingLook()
+  oc.reset()
+  cellTouch(BOARD_W, BOARD_H, 5, 4)
+  oc.run("ocsweeper", tostring(BOARD_W), tostring(BOARD_H), tostring(BOARD_MINES))
+  return readBoard(BOARD_W, BOARD_H)
+end
+
+-- a number whose closed neighbours exactly equal its count: every one is a mine,
+-- which is the only thing a player needs to chord it safely
+local function settledNumber(board)
+  for y = 1, BOARD_H do
+    for x = 1, BOARD_W do
+      local cell = board[y][x]
+      if cell.opened and cell.digit then
+        local closed = {}
+        for _, n in ipairs(neighboursOf(board, x, y, BOARD_W, BOARD_H)) do
+          if n[3].closed then
+            closed[#closed + 1] = { n[1], n[2] }
+          end
+        end
+        if #closed == cell.digit and #closed > 0 then
+          return x, y, closed
+        end
+      end
+    end
+  end
+  return nil
+end
+
+test("ocsweeper opens around a finished number, and never detonates", function()
+  local board = openingLook()
+  check(board ~= nil, "could not read the board off the screen")
+  if not board then
+    return
+  end
+
+  local x, y, mines = settledNumber(board)
+  check(x ~= nil, "no number on the opening board had its mines pinned down")
+  if not x then
+    return
+  end
+
+  local before = 0
+  for by = 1, BOARD_H do
+    for bx = 1, BOARD_W do
+      if board[by][bx].opened then
+        before = before + 1
+      end
+    end
+  end
+
+  oc.reset()
+  cellTouch(BOARD_W, BOARD_H, 5, 4)
+  for _, cell in ipairs(mines) do
+    cellTouch(BOARD_W, BOARD_H, cell[1], cell[2], 1)
+  end
+  cellTouch(BOARD_W, BOARD_H, x, y)
+  oc.run("ocsweeper", tostring(BOARD_W), tostring(BOARD_H), tostring(BOARD_MINES))
+
+  local after = readBoard(BOARD_W, BOARD_H)
+  local opened = 0
+  for by = 1, BOARD_H do
+    for bx = 1, BOARD_W do
+      if after[by][bx].opened then
+        opened = opened + 1
+      end
+    end
+  end
+
+  check(not contains(oc.frame(), "boom"), "a correct chord detonated")
+  check(opened > before, "the chord opened nothing: " .. before .. " -> " .. opened)
+end)
+
+test("ocsweeper refuses a chord when a flag is in the wrong place", function()
+  local board = openingLook()
+  if not board then
+    check(false, "could not read the board off the screen")
+    return
+  end
+
+  local x, y = settledNumber(board)
+  if not x then
+    check(false, "no settled number on the opening board")
+    return
+  end
+
+  local before = 0
+  for by = 1, BOARD_H do
+    for bx = 1, BOARD_W do
+      if board[by][bx].opened then
+        before = before + 1
+      end
+    end
+  end
+
+  -- flag a closed cell that the number does not touch, so its count can never
+  -- be satisfied; the chord must do nothing at all rather than gamble
+  local wrongX, wrongY
+  for by = 1, BOARD_H do
+    for bx = 1, BOARD_W do
+      if board[by][bx].closed and (math.abs(bx - x) > 1 or math.abs(by - y) > 1) then
+        wrongX, wrongY = bx, by
+        break
+      end
+    end
+    if wrongX then
+      break
+    end
+  end
+  check(wrongX ~= nil, "no distant closed cell to mis-flag")
+
+  oc.reset()
+  cellTouch(BOARD_W, BOARD_H, 5, 4)
+  cellTouch(BOARD_W, BOARD_H, wrongX, wrongY, 1)
+  cellTouch(BOARD_W, BOARD_H, x, y)
+  oc.run("ocsweeper", tostring(BOARD_W), tostring(BOARD_H), tostring(BOARD_MINES))
+
+  local after = readBoard(BOARD_W, BOARD_H)
+  local opened = 0
+  for by = 1, BOARD_H do
+    for bx = 1, BOARD_W do
+      if after[by][bx].opened then
+        opened = opened + 1
+      end
+    end
+  end
+
+  check(not contains(oc.frame(), "boom"), "a misplaced flag detonated")
+  -- the number's count was never satisfied, so nothing beyond the opening move
+  -- should have opened
+  check(opened == before, "a refused chord still opened cells: " .. before .. " -> " .. opened)
+  check(not contains(oc.frame(), "cleared in"), "a wrong flag cleared the board")
 end)
 
 test("ocsweeper refuses to open around a number without the flags", function()

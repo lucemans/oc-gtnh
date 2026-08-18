@@ -21,6 +21,7 @@ function oc.reset()
   oc.frames = {}
   oc.fills = {}
   oc.executed = {}
+  oc.colors = {}
   oc.directories = {}
   oc.deviceInfo = {}
   oc.output = {""}
@@ -87,8 +88,24 @@ local gpu = {}
 function gpu.getResolution()
   return oc.width, oc.height
 end
-function gpu.setForeground() end
-function gpu.setBackground() end
+-- Colour is recorded per cell, not discarded. Without it a closed cell and an
+-- opened empty one are both two spaces, so a test cannot tell them apart.
+local foreground, background = 0xFFFFFF, 0x000000
+
+function gpu.setForeground(color)
+  foreground = color or 0xFFFFFF
+end
+
+function gpu.setBackground(color)
+  background = color or 0x000000
+end
+
+local function paintCell(x, y)
+  if not oc.colors[y] then
+    oc.colors[y] = {}
+  end
+  oc.colors[y][x] = { fg = foreground, bg = background }
+end
 -- one screen cell holds one character, not one byte: the programs draw with
 -- box-drawing and block characters and do their column maths in characters
 function gpu.set(x, y, text)
@@ -100,6 +117,7 @@ function gpu.set(x, y, text)
     for _, code in utf8.codes(text) do
       if column >= 1 and column <= oc.width then
         screen[y][column] = utf8.char(code)
+        paintCell(column, y)
       end
       column = column + 1
     end
@@ -118,6 +136,7 @@ function gpu.fill(x, y, w, h, char)
     for column = x, x + w - 1 do
       if screen[row] and column >= 1 and column <= oc.width then
         screen[row][column] = char
+        paintCell(column, row)
       end
     end
   end

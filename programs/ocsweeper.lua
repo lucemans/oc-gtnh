@@ -1,7 +1,11 @@
 -- ocsweeper: minesweeper on the screen
 --
---   ocsweeper                play a 12 by 12 board
+--   ocsweeper                fill the screen, up to 21 by 21
 --   ocsweeper 21 21 70       width, height and mine count, each clamped to fit
+--
+-- Every board can be cleared by reasoning alone. Layouts are generated and then
+-- solved by the same logic a player has available; one that would force a guess
+-- is thrown away rather than dealt.
 
 local component = require("component")
 local computer = require("computer")
@@ -9,13 +13,19 @@ local event = require("event")
 local keyboard = require("keyboard")
 local term = require("term")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
 -- the board never exceeds this, whatever the screen or the arguments allow
 local MAX_SIZE = 21
 
--- a cell owns three columns: its left separator and two for its contents
+-- a cell owns three columns and two rows: the separators above and to its left,
+-- plus two columns for its contents
 local CELL_W = 3
+local CELL_H = 2
+
+-- how hard to look for a board that needs no guessing before easing the mine
+-- count. Each attempt is a full solve, so this is also the time budget.
+local ATTEMPTS = 40
 
 local gpu = component.gpu
 local W, H = gpu.getResolution()
@@ -40,6 +50,9 @@ local BOTTOM_LEFT = "\226\148\148"
 local BOTTOM_RIGHT = "\226\148\152"
 local TOP_TEE = "\226\148\172"
 local BOTTOM_TEE = "\226\148\180"
+local LEFT_TEE = "\226\148\156"
+local RIGHT_TEE = "\226\148\164"
+local CROSS = "\226\148\188"
 
 -- the colours minesweeper has always used for its counts
 local COUNTS = {
@@ -59,15 +72,16 @@ end
 
 local arguments = { ... }
 
--- the board is boxed, so it costs a column for the right edge and two rows for
--- the top and bottom border, with one more row below it for the message
+-- The box costs a column for the right edge, and a row for every separator plus
+-- the bottom edge. Above and below the board sit the header, the message row and
+-- the controls bar.
 local maxWidth = math.max(2, math.min(MAX_SIZE, math.floor((W - 1) / CELL_W)))
-local maxHeight = math.max(2, math.min(MAX_SIZE, H - 5))
-local width = clamp(tonumber(arguments[1]) or 12, 2, maxWidth)
-local height = clamp(tonumber(arguments[2]) or 12, 2, maxHeight)
+local maxHeight = math.max(2, math.min(MAX_SIZE, math.floor((H - 4) / CELL_H)))
+local width = clamp(tonumber(arguments[1]) or maxWidth, 2, maxWidth)
+local height = clamp(tonumber(arguments[2]) or maxHeight, 2, maxHeight)
 
 local boardCols = width * CELL_W + 1
-local boardRows = height + 2
+local boardRows = height * CELL_H + 1
 
 -- centred: horizontally in the screen, vertically in the rows the header and
 -- the controls bar leave behind
@@ -77,6 +91,7 @@ local MESSAGE_Y = ORIGIN_Y + boardRows
 
 local mine, revealed, flagged, count, dirty
 local mineCount, flagCount, openCount, placed, lost, won, startedAt, finishedAt
+local guessFree, attemptsUsed
 
 -- what is already on the screen, so a frame only redraws what moved
 local drawnHeader, drawnMessage, drawnFrame
@@ -107,6 +122,7 @@ local function newGame()
   flagCount, openCount = 0, 0
   placed, lost, won = false, false, false
   startedAt, finishedAt = nil, nil
+  guessFree, attemptsUsed = true, 0
   drawnHeader, drawnMessage = nil, nil
 end
 
@@ -119,9 +135,25 @@ local function setRevealed(x, y)
   dirty[y][x] = true
 end
 
+local function countMines()
+  for y = 1, height do
+    for x = 1, width do
+      local total = 0
+      for dy = -1, 1 do
+        for dx = -1, 1 do
+          if inside(x + dx, y + dy) and mine[y + dy][x + dx] then
+            total = total + 1
+          end
+        end
+      end
+      count[y][x] = total
+    end
+  end
+end
+
 -- Mines are laid after the first click, never under it or beside it, so the
 -- opening move always opens something instead of ending the game.
-local function placeMines(safeX, safeY)
+local function layMines(safeX, safeY, total)
   local function candidates(margin)
     local cells = {}
     for y = 1, height do
@@ -137,7 +169,7 @@ local function placeMines(safeX, safeY)
   -- keeping the whole neighbourhood clear is what makes an opening click open
   -- an area, but on a board too crowded for that, only the click itself is safe
   local cells = candidates(1)
-  if #cells < mineCount then
+  if #cells < total then
     cells = candidates(0)
   end
 
@@ -146,28 +178,193 @@ local function placeMines(safeX, safeY)
     cells[index], cells[pick] = cells[pick], cells[index]
   end
 
-  mineCount = math.min(mineCount, #cells)
-  for index = 1, mineCount do
+  mine = grid(false)
+  total = math.min(total, #cells)
+  for index = 1, total do
     mine[cells[index].y][cells[index].x] = true
   end
+  countMines()
+  return total
+end
 
-  for y = 1, height do
-    for x = 1, width do
-      local total = 0
-      for dy = -1, 1 do
-        for dx = -1, 1 do
-          if inside(x + dx, y + dy) and mine[y + dy][x + dx] then
-            total = total + 1
+-------------------------------------------------------------------------------
+-- solving
+--
+-- Only deductions a player could make themselves. Two local rules cover most
+-- boards; the subset rule is what stops the generator rejecting so many that a
+-- big board takes forever to deal.
+
+local function neighbours(x, y)
+  local cells = {}
+  for dy = -1, 1 do
+    for dx = -1, 1 do
+      if (dx ~= 0 or dy ~= 0) and inside(x + dx, y + dy) then
+        cells[#cells + 1] = { x + dx, y + dy }
+      end
+    end
+  end
+  return cells
+end
+
+local function solvable(startX, startY, total)
+  local seen, known = grid(false), grid(false)
+  local opened = 0
+
+  local function sweep(x, y)
+    local stack = { { x, y } }
+    while #stack > 0 do
+      local cell = table.remove(stack)
+      local cx, cy = cell[1], cell[2]
+      if inside(cx, cy) and not seen[cy][cx] and not known[cy][cx] then
+        seen[cy][cx] = true
+        opened = opened + 1
+        if count[cy][cx] == 0 then
+          for _, next in ipairs(neighbours(cx, cy)) do
+            stack[#stack + 1] = next
           end
         end
       end
-      count[y][x] = total
     end
   end
 
-  placed = true
-  startedAt = computer.uptime()
+  -- the unknowns around a number, and how many of its mines are still unfound
+  local function frontier(x, y)
+    local unknown, found = {}, 0
+    for _, cell in ipairs(neighbours(x, y)) do
+      local nx, ny = cell[1], cell[2]
+      if known[ny][nx] then
+        found = found + 1
+      elseif not seen[ny][nx] then
+        unknown[#unknown + 1] = cell
+      end
+    end
+    return unknown, count[y][x] - found
+  end
+
+  sweep(startX, startY)
+
+  local progress = true
+  while progress and opened < width * height - total do
+    progress = false
+
+    for y = 1, height do
+      for x = 1, width do
+        if seen[y][x] and count[y][x] > 0 then
+          local unknown, remaining = frontier(x, y)
+          if #unknown > 0 then
+            if remaining == 0 then
+              for _, cell in ipairs(unknown) do
+                sweep(cell[1], cell[2])
+              end
+              progress = true
+            elseif remaining == #unknown then
+              for _, cell in ipairs(unknown) do
+                known[cell[2]][cell[1]] = true
+              end
+              progress = true
+            end
+          end
+        end
+      end
+    end
+
+    if not progress then
+      -- One number's unknowns contained in another's: the difference is settled
+      -- even though neither cell is settled on its own. This is the 1-2-1 rule
+      -- and its relatives, and without it too many fair boards look unsolvable.
+      for y = 1, height do
+        for x = 1, width do
+          if seen[y][x] and count[y][x] > 0 then
+            local mine1, remaining1 = frontier(x, y)
+            local set1 = {}
+            for _, cell in ipairs(mine1) do
+              set1[cell[2] * width + cell[1]] = true
+            end
+
+            for dy = -2, 2 do
+              for dx = -2, 2 do
+                local ox, oy = x + dx, y + dy
+                if (dx ~= 0 or dy ~= 0) and inside(ox, oy)
+                  and seen[oy][ox] and count[oy][ox] > 0 then
+                  local mine2, remaining2 = frontier(ox, oy)
+                  local contained = #mine2 > 0
+                  for _, cell in ipairs(mine2) do
+                    if not set1[cell[2] * width + cell[1]] then
+                      contained = false
+                      break
+                    end
+                  end
+
+                  if contained and #mine2 < #mine1 then
+                    local rest = {}
+                    local inner = {}
+                    for _, cell in ipairs(mine2) do
+                      inner[cell[2] * width + cell[1]] = true
+                    end
+                    for _, cell in ipairs(mine1) do
+                      if not inner[cell[2] * width + cell[1]] then
+                        rest[#rest + 1] = cell
+                      end
+                    end
+
+                    if remaining1 - remaining2 == #rest then
+                      for _, cell in ipairs(rest) do
+                        known[cell[2]][cell[1]] = true
+                      end
+                      progress = true
+                    elseif remaining1 == remaining2 then
+                      for _, cell in ipairs(rest) do
+                        sweep(cell[1], cell[2])
+                      end
+                      progress = true
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return opened >= width * height - total
 end
+
+-- Deal until the board can be reasoned out. If a density simply will not yield
+-- one, ease it rather than loop forever; the header says so when that happens.
+local function placeMines(safeX, safeY)
+  local target = mineCount
+
+  while true do
+    for _ = 1, ATTEMPTS do
+      attemptsUsed = attemptsUsed + 1
+      local laid = layMines(safeX, safeY, target)
+      if laid == 0 or solvable(safeX, safeY, laid) then
+        mineCount = laid
+        placed = true
+        startedAt = computer.uptime()
+        return
+      end
+      -- a 21 by 21 solve is long enough that the watchdog needs a chance to see
+      -- the computer is still cooperating
+      if attemptsUsed % 4 == 0 then
+        os.sleep(0)
+      end
+    end
+
+    if target <= 1 then
+      mineCount = layMines(safeX, safeY, target)
+      guessFree = false
+      placed = true
+      startedAt = computer.uptime()
+      return
+    end
+    target = target - math.max(1, math.floor(target * 0.1))
+  end
+end
+
+-------------------------------------------------------------------------------
 
 -- an empty cell opens its neighbours, and so on outward; kept on a stack
 -- rather than recursing, since a 21 by 21 sweep can run a long way
@@ -180,10 +377,8 @@ local function open(startX, startY)
       setRevealed(x, y)
       openCount = openCount + 1
       if count[y][x] == 0 then
-        for dy = -1, 1 do
-          for dx = -1, 1 do
-            stack[#stack + 1] = { x + dx, y + dy }
-          end
+        for _, next in ipairs(neighbours(x, y)) do
+          stack[#stack + 1] = next
         end
       end
     end
@@ -219,16 +414,12 @@ local function chord(x, y)
   end
 
   local flags, closed = 0, {}
-  for dy = -1, 1 do
-    for dx = -1, 1 do
-      local nx, ny = x + dx, y + dy
-      if (dx ~= 0 or dy ~= 0) and inside(nx, ny) then
-        if flagged[ny][nx] then
-          flags = flags + 1
-        elseif not revealed[ny][nx] then
-          closed[#closed + 1] = { nx, ny }
-        end
-      end
+  for _, cell in ipairs(neighbours(x, y)) do
+    local nx, ny = cell[1], cell[2]
+    if flagged[ny][nx] then
+      flags = flags + 1
+    elseif not revealed[ny][nx] then
+      closed[#closed + 1] = cell
     end
   end
 
@@ -310,8 +501,8 @@ local function borderRow(left, tee, right)
   return table.concat(parts)
 end
 
--- the box and the separators between cells never change, so they are drawn
--- once and left alone; only the two columns inside each cell are repainted
+-- the grid never changes, so it is drawn once and left alone; only the two
+-- columns inside each cell are repainted
 local function drawFrame()
   gpu.setBackground(BG)
   gpu.fill(1, 1, W, H, " ")
@@ -320,10 +511,14 @@ local function drawFrame()
   write(ORIGIN_X, ORIGIN_Y + boardRows - 1,
     borderRow(BOTTOM_LEFT, BOTTOM_TEE, BOTTOM_RIGHT), BORDER, BG)
 
+  local rule = borderRow(LEFT_TEE, CROSS, RIGHT_TEE)
   for y = 1, height do
-    local row = ORIGIN_Y + y
+    local row = ORIGIN_Y + (y - 1) * CELL_H + 1
     for x = 1, width + 1 do
       write(ORIGIN_X + (x - 1) * CELL_W, row, PIPE, BORDER, BG)
+    end
+    if y < height then
+      write(ORIGIN_X, row + 1, rule, BORDER, BG)
     end
   end
 
@@ -333,7 +528,7 @@ end
 
 local function drawCell(x, y)
   local screenX = ORIGIN_X + (x - 1) * CELL_W + 1
-  local screenY = ORIGIN_Y + y
+  local screenY = ORIGIN_Y + (y - 1) * CELL_H + 1
 
   if not revealed[y][x] then
     if flagged[y][x] then
@@ -369,8 +564,9 @@ local function render()
     end
   end
 
-  local header = string.format("  ocsweeper v%s    %d x %d    mines %d    %s",
-    VERSION, width, height, mineCount - flagCount, clock())
+  local header = string.format("  ocsweeper v%s    %d x %d    mines %d    %s%s",
+    VERSION, width, height, mineCount - flagCount, clock(),
+    guessFree and "" or "    guess required")
   if header ~= drawnHeader then
     write(1, 1, fit(header, W), FG, BAR)
     drawnHeader = header
@@ -392,13 +588,18 @@ local function render()
   end
 end
 
+-- a cell owns its content row and the rule beneath it, so clicking either lands
+-- on the same square rather than falling between two of them
 local function cellAt(screenX, screenY)
   local column = screenX - ORIGIN_X
   local row = screenY - ORIGIN_Y
-  if column < 0 or column >= width * CELL_W or row < 1 or row > height then
+  if column < 0 or column >= width * CELL_W then
     return nil
   end
-  return math.floor(column / CELL_W) + 1, row
+  if row < 1 or row > height * CELL_H then
+    return nil
+  end
+  return math.floor(column / CELL_W) + 1, math.ceil(row / CELL_H)
 end
 
 math.randomseed(math.floor(computer.uptime() * 1000) + (os.time() or 0))
