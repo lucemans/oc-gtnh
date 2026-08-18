@@ -2223,6 +2223,76 @@ test("an alert set not to beep stays quiet", function()
   check(#colors == 1, "did not light the lamp")
 end)
 
+-- Two blast furnaces fed by one tank were two identical alerts before this,
+-- which then had to be kept in step by hand.
+test("an action can be added to an alert that already exists", function()
+  local first, second = { value = false }, { value = false }
+  local tank = tankAt("100000")
+  local one = furnace(first)
+  local two = furnace(second)
+  two.address = "1c646dd8-0000-0000-0000-000000000006"
+  oc.components = { tank, one, two }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = tank.address,
+      label = "Bio Diesel",
+      below = 50000,
+      above = 200000,
+      beep = false,
+      act = { { address = one.address, method = "setWorkAllowed",
+        onTrip = false, onClear = true } },
+    } },
+  })
+
+  local DOWN, ENTER, Q = 0xD0, 0x1C, 0x10
+  local function press(code)
+    oc.push("key_down", "keyboard", 0, code)
+  end
+
+  press(DOWN)          -- past the machine, onto the alert
+  press(ENTER)         -- open it
+  for _ = 1, 7 do
+    press(DOWN)        -- down to "add a machine to act on"
+  end
+  press(ENTER)
+  press(ENTER)         -- take the first machine offered
+  press(Q)             -- back out of the alert
+  press(Q)             -- and out of the editor
+
+  local ok, reason = oc.run("ocwatch", "--edit")
+  check(ok, "the editor crashed: " .. tostring(reason))
+
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  local acts = saved and saved.alerts and saved.alerts[1] and saved.alerts[1].act
+  check(acts and #acts == 2, "the alert acts on " .. #(acts or {}) .. " machines")
+end)
+
+test("the editor lists what is watched and what will fire", function()
+  local tank = tankAt("100000")
+  oc.components = { tank }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = { [tank.address] = "EBF Fluid Tank" },
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low", address = tank.address, label = "Bio Diesel",
+      below = 5000, above = 10000,
+      act = { { address = "x", method = "setWorkAllowed", onTrip = false } },
+    } },
+  })
+  oc.push("key_down", "keyboard", 0, 0x10)
+
+  oc.run("ocwatch", "--edit")
+  local out = oc.printed()
+  check(contains(out, "MACHINES"), "no machines section")
+  check(contains(out, "ALERTS"), "no alerts section")
+  check(contains(out, "EBF Fluid Tank"), "did not name the machine")
+  check(contains(out, "diesel low"), "did not name the alert")
+  check(contains(out, "below 5,000"), "did not show the threshold")
+  check(contains(out, "acts on 1"), "did not say how many machines it acts on")
+end)
+
 test("ocwatch says nothing about a machine that never works", function()
   local tank = tankAt("100000")
   oc.components = { tank }

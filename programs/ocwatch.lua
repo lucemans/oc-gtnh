@@ -2,7 +2,7 @@
 -- can beep and can stop a machine before a shortage becomes a power failure.
 --
 --   ocwatch          watch the configured machines
---   ocwatch --edit   choose machines, nickname them, pick readings, set alerts
+--   ocwatch --edit   choose machines and alerts, and what each one does
 
 local component = require("component")
 local computer = require("computer")
@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.10.0"
+local VERSION = "0.11.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -450,40 +450,102 @@ end
 -------------------------------------------------------------------------------
 -- editor
 
-local function prompt(message)
+local function prompt(message, current)
   term.clear()
   print(message)
+  if current ~= nil and current ~= "" then
+    print("currently " .. tostring(current))
+  end
   io.write("> ")
   return io.read()
 end
 
-local function chooseComponent()
-  local list = {}
-  for address, kind in component.list() do
-    list[#list + 1] = { address = address, kind = kind }
+-- A list you move through with the arrow keys. Returns the row it was on and
+-- the key that ended it, so each screen decides what its own keys mean. Rows
+-- marked as headings are drawn but never landed on.
+local function menu(title, rows, help)
+  local cursor = 1
+  while cursor <= #rows and rows[cursor].heading do
+    cursor = cursor + 1
   end
-  table.sort(list, function(a, b)
-    return a.address < b.address
-  end)
 
-  term.clear()
-  print("attached components")
-  for index, entry in ipairs(list) do
-    print(string.format("%3d  %-18s %s  %s", index, entry.kind,
-      entry.address:sub(1, 8), gt.displayName(entry.address, config) or lp.displayName(entry.address) or ""))
-  end
-  io.write("number (blank to cancel) > ")
-  local answer = tonumber(io.read())
-  return answer and list[answer] or nil
-end
+  while true do
+    term.clear()
+    print(title)
+    print("")
+    if #rows == 0 then
+      print("  nothing here yet")
+    end
+    for index, row in ipairs(rows) do
+      if row.heading then
+        if index > 1 then
+          print("")
+        end
+        print("  " .. row.text)
+      else
+        print((index == cursor and "  > " or "    ") .. row.text)
+      end
+    end
+    print("")
+    print("  " .. help)
 
-local function watched(address)
-  for index, entry in ipairs(config.watch) do
-    if entry.address == address then
-      return index
+    local name, _, _, code = event.pull(nil, "key_down")
+    if name == nil then
+      return nil, keyboard.keys.q
+    end
+
+    local delta = nil
+    if code == keyboard.keys.up then
+      delta = -1
+    elseif code == keyboard.keys.down then
+      delta = 1
+    end
+
+    if delta then
+      local index = cursor
+      repeat
+        index = index + delta
+      until index < 1 or index > #rows or not rows[index].heading
+      if index >= 1 and index <= #rows then
+        cursor = index
+      end
+    else
+      return rows[cursor], code
     end
   end
-  return nil
+end
+
+local function chooseComponent(only)
+  local rows = {}
+  for address, kind in component.list() do
+    if not only or only(address, kind) then
+      rows[#rows + 1] = {
+        address = address,
+        kind = kind,
+        text = string.format("%-18s %s  %s", kind, address:sub(1, 8),
+          gt.displayName(address, config) or lp.displayName(address) or ""),
+      }
+    end
+  end
+  table.sort(rows, function(a, b)
+    return a.text < b.text
+  end)
+
+  local row, code = menu("attached components", rows,
+    "[up/down] move   [enter] choose   [q] cancel")
+  if not row or code ~= keyboard.keys.enter then
+    return nil
+  end
+  return row
+end
+
+local function watched(address, side)
+  for _, entry in ipairs(config.watch) do
+    if entry.address == address and entry.side == side then
+      return true
+    end
+  end
+  return false
 end
 
 -- A transposer is not itself worth watching: what is worth watching is the tank
@@ -499,22 +561,233 @@ local function chooseSide(address)
     return nil
   end
 
-  for index, side in ipairs(sides) do
+  local rows = {}
+  for _, side in ipairs(sides) do
     local look = tank.inspect(address, side, config)
     local holds = "empty"
     if look.readings[1] then
       holds = look.readings[1].label .. "  " .. look.readings[1].current
         .. " / " .. look.readings[1].maximum .. " L"
     end
-    print(string.format("%3d  %-6s %s", index, tank.sideName(side), holds))
+    rows[#rows + 1] = { side = side,
+      text = string.format("%-6s %s", tank.sideName(side), holds) }
   end
 
-  io.write("number (blank to cancel) > ")
-  local answer = tonumber(io.read())
-  return answer and sides[answer] or nil
+  local row, code = menu("which face is the tank on", rows,
+    "[up/down] move   [enter] choose   [q] cancel")
+  if not row or code ~= keyboard.keys.enter then
+    return nil
+  end
+  return row.side
 end
 
-local function editAdd()
+local function readingsOf(address, side)
+  if side then
+    return tank.inspect(address, side, config).readings
+  end
+  return gt.readings(address)
+end
+
+local function gaugesOf(readings)
+  local gauges = {}
+  for index, reading in ipairs(readings) do
+    if reading.kind == "gauge" then
+      gauges[#gauges + 1] = { index = index, ordinal = #gauges + 1, reading = reading }
+    end
+  end
+  return gauges
+end
+
+local function gaugeText(gauge)
+  local reading = gauge.reading
+  return string.format("%-16s %s / %s %s",
+    reading.label ~= "" and reading.label or "value",
+    reading.current, reading.maximum, reading.unit)
+end
+
+-------------------------------------------------------------------------------
+-- one machine
+
+local function editReadings(entry)
+  entry.hidden = entry.hidden or {}
+  while true do
+    local readings = readingsOf(entry.address, entry.side)
+    local rows = {}
+    for index, reading in ipairs(readings) do
+      local label = reading.plain
+      if reading.kind == "gauge" then
+        label = (reading.label ~= "" and reading.label or "value")
+          .. "  " .. reading.current .. " / " .. reading.maximum
+      end
+      rows[#rows + 1] = { index = index,
+        text = (entry.hidden[index] and "[ ] " or "[x] ") .. label }
+    end
+
+    local row, code = menu("which readings to show on " .. entryName(entry), rows,
+      "[up/down] move   [space] show or hide   [q] done")
+    if not row or code ~= keyboard.keys.space then
+      save()
+      return
+    end
+    if entry.hidden[row.index] then
+      entry.hidden[row.index] = nil
+    else
+      entry.hidden[row.index] = true
+    end
+  end
+end
+
+-- A super tank holds four million litres. If its diesel only ever moves between
+-- 5,000 and 10,000 then a bar against four million never leaves zero, so the
+-- maximum worth drawing against is set per gauge here.
+local function editLimits(entry)
+  while true do
+    local gauges = gaugesOf(readingsOf(entry.address, entry.side))
+    if #gauges == 0 then
+      print("this machine reports no gauge")
+      os.sleep(2)
+      return
+    end
+
+    local rows = {}
+    for _, gauge in ipairs(gauges) do
+      local limit = net.limitOf(entry, gauge.ordinal)
+      rows[#rows + 1] = { ordinal = gauge.ordinal,
+        text = gaugeText(gauge)
+          .. (limit and ("   drawn against " .. core.comma(limit)) or "") }
+    end
+
+    local row, code = menu("the maximum each bar is drawn against", rows,
+      "[up/down] move   [enter] set   [q] done")
+    if not row or code ~= keyboard.keys.enter then
+      save()
+      return
+    end
+
+    local answer = prompt("draw the bar against what maximum? (blank clears it)",
+      net.limitOf(entry, row.ordinal))
+    entry.limits = entry.limits or {}
+    entry.limits[row.ordinal] = tonumber(answer)
+  end
+end
+
+local function editMachine(entry)
+  while true do
+    local rows = {
+      { what = "nickname", text = "nickname          " .. entryName(entry) },
+      { what = "readings", text = "readings          choose which to show" },
+      { what = "limits", text = "bar maximum       what each gauge is drawn against" },
+    }
+
+    local row, code = menu(entryName(entry), rows,
+      "[up/down] move   [enter] change   [q] back")
+    if not row or code ~= keyboard.keys.enter then
+      return
+    end
+
+    if row.what == "nickname" then
+      local name = prompt("nickname for " .. entry.address .. " (blank clears it)",
+        core.nickname(config, keyOf(entry.address, entry.side)))
+      config.nicknames[keyOf(entry.address, entry.side)] =
+        (name and name ~= "") and name or nil
+      save()
+    elseif row.what == "readings" then
+      editReadings(entry)
+    else
+      editLimits(entry)
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
+-- one alert
+
+local function canStop(address)
+  return core.has(core.methodsOf(address), "setWorkAllowed")
+end
+
+local function actionText(action)
+  local name = gt.displayName(action.address, config)
+    or lp.displayName(action.address)
+    or action.address:sub(1, 8)
+  local does = "stops"
+  if action.onTrip ~= false then
+    does = "starts"
+  end
+  -- the address as well, or two blast furnaces are the same line twice
+  return does .. " " .. name .. "  " .. tostring(action.address):sub(1, 8)
+end
+
+local function addAction(alert)
+  local target = chooseComponent(function(address)
+    return canStop(address)
+  end)
+  if not target then
+    return
+  end
+
+  alert.act = actions(alert)
+  alert.act[#alert.act + 1] = {
+    address = target.address,
+    method = "setWorkAllowed",
+    onTrip = false,
+    onClear = true,
+  }
+  save()
+end
+
+-- One trigger, any number of machines. Two blast furnaces fed by one tank were
+-- two identical alerts before this, which then had to be kept in step by hand.
+local function editAlert(alert)
+  while true do
+    local rows = {
+      { what = "name", text = "name              " .. tostring(alert.name) },
+      { what = "watches", text = "watches           "
+        .. entryName({ address = alert.address, side = alert.side })
+        .. "  " .. tostring(alert.label ~= "" and alert.label or "value") },
+      { what = "below", text = "trips below       "
+        .. (alert.below and core.comma(alert.below) or "-") },
+      { what = "above", text = "clears above      "
+        .. (alert.above and core.comma(alert.above) or "-") },
+      { what = "announce", text = "announces         "
+        .. (alert.beep == false and "no" or "yes, aloud if it can") },
+      { heading = true, text = "MACHINES IT ACTS ON" },
+    }
+    for index, action in ipairs(actions(alert)) do
+      rows[#rows + 1] = { what = "action", index = index, text = actionText(action) }
+    end
+    rows[#rows + 1] = { what = "add", text = "add a machine to act on" }
+
+    local row, code = menu("alert: " .. tostring(alert.name), rows,
+      "[up/down] move   [enter] change   [d] remove an action   [q] back")
+    if not row or code == keyboard.keys.q then
+      save()
+      return
+    end
+
+    if row.what == "action" and code == keyboard.keys.d then
+      table.remove(alert.act, row.index)
+      save()
+    elseif code == keyboard.keys.enter then
+      if row.what == "name" then
+        alert.name = prompt("name for this alert", alert.name) or alert.name
+      elseif row.what == "below" then
+        alert.below = tonumber(prompt("trip when the value falls below (blank to clear)",
+          alert.below))
+      elseif row.what == "above" then
+        alert.above = tonumber(prompt("clear when it rises back to (blank to clear)",
+          alert.above))
+      elseif row.what == "announce" then
+        alert.beep = alert.beep == false
+      elseif row.what == "add" then
+        addAction(alert)
+      end
+      save()
+    end
+  end
+end
+
+local function addAlert()
   local chosen = chooseComponent()
   if not chosen then
     return
@@ -526,7 +799,62 @@ local function editAdd()
     if not side then
       return
     end
-  elseif watched(chosen.address) then
+  end
+
+  local readings = readingsOf(chosen.address, side)
+  local gauges = gaugesOf(readings)
+  if #gauges == 0 then
+    print("this component reports no gauge to watch")
+    os.sleep(2)
+    return
+  end
+
+  local rows = {}
+  for _, gauge in ipairs(gauges) do
+    rows[#rows + 1] = { gauge = gauge, text = gaugeText(gauge) }
+  end
+  local row, code = menu("which reading should it watch", rows,
+    "[up/down] move   [enter] choose   [q] cancel")
+  if not row or code ~= keyboard.keys.enter then
+    return
+  end
+
+  local reading = row.gauge.reading
+  local alert = {
+    name = prompt("name for this alert") or "alert",
+    address = chosen.address,
+    side = side,
+    -- the label and the unit are what survive the machine rewording itself;
+    -- the ordinal and the line number are only fallbacks
+    label = reading.label,
+    unit = reading.unit,
+    gauge = row.gauge.ordinal,
+    index = row.gauge.index,
+    below = tonumber(prompt("trip when the value falls below (blank to skip)")),
+    above = tonumber(prompt("clear when it rises back to (blank to skip)")),
+    beep = true,
+  }
+
+  config.alerts[#config.alerts + 1] = alert
+  save()
+  editAlert(alert)
+end
+
+local function addMachine()
+  local chosen = chooseComponent()
+  if not chosen then
+    return
+  end
+
+  local side = nil
+  if tank.isReader(chosen.kind) then
+    side = chooseSide(chosen.address)
+    if not side then
+      return
+    end
+  end
+
+  if watched(chosen.address, side) then
     print("already watched")
     os.sleep(1)
     return
@@ -538,278 +866,65 @@ local function editAdd()
   save()
 end
 
-local function editRemove()
-  term.clear()
-  for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. entryName(entry))
-  end
-  io.write("number to remove (blank to cancel) > ")
-  local answer = tonumber(io.read())
-  if answer and config.watch[answer] then
-    table.remove(config.watch, answer)
-    save()
-  end
-end
+-------------------------------------------------------------------------------
 
-local function editNickname()
-  term.clear()
-  for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. entryName(entry))
+local function alertSummary(alert)
+  local parts = {}
+  if alert.below then
+    parts[#parts + 1] = "below " .. core.comma(alert.below)
   end
-  io.write("number to rename (blank to cancel) > ")
-  local answer = tonumber(io.read())
-  local entry = answer and config.watch[answer]
-  if not entry then
-    return
+  if alert.above then
+    parts[#parts + 1] = "above " .. core.comma(alert.above)
   end
-  local name = prompt("nickname for " .. entry.address .. " (blank clears it)")
-  config.nicknames[keyOf(entry.address, entry.side)] =
-    (name and name ~= "") and name or nil
-  save()
-end
-
-local function editReadings()
-  term.clear()
-  for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. entryName(entry))
+  local acting = #actions(alert)
+  if acting > 0 then
+    parts[#parts + 1] = "acts on " .. acting
   end
-  io.write("number whose readings to toggle (blank to cancel) > ")
-  local answer = tonumber(io.read())
-  local entry = answer and config.watch[answer]
-  if not entry then
-    return
+  if alert.tripped then
+    parts[#parts + 1] = "TRIPPED"
   end
-
-  entry.hidden = entry.hidden or {}
-  while true do
-    term.clear()
-    local readings = gt.readings(entry.address)
-    print(gt.displayName(entry.address, config) or entry.address)
-    for index, reading in ipairs(readings) do
-      local shown = entry.hidden[index] and "hidden " or "shown  "
-      local label = reading.kind == "gauge"
-        and ((reading.label ~= "" and reading.label or "value")
-          .. "  " .. reading.current .. " / " .. reading.maximum)
-        or reading.plain
-      print(string.format("%3d  %s %s", index, shown, label))
-    end
-    io.write("number to toggle (blank when done) > ")
-    local pick = tonumber(io.read())
-    if not pick or not readings[pick] then
-      break
-    end
-    entry.hidden[pick] = (not entry.hidden[pick]) or nil
-  end
-  save()
-end
-
-local function editAlert()
-  term.clear()
-  print("an alert watches one gauge and may stop a machine when it trips")
-  local chosen = chooseComponent()
-  if not chosen then
-    return
-  end
-
-  local side, readings
-  if tank.isReader(chosen.kind) then
-    side = chooseSide(chosen.address)
-    if not side then
-      return
-    end
-    readings = tank.inspect(chosen.address, side, config).readings
-  else
-    readings = gt.readings(chosen.address)
-  end
-
-  term.clear()
-  print("readings on " .. entryName({ address = chosen.address, side = side }))
-  local gauges = {}
-  for index, reading in ipairs(readings) do
-    if reading.kind == "gauge" then
-      gauges[#gauges + 1] = index
-      print(string.format("%3d  %s  %s / %s %s", index,
-        reading.label ~= "" and reading.label or "value",
-        reading.current, reading.maximum, reading.unit))
-    end
-  end
-  if #gauges == 0 then
-    print("this component reports no gauge to watch")
-    os.sleep(2)
-    return
-  end
-
-  io.write("gauge number > ")
-  local index = tonumber(io.read())
-  if not index or not readings[index] or readings[index].kind ~= "gauge" then
-    return
-  end
-
-  local below = tonumber(prompt("trip when the value falls below (blank to skip)"))
-  local above = tonumber(prompt("clear when it rises back to (blank to skip)"))
-  local name = prompt("name for this alert") or "alert"
-
-  -- the label and the unit are what survive the machine rewording itself; the
-  -- ordinal and the line number are only fallbacks
-  local ordinal = 0
-  for _, position in ipairs(gauges) do
-    if position <= index then
-      ordinal = ordinal + 1
-    end
-  end
-
-  local alert = {
-    name = name,
-    address = chosen.address,
-    side = side,
-    label = readings[index].label,
-    unit = readings[index].unit,
-    gauge = ordinal,
-    index = index,
-    below = below,
-    above = above,
-    beep = true,
-  }
-
-  -- one tank can feed more than one furnace, so this asks until you say no
-  local acts = {}
-  while true do
-    local question = "stop a machine when this trips? (y/N)"
-    if #acts > 0 then
-      question = "stop another machine as well? (y/N)   " .. #acts .. " so far"
-    end
-    local answer = prompt(question)
-    if not (answer and answer:lower():sub(1, 1) == "y") then
-      break
-    end
-
-    local target = chooseComponent()
-    if not target then
-      break
-    end
-    if core.has(core.methodsOf(target.address), "setWorkAllowed") then
-      acts[#acts + 1] = {
-        address = target.address,
-        method = "setWorkAllowed",
-        onTrip = false,
-        onClear = true,
-      }
-    else
-      print("that component has no setWorkAllowed, skipped")
-      os.sleep(2)
-    end
-  end
-  if #acts > 0 then
-    alert.act = acts
-  end
-
-  config.alerts[#config.alerts + 1] = alert
-  save()
-end
-
--- A super tank holds four million litres. If its diesel only ever moves between
--- 5,000 and 10,000 then a bar against four million never leaves zero, so the
--- maximum worth drawing against is set per gauge here.
-local function editLimit()
-  term.clear()
-  if #config.watch == 0 then
-    print("no machines watched yet")
-    os.sleep(1)
-    return
-  end
-  for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. (gt.displayName(entry.address, config)
-      or lp.displayName(entry.address) or entry.address))
-  end
-  io.write("machine number (blank to cancel) > ")
-  local which = tonumber(io.read())
-  local entry = which and config.watch[which]
-  if not entry then
-    return
-  end
-
-  term.clear()
-  local gauges = {}
-  for _, reading in ipairs(gt.readings(entry.address)) do
-    if reading.kind == "gauge" then
-      gauges[#gauges + 1] = reading
-      local limit = net.limitOf(entry, #gauges)
-      print(string.format("%3d  %s  %s / %s %s%s", #gauges,
-        reading.label ~= "" and reading.label or "value",
-        reading.current, reading.maximum, reading.unit,
-        limit and ("   showing against " .. core.comma(limit)) or ""))
-    end
-  end
-  if #gauges == 0 then
-    print("this machine reports no gauge")
-    os.sleep(2)
-    return
-  end
-
-  io.write("gauge number (blank to cancel) > ")
-  local ordinal = tonumber(io.read())
-  if not ordinal or not gauges[ordinal] then
-    return
-  end
-
-  local limit = tonumber(prompt("draw the bar against what maximum? (blank to clear)"))
-  entry.limits = entry.limits or {}
-  entry.limits[ordinal] = limit
-  save()
-end
-
-local function editAlertRemove()
-  term.clear()
-  if #config.alerts == 0 then
-    print("no alerts configured")
-    os.sleep(1)
-    return
-  end
-  for index, alert in ipairs(config.alerts) do
-    print(index .. "  " .. alert.name)
-  end
-  io.write("number to remove (blank to cancel) > ")
-  local answer = tonumber(io.read())
-  if answer and config.alerts[answer] then
-    table.remove(config.alerts, answer)
-    save()
-  end
+  return string.format("%-20s %-20s %s", alert.name,
+    entryName({ address = alert.address, side = alert.side }),
+    table.concat(parts, "   "))
 end
 
 local function editor()
   while true do
-    term.clear()
-    print("ocwatch v" .. VERSION .. " configuration")
-    print("")
-    print("  " .. #config.watch .. " machines watched, " .. #config.alerts .. " alerts")
-    print("")
-    print("  1  add a machine")
-    print("  2  remove a machine")
-    print("  3  set a nickname")
-    print("  4  choose which readings to show")
-    print("  5  set the maximum a bar is drawn against")
-    print("  6  add an alert")
-    print("  7  remove an alert")
-    print("  8  done")
-    io.write("> ")
+    local rows = { { heading = true, text = "MACHINES" } }
+    for index, entry in ipairs(config.watch) do
+      rows[#rows + 1] = { what = "machine", index = index, entry = entry,
+        text = entryName(entry) }
+    end
+    rows[#rows + 1] = { heading = true, text = "ALERTS" }
+    for index, alert in ipairs(config.alerts) do
+      rows[#rows + 1] = { what = "alert", index = index, alert = alert,
+        text = alertSummary(alert) }
+    end
 
-    local answer = tonumber(io.read())
-    if answer == 1 then
-      editAdd()
-    elseif answer == 2 then
-      editRemove()
-    elseif answer == 3 then
-      editNickname()
-    elseif answer == 4 then
-      editReadings()
-    elseif answer == 5 then
-      editLimit()
-    elseif answer == 6 then
-      editAlert()
-    elseif answer == 7 then
-      editAlertRemove()
-    else
+    local row, code = menu("ocwatch v" .. VERSION .. "   configuration", rows,
+      "[up/down] move   [enter] open   [m] watch a machine   [n] new alert"
+        .. "   [d] remove   [q] done")
+
+    if not row then
       return
+    end
+
+    if code == keyboard.keys.q then
+      return
+    elseif code == keyboard.keys.m then
+      addMachine()
+    elseif code == keyboard.keys.n then
+      addAlert()
+    elseif code == keyboard.keys.d and row.what == "machine" then
+      table.remove(config.watch, row.index)
+      save()
+    elseif code == keyboard.keys.d and row.what == "alert" then
+      table.remove(config.alerts, row.index)
+      save()
+    elseif code == keyboard.keys.enter and row.what == "machine" then
+      editMachine(row.entry)
+    elseif code == keyboard.keys.enter and row.what == "alert" then
+      editAlert(row.alert)
     end
   end
 end
