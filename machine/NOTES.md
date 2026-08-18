@@ -237,3 +237,26 @@ one and describing the result, which `oclib.describeLines` can already do.
 `§6` a fluid, and `§c` something to watch — the furnace uses it for both
 `Currently uses: §c480§r EU/t` and `Problems: §c0§r`, so red does not by itself
 mean a fault.
+
+## Glasses widgets
+
+Confirmed live with `ocglass --probe` (`dumps/` has no record of this: nothing
+had ever called an `add*` method). `addTextLabel` returns a widget offering:
+
+```
+getText / setText          getPosition / setPosition
+getColor / setColor        getScale / setScale
+getAlpha / setAlpha        getRotation / setRotation
+isVisible / setVisible     getID
+```
+
+Each method entry is a table holding `type = "userdata"`, and **its metatable is
+protected**: `getmetatable` returns a string rather than the table, so `__call`
+cannot be seen even though the entry is callable. Gating a probe on a visible
+`__call` therefore skips every one of them and reports nothing, which is exactly
+what happened on the first pass. `oclib` now simply attempts the call under
+`pcall` and labels the type `table <protected metatable>`.
+
+Argument shapes are still unknown: `setColor` and `setPosition` take something,
+but how many arguments and in what range has not been established. Reading the
+matching getters on a fresh widget answers it, which the fixed probe now does.

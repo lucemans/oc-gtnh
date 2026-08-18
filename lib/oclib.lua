@@ -121,19 +121,28 @@ local function keyText(key)
   return "[" .. tostring(key) .. "]"
 end
 
+-- Userdata protects its metatable by setting __metatable, so getmetatable hands
+-- back a string rather than the table. The methods are still there and still
+-- callable; they just cannot be inspected.
 local function metaOf(value)
   local ok, meta = pcall(getmetatable, value)
-  if not ok or type(meta) ~= "table" then
-    return nil
+  if not ok then
+    return nil, false
   end
-  return meta
+  if type(meta) ~= "table" then
+    return nil, meta ~= nil
+  end
+  return meta, false
 end
 
 -- A proxy looks like a plain table of {name=, proxy=} entries, but whether
 -- those entries can be called lives in the metatable, not in the fields, so a
 -- walk over pairs() alone cannot tell you how to use the thing.
 function core.tableKind(value)
-  local meta = metaOf(value)
+  local meta, protected = metaOf(value)
+  if protected then
+    return "table <protected metatable>"
+  end
   if not meta then
     return "table"
   end
@@ -229,10 +238,9 @@ local function probe(key, item)
   if type(key) ~= "string" or not core.isReadable(key) then
     return nil
   end
-  local meta = metaOf(item)
-  if not meta or not rawget(meta, "__call") then
-    return nil
-  end
+  -- The call is simply attempted rather than gated on a visible __call: a
+  -- protected metatable hides that field, and requiring it meant every glasses
+  -- widget method was skipped and reported no value at all.
   local results = table.pack(pcall(item))
   if not results[1] then
     return nil, "error: " .. core.oneLine(tostring(results[2]))

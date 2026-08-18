@@ -11,15 +11,22 @@
 -- filesystem, reads it as a Lua table, and then copies the disk's contents onto
 -- the target. So the floppy needs that file plus the tree it should copy, and
 -- nothing else: `install` does the rest.
+--
+-- Everything gets copied, not just ocup. A tablet has no internet card, so a
+-- floppy carrying only the updater would install a program that cannot reach
+-- GitHub to fetch the rest.
 
 local component = require("component")
 local computer = require("computer")
 local core = require("oclib")
+local filesystem = require("filesystem")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
 local LABEL = "oc-gtnh"
-local SOURCE = "/bin/ocup.lua"
+-- where the installed set lives, and what belongs to this project
+local FOLDERS = { "/lib", "/bin" }
+local BELONGS = "^oc.*%.lua$"
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999
@@ -84,14 +91,26 @@ local function disks()
   return found
 end
 
-local function readSource()
-  local file = io.open(SOURCE, "r")
-  if not file then
-    return nil
+-- everything this project installed, read off the machine doing the flashing
+local function payload()
+  local files, bytes = {}, 0
+  for _, folder in ipairs(FOLDERS) do
+    if filesystem.exists(folder) then
+      for name in filesystem.list(folder) do
+        if name:match(BELONGS) then
+          local path = folder .. "/" .. name
+          local file = io.open(path, "r")
+          if file then
+            local contents = file:read("*a") or ""
+            file:close()
+            files[#files + 1] = { path = path, contents = contents }
+            bytes = bytes + #contents
+          end
+        end
+      end
+    end
   end
-  local contents = file:read("*a")
-  file:close()
-  return contents
+  return files, bytes
 end
 
 local function writeTo(address, path, contents)
@@ -157,10 +176,10 @@ if #writable == 0 then
   return 1
 end
 
-local contents = readSource()
-if not contents then
+local files, bytes = payload()
+if #files == 0 then
   say("")
-  io.stderr:write("ocmkfs: " .. SOURCE .. " is missing, run ocup first\n")
+  io.stderr:write("ocmkfs: nothing to copy from /bin or /lib, run ocup first\n")
   return 1
 end
 
@@ -200,20 +219,33 @@ if chosen.readOnly then
   return 1
 end
 
-say("")
-say("  flashing " .. chosen.address:sub(1, 8) .. ", this overwrites its /bin/ocup.lua", DIM)
-
-local ok, reason = writeTo(chosen.address, "/bin/ocup.lua", contents)
-if not ok then
-  io.stderr:write("ocmkfs: could not write ocup: " .. tostring(reason) .. "\n")
+local free = (chosen.total or 0) - (chosen.used or 0)
+if bytes > free then
+  say("")
+  io.stderr:write("ocmkfs: " .. size(bytes) .. " will not fit in "
+    .. size(free) .. " free on that disk\n")
   return 1
+end
+
+say("")
+say("  flashing " .. chosen.address:sub(1, 8) .. " with " .. #files
+  .. " files, " .. size(bytes), DIM)
+
+for _, file in ipairs(files) do
+  local written, reason = writeTo(chosen.address, file.path, file.contents)
+  if not written then
+    io.stderr:write("ocmkfs: could not write " .. file.path .. ": "
+      .. tostring(reason) .. "\n")
+    return 1
+  end
+  say("    " .. file.path, DIM)
 end
 
 -- install reads this as a Lua table and skips copying the file itself. setboot
 -- and reboot are left out on purpose: this drops a program onto a working
 -- machine, it does not install an operating system.
 local prop = "{label=" .. string.format("%q", LABEL) .. "}"
-ok, reason = writeTo(chosen.address, "/.prop", prop)
+local ok, reason = writeTo(chosen.address, "/.prop", prop)
 if not ok then
   io.stderr:write("ocmkfs: could not write .prop: " .. tostring(reason) .. "\n")
   return 1
@@ -226,5 +258,6 @@ say("  done, labelled " .. LABEL, GREEN)
 say("")
 say("  put the floppy in another computer and run:", DIM)
 say("    install", CYAN)
-say("  then:", DIM)
-say("    ocup", CYAN)
+say("")
+say("  that is all a machine without an internet card needs.", DIM)
+say("  run ocup afterwards only to pick up anything newer.", DIM)

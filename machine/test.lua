@@ -710,6 +710,37 @@ test("ocdump names a logistics pipe by its router id", function()
   check(contains(body, "Logistics Pipe #42"), "pipe not named by its router id")
 end)
 
+test("ocdump reads through a protected metatable", function()
+  -- shaped like a glasses widget in dumps: userdata sets __metatable, so
+  -- getmetatable hands back a string and __call cannot be seen
+  local guarded = setmetatable({ type = "userdata" }, {
+    __call = function()
+      return "Bio Diesel"
+    end,
+    __metatable = "userdata",
+  })
+
+  oc.components = { INTERNET, {
+    address = "8c14b00c-fe87-4aee-a451-7991d34fd7e3",
+    kind = "glasses",
+    methods = { getWidget = "function():table" },
+    values = {
+      getWidget = function()
+        return { getText = guarded }
+      end,
+    },
+  } }
+  oc.respond = function()
+    return 201, "Created", "https://dpaste.com/TESTTESTT\n"
+  end
+
+  oc.run("ocdump")
+  local body = oc.requests[1] and oc.requests[1].body or ""
+  check(contains(body, "protected metatable"), "did not report the metatable as hidden")
+  -- the value is what matters: gating on a visible __call skipped it entirely
+  check(contains(body, "Bio Diesel"), "did not call through the protected metatable")
+end)
+
 test("ocdump keeps scalar returns on one line", function()
   oc.components = { INTERNET, GT_MACHINE }
   oc.respond = function()
@@ -974,6 +1005,42 @@ test("ocmkfs flashes a named disk without asking", function()
   oc.run("ocmkfs", "--disk", FLOPPY:sub(1, 8))
   check(floppy.written["/bin/ocup.lua"] == "-- the real ocup", "did not flash the named disk")
   check(floppy.written["/.prop"] ~= nil, "no .prop on the named disk")
+end)
+
+test("ocmkfs copies every program and library, not just ocup", function()
+  local floppy = fakeDisk(FLOPPY, nil, 524288, false)
+  oc.components = {
+    floppy,
+    fakeDrive("372997ab-4a0c-46ee-a425-e13a3b7b18a4", FLOPPY),
+  }
+  -- a tablet has no internet card, so a floppy carrying only the updater would
+  -- install a program that cannot fetch anything
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocdebug.lua"] = "-- ocdebug"
+  oc.files["/bin/ocdump.lua"] = "-- ocdump"
+  oc.files["/lib/oclib.lua"] = "-- oclib"
+  oc.files["/lib/ocgt.lua"] = "-- ocgt"
+  oc.files["/bin/edit.lua"] = "-- not ours"
+
+  oc.run("ocmkfs", "--disk", FLOPPY:sub(1, 8))
+
+  check(floppy.written["/bin/ocdebug.lua"] == "-- ocdebug", "ocdebug not copied")
+  check(floppy.written["/lib/oclib.lua"] == "-- oclib", "the library was not copied")
+  check(floppy.written["/lib/ocgt.lua"] == "-- ocgt", "ocgt not copied")
+  -- OpenOS's own programs are not ours to ship
+  check(floppy.written["/bin/edit.lua"] == nil, "copied a file that is not ours")
+end)
+
+test("ocmkfs refuses a disk too small to hold the payload", function()
+  local tiny = fakeDisk(FLOPPY, nil, 64, false)
+  oc.components = {
+    tiny,
+    fakeDrive("372997ab-4a0c-46ee-a425-e13a3b7b18a4", FLOPPY),
+  }
+  oc.files["/bin/ocup.lua"] = string.rep("x", 4096)
+
+  oc.run("ocmkfs", "--disk", FLOPPY:sub(1, 8))
+  check(tiny.written["/bin/ocup.lua"] == nil, "wrote past the end of the disk")
 end)
 
 test("ocmkfs refuses a name that matches nothing", function()

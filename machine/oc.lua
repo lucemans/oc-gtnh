@@ -350,6 +350,23 @@ function filesystem.exists(path)
   return false
 end
 
+function filesystem.list(folder)
+  local names, seen = {}, {}
+  for path in pairs(oc.files) do
+    local name = path:match("^" .. folder .. "/([^/]+)$")
+    if name and not seen[name] then
+      seen[name] = true
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  local index = 0
+  return function()
+    index = index + 1
+    return names[index]
+  end
+end
+
 function filesystem.makeDirectory(path)
   oc.directories[path] = true
   return true
