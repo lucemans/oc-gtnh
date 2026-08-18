@@ -131,15 +131,19 @@ sendBroadcast      sendMessage      setTurtleConnect     help / helpCommand
 self-referential, which is why `ocdebug` showed the bare word `table` until the
 describer stopped depending on serialize.
 
-**Still unknown: how to call those methods.** Walking `pairs()` shows the
-entries but not whether they are callable, because that lives in the metatable.
-`ocdump` now reports `table <callable>`, `<__index>` and `<__tostring>` beside
-any table it walks, so the next dump answers it. Do not guess a calling
-convention before that dump; guessing method shapes is what the sensor work
-avoided by reading real data first.
+Every entry is `table <callable, __tostring>`, confirmed in `dumps/005.txt`, so
+`pipe.getRouterId()` works: the `__call` metamethod does the work and the entry
+itself arrives as the argument. This is the same shape as the OpenOS `internet`
+library's wrapped `close`, and it is why a `pairs()` walk alone was misleading.
 
-Note `sendMessage` and `setTurtleConnect` are writes. Whatever calling
-convention turns out to be right, they stay behind `gt.setValue`.
+`__tostring` on an entry yields its signature, so `ocdump` prints it beside the
+name, and calls any entry whose own name reads (`get`, `is`, `has`), printing
+the result under `->`.
+
+`sendMessage`, `sendBroadcast` and `setTurtleConnect` are writes and sit in the
+same proxy, which is why probing is keyed on the name rather than on the entry
+being callable. `canAccess` is not probed either: `can` is deliberately absent
+from the readable prefixes, because `cancelCrafting` also starts with it.
 
 ## Colour meanings
 

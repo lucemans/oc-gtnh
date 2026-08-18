@@ -7,7 +7,7 @@ local filesystem = require("filesystem")
 local gt = require("ocgt")
 local serialization = require("serialization")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 
 local ARCHIVE_DIR = "/home/dumps"
 local PASTE_URL = "https://dpaste.com/api/v2/"

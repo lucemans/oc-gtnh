@@ -194,6 +194,56 @@ function gt.formatValue(value)
   return inline(value, 2, {})
 end
 
+local function callable(value)
+  local ok, meta = pcall(getmetatable, value)
+  if not ok or type(meta) ~= "table" then
+    return nil
+  end
+  return meta
+end
+
+-- a proxy entry carries its own signature under __tostring, the same way the
+-- OpenOS internet library documents its wrapped close
+local function callDoc(value)
+  local meta = callable(value)
+  if not meta or not rawget(meta, "__tostring") then
+    return nil
+  end
+  local ok, text = pcall(tostring, value)
+  if not ok or type(text) ~= "string" then
+    return nil
+  end
+  text = gt.oneLine(text)
+  if #text > 140 then
+    text = text:sub(1, 140) .. "..."
+  end
+  return "  -- " .. text
+end
+
+-- A proxy method is only called when its own name says it reads. sendMessage
+-- and setTurtleConnect sit in the same proxy and would change the world.
+local function probe(key, item)
+  if type(key) ~= "string" or not gt.isReadable(key) then
+    return nil
+  end
+  local meta = callable(item)
+  if not meta or not rawget(meta, "__call") then
+    return nil
+  end
+  local results = table.pack(pcall(item))
+  if not results[1] then
+    return "error: " .. gt.oneLine(tostring(results[2]))
+  end
+  if results.n < 2 then
+    return "(no return value)"
+  end
+  local parts = {}
+  for index = 2, results.n do
+    parts[#parts + 1] = inline(results[index], 2, {})
+  end
+  return table.concat(parts, ", ")
+end
+
 -- an indented block, for a dump that someone will read to learn an API
 function gt.describeLines(value, prefix)
   local lines = {}
@@ -210,6 +260,11 @@ function gt.describeLines(value, prefix)
       local item = current[key]
       if type(item) == "table" and not seen[item] and depth < MAX_DEPTH then
         lines[#lines + 1] = indent .. keyText(key) .. " = " .. tableKind(item)
+          .. (callDoc(item) or "")
+        local result = probe(key, item)
+        if result then
+          lines[#lines + 1] = indent .. "  -> " .. result
+        end
         walk(item, indent .. "  ", depth + 1)
       else
         lines[#lines + 1] = indent .. keyText(key) .. " = " .. inline(item, 1, seen)

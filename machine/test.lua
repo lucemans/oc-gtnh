@@ -618,27 +618,61 @@ test("ocdump writes a nested table out in full", function()
   end
 end)
 
-test("ocdump reports whether a proxy can be called", function()
-  -- shaped like the real Logistics Pipes proxy in dumps/004.txt: entries that
-  -- look inert until you notice the metatable
-  local method = setmetatable({ name = "getRouterId" }, { __call = function() end })
-  oc.components = { INTERNET, {
+-- shaped like the real Logistics Pipes proxy in dumps/005.txt: every entry is
+-- callable and documents itself through __tostring
+local function proxyMethod(name, result)
+  return setmetatable({ name = name }, {
+    __call = function()
+      if result == nil then
+        return
+      end
+      return result
+    end,
+    __tostring = function()
+      return "function():" .. name
+    end,
+  })
+end
+
+local function logisticsPipe(written)
+  return {
     address = "96cdfbc3-11fa-462f-adf2-2599720fbb32",
     kind = "logisticspipe",
     methods = { getPipe = "function():table -- Returns the pipe." },
     values = {
       getPipe = function()
-        return { type = "userdata", getRouterId = method }
+        return {
+          type = "userdata",
+          getRouterId = proxyMethod("getRouterId", 42),
+          hasLogisticsModule = proxyMethod("hasLogisticsModule", true),
+          sendMessage = setmetatable({ name = "sendMessage" }, {
+            __call = function()
+              written.value = true
+            end,
+            __tostring = function()
+              return "function(target, message)"
+            end,
+          }),
+        }
       end,
     },
-  } }
+  }
+end
+
+test("ocdump reads a proxy method and reports its signature", function()
+  local written = { value = false }
+  oc.components = { INTERNET, logisticsPipe(written) }
   oc.respond = function()
     return 201, "Created", "https://dpaste.com/TESTTESTT\n"
   end
 
   oc.run("ocdump")
   local body = oc.requests[1] and oc.requests[1].body or ""
-  check(contains(body, "getRouterId = table <callable>"), "did not report the entry as callable")
+  check(contains(body, "table <callable, __tostring>"), "did not report the entry as callable")
+  check(contains(body, "-- function():getRouterId"), "did not extract the signature")
+  check(contains(body, "-> 42"), "did not call the readable proxy method")
+  check(contains(body, "-> true"), "did not call the has method")
+  check(written.value == false, "called a proxy method that writes")
   if show then
     say(body)
   end
