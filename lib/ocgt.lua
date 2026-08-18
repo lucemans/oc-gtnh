@@ -116,6 +116,32 @@ local function keyText(key)
   return "[" .. tostring(key) .. "]"
 end
 
+-- A Logistics Pipes proxy looks like a plain table of {name=, proxy=} entries,
+-- but whether those entries can be called lives in the metatable, not in the
+-- fields, so a walk over pairs() alone cannot tell you how to use the thing.
+local function tableKind(value)
+  local ok, meta = pcall(getmetatable, value)
+  if not ok or type(meta) ~= "table" then
+    return "table"
+  end
+  local marks = {}
+  if rawget(meta, "__call") then
+    marks[#marks + 1] = "callable"
+  end
+  if rawget(meta, "__index") then
+    marks[#marks + 1] = "__index"
+  end
+  if rawget(meta, "__tostring") then
+    marks[#marks + 1] = "__tostring"
+  end
+  if #marks == 0 then
+    return "table"
+  end
+  return "table <" .. table.concat(marks, ", ") .. ">"
+end
+
+gt.tableKind = tableKind
+
 local function sortedPairs(value)
   local keys = {}
   for key in pairs(value) do
@@ -183,7 +209,7 @@ function gt.describeLines(value, prefix)
       end
       local item = current[key]
       if type(item) == "table" and not seen[item] and depth < MAX_DEPTH then
-        lines[#lines + 1] = indent .. keyText(key) .. " = table"
+        lines[#lines + 1] = indent .. keyText(key) .. " = " .. tableKind(item)
         walk(item, indent .. "  ", depth + 1)
       else
         lines[#lines + 1] = indent .. keyText(key) .. " = " .. inline(item, 1, seen)
@@ -195,7 +221,7 @@ function gt.describeLines(value, prefix)
   if type(value) ~= "table" then
     return { prefix .. gt.formatValue(value) }
   end
-  lines[#lines + 1] = prefix .. "table"
+  lines[#lines + 1] = prefix .. tableKind(value)
   walk(value, prefix:match("^%s*") .. "  ", 1)
   return lines
 end

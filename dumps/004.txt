@@ -1,0 +1,856 @@
+ocdump v0.4.0
+uptime      5720.8s
+os          OpenOS 1.8.9  Lua 5.3
+computer    755c25ca-ccec-4262-bd4a-038440718514
+memory      1125396 free of 1572864
+energy      3099 of 3100
+
+== devices ==
+01258489-8c4f-4be7-96d2-3f0fc17814ee  {product="SuperLink X-D4NK",class="communication",description="Internet modem",vendor="MightyPirates GmbH & Co. KG"}
+0a09ccc3-8a81-468d-8f84-952f01589e70  {vendor="MightyPirates GmbH & Co. KG",class="memory",clock="1500",product="Multipurpose RAM Type",description="Memory bank"}
+294997cf-7838-456b-a945-31331a551702  {vendor="MightyPirates GmbH & Co. KG",class="display",clock="2560/2560/320/5120/1280/2560",width="8",product="MPG3000 GTZ",capacity="8000",description="Graphics controller"}
+32e7e5f2-ba13-447e-9042-a83b46a66da0  {product="Fancytyper MX-Stone",class="input",description="Keyboard",vendor="MightyPirates GmbH & Co. KG"}
+45e4a138-b35f-4fc3-ad4e-62b38151ae73  {product="Multiplug Ext.1",class="bus",description="Adapter",vendor="MightyPirates GmbH & Co. KG"}
+5bf88c97-96a8-4341-a54f-bf56cc533236  {product="Multiplug Ext.1",class="bus",description="Adapter",vendor="MightyPirates GmbH & Co. KG"}
+5e84d04d-56ff-46c4-bec4-9041d4bb3eed  {vendor="MightyPirates GmbH & Co. KG",class="display",width="8",product="Text Screen V0",capacity="8000",description="Text buffer"}
+5ee3ec11-ecc0-441a-837c-9bba083cbd58  {product="Multiplug Ext.1",class="bus",description="Adapter",vendor="MightyPirates GmbH & Co. KG"}
+6c257ace-01a4-426e-bf04-06b65f813ab8  {vendor="MightyPirates GmbH & Co. KG",class="processor",clock="1500",product="FlexiArch 3 Processor",description="CPU"}
+755c25ca-ccec-4262-bd4a-038440718514  {vendor="MightyPirates GmbH & Co. KG",class="system",product="Blocker",capacity="10",description="Computer"}
+7d99f544-5b7f-409e-a7e2-bf986d94bc23  {vendor="MightyPirates GmbH & Co. KG",class="memory",clock="1500",product="Multipurpose RAM Type",description="Memory bank"}
+7f9e01f1-320a-4621-8c99-110b8203d3c2  {vendor="MightyPirates GmbH & Co. KG",class="power",product="CapBank3x",capacity="8800.0",description="Battery"}
+82f0c1c7-89c9-4078-ba6e-c8ca247e703e  {product="Multiplug Ext.1",class="bus",description="Adapter",vendor="MightyPirates GmbH & Co. KG"}
+8fd5cbe3-3876-4f80-9778-87e4a6c92b35  {product="Multiplug Ext.1",class="bus",description="Adapter",vendor="MightyPirates GmbH & Co. KG"}
+9c1ab86b-b6b3-4921-b924-a81ac0499548  {product="Multiplug Ext.1",class="bus",description="Adapter",vendor="MightyPirates GmbH & Co. KG"}
+a92767d2-9bb4-4dec-a5dd-ac038ab59250  {vendor="MightyPirates GmbH & Co. KG",class="volume",clock="200/200/80",product="MPFS.21.6",size="4194304",description="Filesystem",capacity="4294967"}
+a9726220-1576-4c07-977a-3fc63a30264d  {vendor="MightyPirates GmbH & Co. KG",class="memory",product="FlashStick2k",size="4096",description="EEPROM",capacity="4096"}
+ab644ac9-35ab-4eb4-91fe-4b45750f14b0  {vendor="MightyPirates GmbH & Co. KG",class="volume",clock="260/260/100",product="MPFS.21.6",size="65536",description="Filesystem",capacity="67108"}
+
+== index ==
+bc_pipe            3b73507c  
+computer           755c25ca  
+eeprom             a9726220  
+filesystem         a92767d2  
+filesystem         ab644ac9  
+gpu                294997cf  
+gt_batterybuffer   03fc42ad  Medium Voltage Battery Buffer
+gt_machine         1c646dd8  Electric Blast Furnace
+gt_machine         4bd03746  Super Tank
+gt_machine         ce0ace5a  Diesel Generator
+internet           01258489  
+keyboard           32e7e5f2  
+logisticspipe      96cdfbc3  
+screen             5e84d04d  
+
+== components (14) ==
+
+-- bc_pipe  3b73507c-30e9-4ba1-bc1e-9b9041642441  slot -1
+  getPipeType  [indirect]
+    doc: function():string -- Returns the type of the pipe.
+    value: LOGISTICS
+  hasGate  [indirect]
+    doc: function(side:number):boolean -- Returns whether the pipe has a gate on the specified side.
+    value: false
+  isPipeConnected  [indirect]
+    doc: function(side:number):boolean -- Returns whether the pipe is connected to something on the specified side.
+    value: false
+  isWireActive  [indirect]
+    doc: function(color:string):boolean -- Returns whether the wired with the given color is active.
+    value: false
+  isWired  [indirect]
+    doc: function(color:string):boolean -- Returns whether the pipe is wired with the given color.
+    value: false
+
+-- computer  755c25ca-ccec-4262-bd4a-038440718514  slot -1
+  beep  [indirect]
+    doc: function([frequency:string or number[, duration:number]]) -- Plays a tone, useful to alert users via audible feedback.
+  getDeviceInfo  [indirect]
+    doc: function():table -- Collect information on all connected devices.
+    value: table
+      ["01258489-8c4f-4be7-96d2-3f0fc17814ee"] = table
+        class = "communication"
+        description = "Internet modem"
+        product = "SuperLink X-D4NK"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["0a09ccc3-8a81-468d-8f84-952f01589e70"] = table
+        class = "memory"
+        clock = "1500"
+        description = "Memory bank"
+        product = "Multipurpose RAM Type"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["294997cf-7838-456b-a945-31331a551702"] = table
+        capacity = "8000"
+        class = "display"
+        clock = "2560/2560/320/5120/1280/2560"
+        description = "Graphics controller"
+        product = "MPG3000 GTZ"
+        vendor = "MightyPirates GmbH & Co. KG"
+        width = "8"
+      ["32e7e5f2-ba13-447e-9042-a83b46a66da0"] = table
+        class = "input"
+        description = "Keyboard"
+        product = "Fancytyper MX-Stone"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["45e4a138-b35f-4fc3-ad4e-62b38151ae73"] = table
+        class = "bus"
+        description = "Adapter"
+        product = "Multiplug Ext.1"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["5bf88c97-96a8-4341-a54f-bf56cc533236"] = table
+        class = "bus"
+        description = "Adapter"
+        product = "Multiplug Ext.1"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["5e84d04d-56ff-46c4-bec4-9041d4bb3eed"] = table
+        capacity = "8000"
+        class = "display"
+        description = "Text buffer"
+        product = "Text Screen V0"
+        vendor = "MightyPirates GmbH & Co. KG"
+        width = "8"
+      ["5ee3ec11-ecc0-441a-837c-9bba083cbd58"] = table
+        class = "bus"
+        description = "Adapter"
+        product = "Multiplug Ext.1"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["6c257ace-01a4-426e-bf04-06b65f813ab8"] = table
+        class = "processor"
+        clock = "1500"
+        description = "CPU"
+        product = "FlexiArch 3 Processor"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["755c25ca-ccec-4262-bd4a-038440718514"] = table
+        capacity = "10"
+        class = "system"
+        description = "Computer"
+        product = "Blocker"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["7d99f544-5b7f-409e-a7e2-bf986d94bc23"] = table
+        class = "memory"
+        clock = "1500"
+        description = "Memory bank"
+        product = "Multipurpose RAM Type"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["7f9e01f1-320a-4621-8c99-110b8203d3c2"] = table
+        capacity = "8800.0"
+        class = "power"
+        description = "Battery"
+        product = "CapBank3x"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["82f0c1c7-89c9-4078-ba6e-c8ca247e703e"] = table
+        class = "bus"
+        description = "Adapter"
+        product = "Multiplug Ext.1"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["8fd5cbe3-3876-4f80-9778-87e4a6c92b35"] = table
+        class = "bus"
+        description = "Adapter"
+        product = "Multiplug Ext.1"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["9c1ab86b-b6b3-4921-b924-a81ac0499548"] = table
+        class = "bus"
+        description = "Adapter"
+        product = "Multiplug Ext.1"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["a92767d2-9bb4-4dec-a5dd-ac038ab59250"] = table
+        capacity = "4294967"
+        class = "volume"
+        clock = "200/200/80"
+        description = "Filesystem"
+        product = "MPFS.21.6"
+        size = "4194304"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["a9726220-1576-4c07-977a-3fc63a30264d"] = table
+        capacity = "4096"
+        class = "memory"
+        description = "EEPROM"
+        product = "FlashStick2k"
+        size = "4096"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["ab644ac9-35ab-4eb4-91fe-4b45750f14b0"] = table
+        capacity = "67108"
+        class = "volume"
+        clock = "260/260/100"
+        description = "Filesystem"
+        product = "MPFS.21.6"
+        size = "65536"
+        vendor = "MightyPirates GmbH & Co. KG"
+  getProgramLocations  [indirect]
+    doc: function():table -- Returns a map of program name to disk label for known programs.
+    value: table
+      [1] = table
+        [1] = "dig"
+        [2] = "dig"
+      [2] = table
+        [1] = "oppm"
+        [2] = "oppm"
+      [3] = table
+        [1] = "md5sum"
+        [2] = "data"
+      [4] = table
+        [1] = "tape"
+        [2] = "tape"
+      [5] = table
+        [1] = "maze"
+        [2] = "maze"
+      [6] = table
+        [1] = "sha256sum"
+        [2] = "data"
+      [7] = table
+        [1] = "irc"
+        [2] = "irc"
+      [8] = table
+        [1] = "deflate"
+        [2] = "data"
+      [9] = table
+        [1] = "gpg"
+        [2] = "data"
+      [10] = table
+        [1] = "explode"
+        [2] = "explode"
+      [11] = table
+        [1] = "ifconfig"
+        [2] = "network"
+      [12] = table
+        [1] = "ping"
+        [2] = "network"
+      [13] = table
+        [1] = "base64"
+        [2] = "data"
+      [14] = table
+        [1] = "route"
+        [2] = "network"
+      [15] = table
+        [1] = "inflate"
+        [2] = "data"
+      [16] = table
+        [1] = "arp"
+        [2] = "network"
+      [17] = table
+        [1] = "opl-flash"
+        [2] = "openloader"
+      [18] = table
+        [1] = "build"
+        [2] = "builder"
+      [19] = table
+        [1] = "refuel"
+        [2] = "generator"
+  isRunning
+    doc: function():boolean -- Returns whether the computer is running.
+    value: true
+  start  [indirect]
+    doc: function():boolean -- Starts the computer. Returns true if the state changed.
+  stop  [indirect]
+    doc: function():boolean -- Stops the computer. Returns true if the state changed.
+
+-- eeprom  a9726220-1576-4c07-977a-3fc63a30264d  slot 9
+  get
+    doc: function():string -- Get the currently stored byte array.
+    value: local init do local component_invoke = component.invoke local function boot_invoke(address, method, ...) local result = table.pack(pcall(component_invoke, address, method, ...)) if not result[1] then return nil, result[2] else return table.unpack(result, 2, result.n) end end -- backwards compatibility, may remove later local eeprom = component.list("eeprom")() computer.getBootAddress = function() return boot_invoke(eeprom, "getData") end computer.setBootAddress = function(address) return boot_invoke(eeprom, "setData", address) end do local screen = component.list("screen")() local gpu = component.list("gpu")() if gpu and screen then boot_invoke(gpu, "bind", screen) end end local function tryLoadFrom(address) local handle, reason = boot_invoke(address, "open", "/init.lua") if not handle then return nil, reason end local buffer = "" repeat local data, reason = boot_invoke(address, "read", handle, math.maxinteger or math.huge) if not data and reason then return nil, reason end buffer = buffer .. (data or "") until not data boot_invoke(address, "close", handle) return load(buffer, "=init") end local reason if computer.getBootAddress() then init, reason = tryLoadFrom(computer.getBootAddress()) end if not init then computer.setBootAddress() for address in component.list("filesystem") do init, reason = tryLoadFrom(address) if init then computer.setBootAddress(address) break end end end if not init then error("no bootable medium found" .. (reason and (": " .. tostring(reason)) or ""), 0) end computer.beep(1000, 0.2) end return init() 
+  getChecksum
+    doc: function():string -- Get the checksum of the data on this EEPROM.
+    value: 0674306c
+  getData
+    doc: function():string -- Get the currently stored byte array.
+    value: a92767d2-9bb4-4dec-a5dd-ac038ab59250
+  getDataSize
+    doc: function():number -- Get the storage capacity of this EEPROM.
+    value: 256
+  getLabel
+    doc: function():string -- Get the label of the EEPROM.
+    value: EEPROM (Lua BIOS)
+  getSize
+    doc: function():number -- Get the storage capacity of this EEPROM.
+    value: 4096
+  makeReadonly
+    doc: function(checksum:string):boolean -- Make this EEPROM readonly if it isn't already. This process cannot be reversed!
+  set  [indirect]
+    doc: function(data:string) -- Overwrite the currently stored byte array.
+  setData  [indirect]
+    doc: function(data:string) -- Overwrite the currently stored byte array.
+  setLabel  [indirect]
+    doc: function(data:string):string -- Set the label of the EEPROM.
+
+-- filesystem  a92767d2-9bb4-4dec-a5dd-ac038ab59250  slot 5
+  close
+    doc: function(handle:userdata) -- Closes an open file descriptor with the specified handle.
+  exists
+    doc: function(path:string):boolean -- Returns whether an object exists at the specified absolute path in the file system.
+  getLabel
+    doc: function():string -- Get the current label of the drive.
+    value: OpenOS
+  isDirectory
+    doc: function(path:string):boolean -- Returns whether the object at the specified absolute path in the file system is a directory.
+    error: bad arguments #1 (string expected, got no value)
+  isReadOnly
+    doc: function():boolean -- Returns whether the file system is read-only.
+    value: false
+  lastModified
+    doc: function(path:string):number -- Returns the (real world) timestamp of when the object at the specified absolute path in the file system was modified.
+  list  [indirect]
+    doc: function(path:string):table -- Returns a list of names of objects in the directory at the specified absolute path in the file system.
+  makeDirectory  [indirect]
+    doc: function(path:string):boolean -- Creates a directory at the specified absolute path in the file system. Creates parent directories, if necessary.
+  open
+    doc: function(path:string[, mode:string='r']):userdata -- Opens a new file descriptor and returns its handle.
+  read
+    doc: function(handle:userdata, count:number):string or nil -- Reads up to the specified amount of data from an open file descriptor with the specified handle. Returns nil when EOF is reached.
+  remove  [indirect]
+    doc: function(path:string):boolean -- Removes the object at the specified absolute path in the file system.
+  rename  [indirect]
+    doc: function(from:string, to:string):boolean -- Renames/moves an object from the first specified absolute path in the file system to the second.
+  seek
+    doc: function(handle:userdata, whence:string, offset:number):number -- Seeks in an open file descriptor with the specified handle. Returns the new pointer position.
+  setLabel  [indirect]
+    doc: function(value:string):string -- Sets the label of the drive. Returns the new value, which may be truncated.
+  size
+    doc: function(path:string):number -- Returns the size of the object at the specified absolute path in the file system.
+  spaceTotal
+    doc: function():number -- The overall capacity of the file system, in bytes.
+  spaceUsed
+    doc: function():number -- The currently used capacity of the file system, in bytes.
+  write
+    doc: function(handle:userdata, value:string):boolean -- Writes the specified data to an open file descriptor with the specified handle.
+
+-- filesystem  ab644ac9-35ab-4eb4-91fe-4b45750f14b0  slot -1
+  close
+    doc: function(handle:userdata) -- Closes an open file descriptor with the specified handle.
+  exists
+    doc: function(path:string):boolean -- Returns whether an object exists at the specified absolute path in the file system.
+  getLabel
+    doc: function():string -- Get the current label of the drive.
+    value: tmpfs
+  isDirectory
+    doc: function(path:string):boolean -- Returns whether the object at the specified absolute path in the file system is a directory.
+    error: bad arguments #1 (string expected, got no value)
+  isReadOnly
+    doc: function():boolean -- Returns whether the file system is read-only.
+    value: false
+  lastModified
+    doc: function(path:string):number -- Returns the (real world) timestamp of when the object at the specified absolute path in the file system was modified.
+  list  [indirect]
+    doc: function(path:string):table -- Returns a list of names of objects in the directory at the specified absolute path in the file system.
+  makeDirectory  [indirect]
+    doc: function(path:string):boolean -- Creates a directory at the specified absolute path in the file system. Creates parent directories, if necessary.
+  open
+    doc: function(path:string[, mode:string='r']):userdata -- Opens a new file descriptor and returns its handle.
+  read
+    doc: function(handle:userdata, count:number):string or nil -- Reads up to the specified amount of data from an open file descriptor with the specified handle. Returns nil when EOF is reached.
+  remove  [indirect]
+    doc: function(path:string):boolean -- Removes the object at the specified absolute path in the file system.
+  rename  [indirect]
+    doc: function(from:string, to:string):boolean -- Renames/moves an object from the first specified absolute path in the file system to the second.
+  seek
+    doc: function(handle:userdata, whence:string, offset:number):number -- Seeks in an open file descriptor with the specified handle. Returns the new pointer position.
+  setLabel  [indirect]
+    doc: function(value:string):string -- Sets the label of the drive. Returns the new value, which may be truncated.
+  size
+    doc: function(path:string):number -- Returns the size of the object at the specified absolute path in the file system.
+  spaceTotal
+    doc: function():number -- The overall capacity of the file system, in bytes.
+  spaceUsed
+    doc: function():number -- The currently used capacity of the file system, in bytes.
+  write
+    doc: function(handle:userdata, value:string):boolean -- Writes the specified data to an open file descriptor with the specified handle.
+
+-- gpu  294997cf-7838-456b-a945-31331a551702  slot 0
+  allocateBuffer
+    doc: function([width: number, height: number]): number -- allocates a new buffer with dimensions width*height (defaults to max resolution) and appends it to the buffer list. Returns the index of the new buffer and returns nil with an error message on failure. A buffer can be allocated even when there is no screen bound to this gpu. Index 0 is always reserved for the screen and thus the lowest index of an allocated buffer is always 1.
+  bind  [indirect]
+    doc: function(address:string[, reset:boolean=true]):boolean -- Binds the GPU to the screen with the specified address and resets screen settings if `reset` is true.
+  bitblt
+    doc: function([dst: number, col: number, row: number, width: number, height: number, src: number, fromCol: number, fromRow: number]):boolean -- bitblt from buffer to screen. All parameters are optional. Writes to `dst` page in rectangle `x, y, width, height`, defaults to the bound screen and its viewport. Reads data from `src` page at `fx, fy`, default is the active page from position 1, 1
+  buffers
+    doc: function(): number -- Returns an array of indexes of the allocated buffers
+  copy
+    doc: function(x:number, y:number, width:number, height:number, tx:number, ty:number):boolean -- Copies a portion of the screen from the specified location with the specified size by the specified translation.
+  fill
+    doc: function(x:number, y:number, width:number, height:number, char:string):boolean -- Fills a portion of the screen at the specified position with the specified size with the specified character.
+  freeAllBuffers
+    doc: function(): number -- Closes all buffers and returns the count. If the active buffer is closed, index moves to 0
+  freeBuffer
+    doc: function(index: number): boolean -- Closes buffer at `index`. Returns true if a buffer closed. If the current buffer is closed, index moves to 0
+  freeMemory
+    doc: function(): number -- returns the total free memory not allocated to buffers. This does not include the screen.
+  get
+    doc: function(x:number, y:number):string, number, number, number or nil, number or nil -- Get the value displayed on the screen at the specified index, as well as the foreground and background color. If the foreground or background is from the palette, returns the palette indices as fourth and fifth results, else nil, respectively.
+    error: bad arguments #1 (integer expected, got no value)
+  getActiveBuffer
+    doc: function(): number -- returns the index of the currently selected buffer. 0 is reserved for the screen. Can return 0 even when there is no screen
+    value: 0
+  getBackground
+    doc: function():number, boolean -- Get the current background color and whether it's from the palette or not.
+    value: 0, false
+  getBufferSize
+    doc: function(index: number): number, number -- returns the buffer size at index. Returns the screen resolution for index 0. returns nil for invalid indexes
+    value: 160, 50
+  getDepth
+    doc: function():number -- Returns the currently set color depth.
+    value: 8
+  getForeground
+    doc: function():number, boolean -- Get the current foreground color and whether it's from the palette or not.
+    value: 16777215, false
+  getPaletteColor
+    doc: function(index:number):number -- Get the palette color at the specified palette index.
+    error: bad arguments #1 (integer expected, got no value)
+  getResolution
+    doc: function():number, number -- Get the current screen resolution.
+    value: 160, 50
+  getScreen
+    doc: function():string -- Get the address of the screen the GPU is currently bound to.
+    value: 5e84d04d-56ff-46c4-bec4-9041d4bb3eed
+  getViewport
+    doc: function():number, number -- Get the current viewport resolution.
+    value: 160, 50
+  maxDepth
+    doc: function():number -- Get the maximum supported color depth.
+  maxResolution
+    doc: function():number, number -- Get the maximum screen resolution.
+  set
+    doc: function(x:number, y:number, value:string[, vertical:boolean]):boolean -- Plots a string value to the screen at the specified position. Optionally writes the string vertically.
+  setActiveBuffer
+    doc: function(index: number): number -- Sets the active buffer to `index`. 1 is the first vram buffer and 0 is reserved for the screen. returns nil for invalid index (0 is always valid)
+  setBackground
+    doc: function(value:number[, palette:boolean]):number, number or nil -- Sets the background color to the specified value. Optionally takes an explicit palette index. Returns the old value and if it was from the palette its palette index.
+  setDepth  [indirect]
+    doc: function(depth:number):number -- Set the color depth. Returns the previous value.
+  setForeground
+    doc: function(value:number[, palette:boolean]):number, number or nil -- Sets the foreground color to the specified value. Optionally takes an explicit palette index. Returns the old value and if it was from the palette its palette index.
+  setPaletteColor
+    doc: function(index:number, color:number):number -- Set the palette color at the specified palette index. Returns the previous value.
+  setResolution  [indirect]
+    doc: function(width:number, height:number):boolean -- Set the screen resolution. Returns true if the resolution changed.
+  setViewport  [indirect]
+    doc: function(width:number, height:number):boolean -- Set the viewport resolution. Cannot exceed the screen resolution. Returns true if the resolution changed.
+  totalMemory
+    doc: function(): number -- returns the total memory size of the gpu vram. This does not include the screen.
+
+-- gt_batterybuffer  03fc42ad-cc83-4dc5-8b28-72b2e1f41dae  slot -1
+  getAverageElectricInput  [indirect]
+    doc: function():number -- Returns the amount of Electricity, accepted by this Block the last 5 ticks as Average.
+    value: 0
+  getAverageElectricOutput  [indirect]
+    doc: function():number -- Returns the amount of Electricity, outputted by this Block the last 5 ticks as Average.
+    value: 0
+  getBatteryCharge  [indirect]
+    doc: function(slot:number):number; Returns the amount of stored EU in the battery in the specified slot
+    error: bad arguments #1 (integer expected, got no value)
+  getCoordinates
+    doc: function():table; Returns machine coordinates
+    value: -394, 63, -1089
+  getEUCapacity  [indirect]
+    doc: function():number -- Returns the amount of electricity containable in this Block, in EU units!
+    value: 32768
+  getEUCapacityString  [indirect]
+    doc: function():number -- Returns the amount of electricity containable in this Block, in EU units! (As a string for HUGE amounts.)
+    value: 32768
+  getEUInputAverage
+    doc: function():number; Returns the average EU input of this block
+    value: 0
+  getEUMaxStored
+    doc: function():number; Returns the max EU that can be stored in this block
+    value: 32768
+  getEUOutputAverage
+    doc: function():number; Returns the average EU output of this block
+    value: 0
+  getEUStored
+    doc: function():number; Returns the EU stored in this block
+    value: 32768
+  getInputVoltage  [indirect]
+    doc: function():number -- Gets the maximum Input in EU/p.
+    value: 128
+  getMaxBatteryCharge  [indirect]
+    doc: function(slot:number):number; Returns the max amount of stored EU in the battery in the specified slot
+    error: bad arguments #1 (integer expected, got no value)
+  getName
+    doc: function():string; Returns the machine's name
+    value: batterybuffer.04.tier.02
+  getOutputAmperage  [indirect]
+    doc: function():number -- Gets the amount of Energy Packets per tick.
+    value: 4
+  getOutputVoltage  [indirect]
+    doc: function():number -- Gets the Output in EU/p.
+    value: 128
+  getOwnerName
+    doc: function():string; Returns the name of this block's owner
+    value: Lucemans
+  getSensorInformation  [indirect]
+    doc: function():table; Returns sensor information about this block
+    value: table
+      [1] = "§9Medium Voltage Battery Buffer§r"
+      [2] = "Stored Items: §a832,768§r EU / §e832,768§r EU"
+      [3] = "Average input: 0 EU/t"
+      [4] = "Average output: 0 EU/t"
+  getSteamCapacity  [indirect]
+    doc: function():number -- Returns the amount of Steam containable in this Block, in EU units!
+    value: 0
+  getSteamMaxStored
+    doc: function():number; Returns the max steam that can be stored in this block
+    value: 0
+  getSteamStored
+    doc: function():number; Returns the steam stored in this block
+    value: 0
+  getStoredEU  [indirect]
+    doc: function():number -- Returns the amount of electricity contained in this Block, in EU units!
+    value: 32768
+  getStoredEUString  [indirect]
+    doc: function():string -- Returns the amount of electricity contained in this Block, in EU units! (As a string for HUGE amounts.)
+    value: 32768
+  getStoredSteam  [indirect]
+    doc: function():number -- Returns the amount of Steam contained in this Block, in EU units!
+    value: 0
+  getWorkMaxProgress
+    doc: function():number; Returns the max progress of this block
+    value: 32768
+  getWorkProgress
+    doc: function():number; Returns the current progress of this block
+    value: 32768
+  hasWork
+    doc: function():boolean; Returns true if the machine currently has work to do
+    value: true
+  isMachineActive
+    doc: function():boolean; Returns whether the machine is currently active
+    value: false
+  isWorkAllowed
+    doc: function():boolean; Returns whether this block is currently allowed to work
+    value: true
+  setWorkAllowed
+    doc: function(work:boolean); Sets whether this block is currently allowed to work
+
+-- gt_machine  1c646dd8-2065-4f9c-ae55-d823df1777d7  slot -1
+  getAverageElectricInput  [indirect]
+    doc: function():number -- Returns the amount of Electricity, accepted by this Block the last 5 ticks as Average.
+    value: 0
+  getAverageElectricOutput  [indirect]
+    doc: function():number -- Returns the amount of Electricity, outputted by this Block the last 5 ticks as Average.
+    value: 0
+  getCoordinates
+    doc: function():table; Returns machine coordinates
+    value: -399, 63, -1099
+  getEUCapacity  [indirect]
+    doc: function():number -- Returns the amount of electricity containable in this Block, in EU units!
+    value: 0
+  getEUCapacityString  [indirect]
+    doc: function():number -- Returns the amount of electricity containable in this Block, in EU units! (As a string for HUGE amounts.)
+    value: 0
+  getEUInputAverage
+    doc: function():number; Returns the average EU input of this block
+    value: 0
+  getEUMaxStored
+    doc: function():number; Returns the max EU that can be stored in this block
+    value: 0
+  getEUOutputAverage
+    doc: function():number; Returns the average EU output of this block
+    value: 0
+  getEUStored
+    doc: function():number; Returns the EU stored in this block
+    value: 0
+  getInputVoltage  [indirect]
+    doc: function():number -- Gets the maximum Input in EU/p.
+    value: 0
+  getName
+    doc: function():string; Returns the machine's name
+    value: multimachine.blastfurnace
+  getOutputAmperage  [indirect]
+    doc: function():number -- Gets the amount of Energy Packets per tick.
+    value: 1
+  getOutputVoltage  [indirect]
+    doc: function():number -- Gets the Output in EU/p.
+    value: 0
+  getOwnerName
+    doc: function():string; Returns the name of this block's owner
+    value: Lucemans
+  getSensorInformation  [indirect]
+    doc: function():table; Returns sensor information about this block
+    value: table
+      [1] = "Progress: §a0§r s / §e0§r s"
+      [2] = "Stored Energy: §a3,072§r EU / §e3,072§r EU"
+      [3] = "Currently uses: §c480§r EU/t"
+      [4] = "Max Energy Income: §e256§r EU/t(*2A) Tier: §eHV§r"
+      [5] = "Problems: §c0§r Efficiency: §e0.0§r %"
+      [6] = "Heat capacity: §a1,901§r K"
+      [7] = "Pollution reduced to: §a100§r %"
+  getSteamCapacity  [indirect]
+    doc: function():number -- Returns the amount of Steam containable in this Block, in EU units!
+    value: 0
+  getSteamMaxStored
+    doc: function():number; Returns the max steam that can be stored in this block
+    value: 0
+  getSteamStored
+    doc: function():number; Returns the steam stored in this block
+    value: 0
+  getStoredEU  [indirect]
+    doc: function():number -- Returns the amount of electricity contained in this Block, in EU units!
+    value: 0
+  getStoredEUString  [indirect]
+    doc: function():string -- Returns the amount of electricity contained in this Block, in EU units! (As a string for HUGE amounts.)
+    value: 0
+  getStoredSteam  [indirect]
+    doc: function():number -- Returns the amount of Steam contained in this Block, in EU units!
+    value: 0
+  getWorkMaxProgress
+    doc: function():number; Returns the max progress of this block
+    value: 0
+  getWorkProgress
+    doc: function():number; Returns the current progress of this block
+    value: 0
+  hasWork
+    doc: function():boolean; Returns true if the machine currently has work to do
+    value: false
+  isMachineActive
+    doc: function():boolean; Returns whether the machine is currently active
+    value: false
+  isWorkAllowed
+    doc: function():boolean; Returns whether this block is currently allowed to work
+    value: false
+  setWorkAllowed
+    doc: function(work:boolean); Sets whether this block is currently allowed to work
+
+-- gt_machine  4bd03746-33fd-4e3a-939c-d15b40849a8f  slot -1
+  getAverageElectricInput  [indirect]
+    doc: function():number -- Returns the amount of Electricity, accepted by this Block the last 5 ticks as Average.
+    value: 0
+  getAverageElectricOutput  [indirect]
+    doc: function():number -- Returns the amount of Electricity, outputted by this Block the last 5 ticks as Average.
+    value: 0
+  getCoordinates
+    doc: function():table; Returns machine coordinates
+    value: -403, 63, -1095
+  getEUCapacity  [indirect]
+    doc: function():number -- Returns the amount of electricity containable in this Block, in EU units!
+    value: 0
+  getEUCapacityString  [indirect]
+    doc: function():number -- Returns the amount of electricity containable in this Block, in EU units! (As a string for HUGE amounts.)
+    value: 0
+  getEUInputAverage
+    doc: function():number; Returns the average EU input of this block
+    value: 0
+  getEUMaxStored
+    doc: function():number; Returns the max EU that can be stored in this block
+    value: 0
+  getEUOutputAverage
+    doc: function():number; Returns the average EU output of this block
+    value: 0
+  getEUStored
+    doc: function():number; Returns the EU stored in this block
+    value: 0
+  getInputVoltage  [indirect]
+    doc: function():number -- Gets the maximum Input in EU/p.
+    value: 0
+  getName
+    doc: function():string; Returns the machine's name
+    value: super.tank.tier.01
+  getOutputAmperage  [indirect]
+    doc: function():number -- Gets the amount of Energy Packets per tick.
+    value: 1
+  getOutputVoltage  [indirect]
+    doc: function():number -- Gets the Output in EU/p.
+    value: 0
+  getOwnerName
+    doc: function():string; Returns the name of this block's owner
+    value: Lucemans
+  getSensorInformation  [indirect]
+    doc: function():table; Returns sensor information about this block
+    value: table
+      [1] = "§9Super Tank§r"
+      [2] = "Stored Fluid:"
+      [3] = "§6Cetane-Boosted Diesel§r"
+      [4] = "§a3,917,674 L§r §e4,000,000 L§r"
+  getSteamCapacity  [indirect]
+    doc: function():number -- Returns the amount of Steam containable in this Block, in EU units!
+    value: 0
+  getSteamMaxStored
+    doc: function():number; Returns the max steam that can be stored in this block
+    value: 0
+  getSteamStored
+    doc: function():number; Returns the steam stored in this block
+    value: 0
+  getStoredEU  [indirect]
+    doc: function():number -- Returns the amount of electricity contained in this Block, in EU units!
+    value: 0
+  getStoredEUString  [indirect]
+    doc: function():string -- Returns the amount of electricity contained in this Block, in EU units! (As a string for HUGE amounts.)
+    value: 0
+  getStoredSteam  [indirect]
+    doc: function():number -- Returns the amount of Steam contained in this Block, in EU units!
+    value: 0
+  getWorkMaxProgress
+    doc: function():number; Returns the max progress of this block
+    value: 0
+  getWorkProgress
+    doc: function():number; Returns the current progress of this block
+    value: 0
+  hasWork
+    doc: function():boolean; Returns true if the machine currently has work to do
+    value: false
+  isMachineActive
+    doc: function():boolean; Returns whether the machine is currently active
+    value: false
+  isWorkAllowed
+    doc: function():boolean; Returns whether this block is currently allowed to work
+    value: true
+  setWorkAllowed
+    doc: function(work:boolean); Sets whether this block is currently allowed to work
+
+-- gt_machine  ce0ace5a-e712-4134-bce1-b194453d6217  slot -1
+  getAverageElectricInput  [indirect]
+    doc: function():number -- Returns the amount of Electricity, accepted by this Block the last 5 ticks as Average.
+    value: 0
+  getAverageElectricOutput  [indirect]
+    doc: function():number -- Returns the amount of Electricity, outputted by this Block the last 5 ticks as Average.
+    value: 0
+  getCoordinates
+    doc: function():table; Returns machine coordinates
+    value: -395, 63, -1088
+  getEUCapacity  [indirect]
+    doc: function():number -- Returns the amount of electricity containable in this Block, in EU units!
+    value: 10752
+  getEUCapacityString  [indirect]
+    doc: function():number -- Returns the amount of electricity containable in this Block, in EU units! (As a string for HUGE amounts.)
+    value: 10752
+  getEUInputAverage
+    doc: function():number; Returns the average EU input of this block
+    value: 0
+  getEUMaxStored
+    doc: function():number; Returns the max EU that can be stored in this block
+    value: 10752
+  getEUOutputAverage
+    doc: function():number; Returns the average EU output of this block
+    value: 0
+  getEUStored
+    doc: function():number; Returns the EU stored in this block
+    value: 10528
+  getInputVoltage  [indirect]
+    doc: function():number -- Gets the maximum Input in EU/p.
+    value: 0
+  getName
+    doc: function():string; Returns the machine's name
+    value: basicgenerator.diesel.tier.02
+  getOutputAmperage  [indirect]
+    doc: function():number -- Gets the amount of Energy Packets per tick.
+    value: 1
+  getOutputVoltage  [indirect]
+    doc: function():number -- Gets the Output in EU/p.
+    value: 128
+  getOwnerName
+    doc: function():string; Returns the name of this block's owner
+    value: Lucemans
+  getSteamCapacity  [indirect]
+    doc: function():number -- Returns the amount of Steam containable in this Block, in EU units!
+    value: 0
+  getSteamMaxStored
+    doc: function():number; Returns the max steam that can be stored in this block
+    value: 0
+  getSteamStored
+    doc: function():number; Returns the steam stored in this block
+    value: 0
+  getStoredEU  [indirect]
+    doc: function():number -- Returns the amount of electricity contained in this Block, in EU units!
+    value: 10528
+  getStoredEUString  [indirect]
+    doc: function():string -- Returns the amount of electricity contained in this Block, in EU units! (As a string for HUGE amounts.)
+    value: 10528
+  getStoredSteam  [indirect]
+    doc: function():number -- Returns the amount of Steam contained in this Block, in EU units!
+    value: 0
+  getWorkMaxProgress
+    doc: function():number; Returns the max progress of this block
+    value: 0
+  getWorkProgress
+    doc: function():number; Returns the current progress of this block
+    value: 0
+  hasWork
+    doc: function():boolean; Returns true if the machine currently has work to do
+    value: false
+  isMachineActive
+    doc: function():boolean; Returns whether the machine is currently active
+    value: true
+  isWorkAllowed
+    doc: function():boolean; Returns whether this block is currently allowed to work
+    value: true
+  setWorkAllowed
+    doc: function(work:boolean); Sets whether this block is currently allowed to work
+
+-- internet  01258489-8c4f-4be7-96d2-3f0fc17814ee  slot 1
+  connect  [indirect]
+    doc: function(address:string[, port:number]):userdata -- Opens a new TCP connection. Returns the handle of the connection.
+  isHttpEnabled
+    doc: function():boolean -- Returns whether HTTP requests can be made (config setting).
+    value: true
+  isTcpEnabled
+    doc: function():boolean -- Returns whether TCP connections can be made (config setting).
+    value: true
+  request  [indirect]
+    doc: function(url:string[, postData:string[, headers:table[, method:string]]]):userdata -- Starts an HTTP request. If this returns true, further results will be pushed using `http_response` signals.
+
+-- keyboard  32e7e5f2-ba13-447e-9042-a83b46a66da0  slot -1
+  (no callable methods)
+
+-- logisticspipe  96cdfbc3-11fa-462f-adf2-2599720fbb32  slot -1
+  getPipe
+    value: table
+      canAccess = table
+        name = "canAccess"
+        proxy = <cycle>
+      getLP = table
+        name = "getLP"
+        proxy = <cycle>
+      getLogisticsModule = table
+        name = "getLogisticsModule"
+        proxy = <cycle>
+      getPipeForUUID = table
+        name = "getPipeForUUID"
+        proxy = <cycle>
+      getRouterId = table
+        name = "getRouterId"
+        proxy = <cycle>
+      getRouterUUID = table
+        name = "getRouterUUID"
+        proxy = <cycle>
+      getTurtleConnect = table
+        name = "getTurtleConnect"
+        proxy = <cycle>
+      hasLogisticsModule = table
+        name = "hasLogisticsModule"
+        proxy = <cycle>
+      help = table
+        name = "help"
+        proxy = <cycle>
+      helpCommand = table
+        name = "helpCommand"
+        proxy = <cycle>
+      sendBroadcast = table
+        name = "sendBroadcast"
+        proxy = <cycle>
+      sendMessage = table
+        name = "sendMessage"
+        proxy = <cycle>
+      setTurtleConnect = table
+        name = "setTurtleConnect"
+        proxy = <cycle>
+      type = "userdata"
+
+-- screen  5e84d04d-56ff-46c4-bec4-9041d4bb3eed  slot -1
+  getAspectRatio
+    doc: function():number, number -- The aspect ratio of the screen. For multi-block screens this is the number of blocks, horizontal and vertical.
+    value: 3.0, 2.0
+  getKeyboards  [indirect]
+    doc: function():table -- The list of keyboards attached to the screen.
+    value: table
+      [1] = "32e7e5f2-ba13-447e-9042-a83b46a66da0"
+  isOn
+    doc: function():boolean -- Returns whether the screen is currently on.
+    value: true
+  isPrecise
+    doc: function():boolean -- Returns whether the screen is in high precision mode (sub-pixel mouse event positions).
+    value: false
+  isTouchModeInverted
+    doc: function():boolean -- Whether touch mode is inverted (sneak-activate opens GUI, instead of normal activate).
+    value: false
+  setPrecise  [indirect]
+    doc: function(enabled:boolean):boolean -- Set whether to use high precision mode (sub-pixel mouse event positions).
+  setTouchModeInverted  [indirect]
+    doc: function(value:boolean):boolean -- Sets whether to invert touch mode (sneak-activate opens GUI, instead of normal activate).
+  turnOff  [indirect]
+    doc: function():boolean -- Turns off the screen. Returns whether the state changed, and whether it is now on.
+  turnOn  [indirect]
+    doc: function():boolean -- Turns the screen on. Returns whether the state changed, and whether it is now on.

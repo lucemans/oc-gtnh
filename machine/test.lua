@@ -618,6 +618,32 @@ test("ocdump writes a nested table out in full", function()
   end
 end)
 
+test("ocdump reports whether a proxy can be called", function()
+  -- shaped like the real Logistics Pipes proxy in dumps/004.txt: entries that
+  -- look inert until you notice the metatable
+  local method = setmetatable({ name = "getRouterId" }, { __call = function() end })
+  oc.components = { INTERNET, {
+    address = "96cdfbc3-11fa-462f-adf2-2599720fbb32",
+    kind = "logisticspipe",
+    methods = { getPipe = "function():table -- Returns the pipe." },
+    values = {
+      getPipe = function()
+        return { type = "userdata", getRouterId = method }
+      end,
+    },
+  } }
+  oc.respond = function()
+    return 201, "Created", "https://dpaste.com/TESTTESTT\n"
+  end
+
+  oc.run("ocdump")
+  local body = oc.requests[1] and oc.requests[1].body or ""
+  check(contains(body, "getRouterId = table <callable>"), "did not report the entry as callable")
+  if show then
+    say(body)
+  end
+end)
+
 test("ocdump keeps scalar returns on one line", function()
   oc.components = { INTERNET, GT_MACHINE }
   oc.respond = function()

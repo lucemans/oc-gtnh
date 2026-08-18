@@ -107,6 +107,40 @@ they are told apart only by their sensor text and `getName`:
 A super tank reports `getSteamStored`, `getEUStored` and friends as zero. Do
 not build a summary from those.
 
+## Pipes
+
+Two components appear once an adapter touches a Logistics Pipe, and they are
+not the same thing.
+
+`bc_pipe` is the BuildCraft view. Plain methods, all documented, all indirect:
+`getPipeType` returns `LOGISTICS`, and `hasGate(side)`, `isPipeConnected(side)`,
+`isWired(colour)`, `isWireActive(colour)` each need an argument.
+
+`logisticspipe` offers exactly one method, `getPipe`, which returns a proxy
+rather than data. Its fields are one entry per method, each shaped
+`{name = "getRouterId", proxy = <cycle back to the proxy>}`, plus
+`type = "userdata"`. Seen in `dumps/004.txt`:
+
+```
+canAccess          getLP            getLogisticsModule   getPipeForUUID
+getRouterId        getRouterUUID    getTurtleConnect     hasLogisticsModule
+sendBroadcast      sendMessage      setTurtleConnect     help / helpCommand
+```
+
+`serialization.serialize` cannot touch this: it holds userdata and it is
+self-referential, which is why `ocdebug` showed the bare word `table` until the
+describer stopped depending on serialize.
+
+**Still unknown: how to call those methods.** Walking `pairs()` shows the
+entries but not whether they are callable, because that lives in the metatable.
+`ocdump` now reports `table <callable>`, `<__index>` and `<__tostring>` beside
+any table it walks, so the next dump answers it. Do not guess a calling
+convention before that dump; guessing method shapes is what the sensor work
+avoided by reading real data first.
+
+Note `sendMessage` and `setTurtleConnect` are writes. Whatever calling
+convention turns out to be right, they stay behind `gt.setValue`.
+
 ## Colour meanings
 
 `§9` names a block, `§a` marks a current value, `§e` a maximum or a rating,
