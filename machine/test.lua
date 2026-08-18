@@ -239,6 +239,23 @@ test("ocup installs nothing when one file fails", function()
   check(oc.files["/bin/ocdump.lua"] == nil, "installed a program despite the missing library")
 end)
 
+test("ocup drops a replaced library from the module cache", function()
+  oc.components = { INTERNET }
+  oc.respond = serveProgram({
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+  })
+
+  -- OpenOS would otherwise hand this stale table to every later program in the
+  -- session, however new the file on disk is
+  package.loaded["ocgt"] = { stale = true }
+  oc.run("ocup")
+  check(package.loaded["ocgt"] == nil, "left the old library in package.loaded")
+end)
+
 test("ocup asks for a fresh copy every time", function()
   oc.components = { INTERNET }
   oc.respond = serveProgram({

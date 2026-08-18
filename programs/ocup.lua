@@ -8,7 +8,7 @@ local computer = require("computer")
 local filesystem = require("filesystem")
 local term = require("term")
 
-local VERSION = "0.7.0"
+local VERSION = "0.8.0"
 
 local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/"
 local MANIFEST = "manifest.txt"
@@ -132,6 +132,16 @@ local function writeFile(path, contents)
   file:write(contents)
   file:close()
   return true
+end
+
+-- OpenOS keeps required modules in package.loaded for the whole shell session,
+-- so a library replaced on disk stays stale in memory until a reboot. Dropping
+-- it here means the next program run picks up what was just installed.
+local function forget(target)
+  local name = target:match("^/lib/(.+)%.lua$")
+  if name then
+    package.loaded[name] = nil
+  end
 end
 
 local function versionOf(text)
@@ -268,6 +278,7 @@ for _, file in ipairs(FILES) do
 
   local status, color
   if ok then
+    forget(file.target)
     status, color = describe(existing, file.contents)
   else
     status, color = "failed      " .. writeReason, RED
