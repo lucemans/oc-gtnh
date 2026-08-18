@@ -5,12 +5,12 @@
 -- rather than data. Each field of that proxy is one method, shaped
 -- {name = "...", proxy = <the proxy>}, callable through a __call metamethod.
 
-local gt = require("ocgt")
+local core = require("oclib")
 
 local lp = {}
 
 function lp.isPipe(address)
-  return gt.has(gt.methodsOf(address), "getPipe")
+  return core.has(core.methodsOf(address), "getPipe")
 end
 
 -- the proxy itself, or nil when this component is not a pipe
@@ -18,7 +18,7 @@ function lp.pipe(address)
   if not lp.isPipe(address) then
     return nil
   end
-  local proxy = gt.call(address, "getPipe")
+  local proxy = core.call(address, "getPipe")
   if type(proxy) ~= "table" then
     return nil
   end
@@ -33,7 +33,7 @@ function lp.invoke(proxy, name, ...)
   end
   local results = table.pack(pcall(entry, ...))
   if not results[1] then
-    return nil, gt.oneLine(tostring(results[2]))
+    return nil, core.oneLine(tostring(results[2]))
   end
   return table.unpack(results, 2, results.n)
 end

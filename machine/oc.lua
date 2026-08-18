@@ -370,6 +370,9 @@ end
 -------------------------------------------------------------------------------
 
 function oc.install()
+  package.preload["oclib"] = function()
+    return dofile("lib/oclib.lua")
+  end
   package.preload["ocgt"] = function()
     return dofile("lib/ocgt.lua")
   end

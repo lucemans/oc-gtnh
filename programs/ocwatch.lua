@@ -7,6 +7,7 @@
 local component = require("component")
 local computer = require("computer")
 local event = require("event")
+local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
 local keyboard = require("keyboard")
@@ -30,7 +31,7 @@ local ALARM = 0xCC6666
 local FULL_BLOCK = "\226\150\136"
 local LIGHT_BLOCK = "\226\150\145"
 
-local config = gt.loadConfig()
+local config = core.loadConfig()
 
 local function fit(text, width)
   local length = unicode.len(text)
@@ -47,8 +48,8 @@ local function write(x, y, text, foreground, background)
 end
 
 local function colorOf(gauge)
-  if gauge.colorCode and gt.MC_COLORS[gauge.colorCode] then
-    return gt.MC_COLORS[gauge.colorCode]
+  if gauge.colorCode and core.MC_COLORS[gauge.colorCode] then
+    return core.MC_COLORS[gauge.colorCode]
   end
   return OK_COLOR
 end
@@ -87,7 +88,7 @@ local function act(alert, tripped)
   if wanted == nil or alert.applied == wanted then
     return nil
   end
-  local ok, reason = gt.setValue(alert.act.address, alert.act.method, wanted)
+  local ok, reason = core.setValue(alert.act.address, alert.act.method, wanted)
   if ok then
     alert.applied = wanted
     return alert.act.method .. "(" .. tostring(wanted) .. ")"
@@ -113,12 +114,12 @@ local function checkAlerts(readingsByAddress)
       alert.tripped = evaluate(alert, reading.value)
       if alert.tripped ~= was then
         if alert.tripped then
-          notice(alert.name .. " tripped at " .. gt.comma(reading.value))
+          notice(alert.name .. " tripped at " .. core.comma(reading.value))
           if alert.beep ~= false then
             pcall(computer.beep, 880, 0.2)
           end
         else
-          notice(alert.name .. " cleared at " .. gt.comma(reading.value))
+          notice(alert.name .. " cleared at " .. core.comma(reading.value))
         end
       end
       local done = act(alert, alert.tripped)
@@ -200,7 +201,7 @@ local function render(cards)
           drawGauge(18, y, reading, GAUGE_W)
         else
           local x = 5
-          for _, part in ipairs(gt.segments(reading.raw, DIM)) do
+          for _, part in ipairs(core.segments(reading.raw, DIM)) do
             local space = W - x - 1
             if space <= 0 then
               break
@@ -298,7 +299,7 @@ local function editAdd()
     return
   end
   config.watch[#config.watch + 1] = { address = chosen.address, hidden = {} }
-  gt.saveConfig(config)
+  core.saveConfig(config)
 end
 
 local function editRemove()
@@ -310,7 +311,7 @@ local function editRemove()
   local answer = tonumber(io.read())
   if answer and config.watch[answer] then
     table.remove(config.watch, answer)
-    gt.saveConfig(config)
+    core.saveConfig(config)
   end
 end
 
@@ -327,7 +328,7 @@ local function editNickname()
   end
   local name = prompt("nickname for " .. entry.address .. " (blank clears it)")
   config.nicknames[entry.address] = (name and name ~= "") and name or nil
-  gt.saveConfig(config)
+  core.saveConfig(config)
 end
 
 local function editReadings()
@@ -362,7 +363,7 @@ local function editReadings()
     end
     entry.hidden[pick] = (not entry.hidden[pick]) or nil
   end
-  gt.saveConfig(config)
+  core.saveConfig(config)
 end
 
 local function editAlert()
@@ -413,7 +414,7 @@ local function editAlert()
   local answer = prompt("stop a machine when this trips? (y/N)")
   if answer and answer:lower():sub(1, 1) == "y" then
     local target = chooseComponent()
-    if target and gt.has(gt.methodsOf(target.address), "setWorkAllowed") then
+    if target and core.has(core.methodsOf(target.address), "setWorkAllowed") then
       alert.act = {
         address = target.address,
         method = "setWorkAllowed",
@@ -427,7 +428,7 @@ local function editAlert()
   end
 
   config.alerts[#config.alerts + 1] = alert
-  gt.saveConfig(config)
+  core.saveConfig(config)
 end
 
 local function editAlertRemove()
@@ -444,7 +445,7 @@ local function editAlertRemove()
   local answer = tonumber(io.read())
   if answer and config.alerts[answer] then
     table.remove(config.alerts, answer)
-    gt.saveConfig(config)
+    core.saveConfig(config)
   end
 end
 
@@ -513,7 +514,7 @@ while true do
       break
     elseif code == keyboard.keys.e then
       editor()
-      config = gt.loadConfig()
+      config = core.loadConfig()
       term.clear()
       term.setCursorBlink(false)
     end

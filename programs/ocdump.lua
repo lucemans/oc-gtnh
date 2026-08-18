@@ -4,6 +4,7 @@
 local component = require("component")
 local computer = require("computer")
 local filesystem = require("filesystem")
+local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
 local serialization = require("serialization")
@@ -18,7 +19,7 @@ local EXPIRY_DAYS = "1"
 local BOUNDARY = "ocdump7f3ab21cBOUNDARY"
 
 -- nicknames set in ocwatch, so a dump names machines the way you do
-local config = gt.loadConfig()
+local config = core.loadConfig()
 
 local out = {}
 local function line(text)
@@ -58,7 +59,7 @@ local function dumpComponent(address, kind)
   local ok, slot = pcall(component.slot, address)
   line("-- " .. kind .. "  " .. address .. "  slot " .. tostring(ok and slot or "?"))
 
-  local methods = gt.methodsOf(address)
+  local methods = core.methodsOf(address)
   if not methods then
     line("  (methods unavailable)")
     return
@@ -73,10 +74,10 @@ local function dumpComponent(address, kind)
     line("  " .. name .. (methods[name] and "" or "  [indirect]"))
     local documented, doc = pcall(component.doc, address, name)
     if documented and doc then
-      line("    doc: " .. gt.oneLine(doc))
+      line("    doc: " .. core.oneLine(doc))
     end
-    if gt.isReadable(name) then
-      local results, reason = gt.readRaw(address, name)
+    if core.isReadable(name) then
+      local results, reason = core.readRaw(address, name)
       if not results then
         line("    error: " .. reason)
       elseif results.n < 2 then
@@ -89,14 +90,14 @@ local function dumpComponent(address, kind)
         if not nested then
           local parts = {}
           for index = 2, results.n do
-            parts[#parts + 1] = gt.formatValue(results[index])
+            parts[#parts + 1] = core.formatValue(results[index])
           end
           line("    value: " .. table.concat(parts, ", "))
         else
           -- a table is written out in full: this is how an unknown component
           -- such as a Logistics Pipes block reveals what it actually offers
           for index = 2, results.n do
-            for _, text in ipairs(gt.describeLines(results[index], "    value: ")) do
+            for _, text in ipairs(core.describeLines(results[index], "    value: ")) do
               line(text)
             end
           end

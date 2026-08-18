@@ -2,6 +2,7 @@
 
 local component = require("component")
 local event = require("event")
+local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
 local keyboard = require("keyboard")
@@ -78,7 +79,7 @@ local function wrap(text, width)
 end
 
 -- nicknames set in ocwatch show here too, since both read the same file
-local config = gt.loadConfig()
+local config = core.loadConfig()
 
 local function friendlyName(entry)
   if entry.friendly == nil then
@@ -93,12 +94,12 @@ local function summaryLines(entry, add)
       if reading.label ~= "" then
         add(reading.label, DIM)
       end
-      reading.color = (reading.colorCode and gt.MC_COLORS[reading.colorCode])
+      reading.color = (reading.colorCode and core.MC_COLORS[reading.colorCode])
         or (reading.unit == "EU" and ENERGY)
         or VALUE
       add(nil, nil, nil, nil, reading)
     elseif not reading.usedAsLabel then
-      local parts = gt.segments(reading.raw, FG)
+      local parts = core.segments(reading.raw, FG)
       if #parts > 0 then
         add(nil, nil, nil, nil, nil, parts)
       end
@@ -119,13 +120,13 @@ local function detailLines(entry)
     }
   end
 
-  local methods = gt.methodsOf(entry.address) or {}
+  local methods = core.methodsOf(entry.address) or {}
 
   add(friendlyName(entry), FG, gt.statusOf(entry.address, methods), VALUE)
 
   local where = ""
-  if gt.has(methods, "getCoordinates") then
-    local x, y, z = gt.call(entry.address, "getCoordinates")
+  if core.has(methods, "getCoordinates") then
+    local x, y, z = core.call(entry.address, "getCoordinates")
     if type(x) == "number" then
       where = "  (" .. x .. ", " .. y .. ", " .. z .. ")"
     end
@@ -153,8 +154,8 @@ local function detailLines(entry)
   add(string.rep(LINE, math.min(DETAIL_W, 20)) .. " methods", DIM)
 
   for _, name in ipairs(names) do
-    if gt.isReadable(name) then
-      local text, reason = gt.readValue(entry.address, name)
+    if core.isReadable(name) then
+      local text, reason = core.readValue(entry.address, name)
       add(name, FG, text or reason, text and VALUE or FAILED)
     else
       add(name, FG)

@@ -136,6 +136,7 @@ local REDSTONE = {
 local INTERNET = { address = "01258489-8c4f-4be7-96d2-3f0fc17814ee", kind = "internet", methods = {} }
 
 local MANIFEST = table.concat({
+  "lib/oclib.lua",
   "lib/ocgt.lua",
   "lib/oclogistics.lua",
   "programs/ocup.lua",
@@ -178,6 +179,7 @@ test("ocup installs missing programs", function()
     ["programs/ocup.lua"] = program("0.3.0"),
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
     ["lib/oclogistics.lua"] = program("0.1.0"),
   })
@@ -188,7 +190,7 @@ test("ocup installs missing programs", function()
   local out = oc.printed()
   check(contains(out, "ocup v"), "no version banner")
   check(contains(out, "installed"), "did not report a fresh install")
-  check(contains(out, "5 files ready"), "no success summary")
+  check(contains(out, "6 files ready"), "no success summary")
   check(oc.files["/bin/ocdump.lua"] == program("0.1.0"), "ocdump.lua not written to /bin")
   check(oc.files["/lib/ocgt.lua"] ~= nil, "library not written to /lib")
   if show then
@@ -204,6 +206,7 @@ test("ocup reports a version bump", function()
     ["programs/ocup.lua"] = program("0.3.0"),
     ["programs/ocdebug.lua"] = program("0.3.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
     ["lib/oclogistics.lua"] = program("0.1.0"),
   })
@@ -241,7 +244,7 @@ test("ocup installs nothing when one file fails", function()
 
   oc.run("ocup")
   local out = oc.printed()
-  check(contains(out, "lib/ocgt.lua"), "did not name the file that failed")
+  check(contains(out, "lib/oclib.lua"), "did not name the file that failed")
   check(contains(out, "nothing was installed"), "did not say the machine is unchanged")
   check(oc.files["/bin/ocdebug.lua"] == nil, "installed a program despite the missing library")
   check(oc.files["/bin/ocdump.lua"] == nil, "installed a program despite the missing library")
@@ -254,6 +257,7 @@ test("ocup drops a replaced library from the module cache", function()
     ["programs/ocup.lua"] = program("0.3.0"),
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
     ["lib/oclogistics.lua"] = program("0.1.0"),
   })
@@ -272,6 +276,7 @@ test("ocup asks for a fresh copy every time", function()
     ["programs/ocup.lua"] = program("0.3.0"),
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
     ["lib/oclogistics.lua"] = program("0.1.0"),
   })

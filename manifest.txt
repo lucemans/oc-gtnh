@@ -1,3 +1,4 @@
+lib/oclib.lua
 lib/ocgt.lua
 lib/oclogistics.lua
 programs/ocup.lua
