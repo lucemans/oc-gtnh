@@ -826,6 +826,114 @@ test("ocwatch leaves a machine alone above the threshold", function()
 end)
 
 -------------------------------------------------------------------------------
+-- ocsweeper
+
+local SWEEPER_ORIGIN_X, SWEEPER_ORIGIN_Y = 2, 3
+
+local function cellTouch(x, y, button)
+  oc.push("touch", "screen", SWEEPER_ORIGIN_X + (x - 1) * 2, SWEEPER_ORIGIN_Y + y - 1, button or 0)
+end
+
+test("ocsweeper draws a board", function()
+  cellTouch(1, 1)
+
+  local ok, reason = oc.run("ocsweeper", "8", "8", "10")
+  check(ok, "ocsweeper crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  check(contains(frame, "ocsweeper v"), "no header")
+  check(contains(frame, "8 x 8"), "board size not shown")
+  check(contains(frame, "mines"), "mine counter missing")
+  if show then
+    say(frame)
+  end
+end)
+
+test("ocsweeper clamps the board to 21", function()
+  local ok = oc.run("ocsweeper", "40", "40")
+  check(ok, "ocsweeper crashed")
+  local header = oc.frame():sub(1, 60)
+  -- 21 is the cap, and the height is further limited by the rows available
+  check(contains(header, "21 x "), "width was not clamped to 21: " .. header)
+  check(not contains(header, "40"), "an unclamped size reached the header: " .. header)
+end)
+
+test("ocsweeper never loses on the first click", function()
+  -- mines are laid after the opening click, so it cannot land on one. The
+  -- click moves each round, which changes the layout as well as the target.
+  for y = 1, 8 do
+    for x = 1, 8 do
+      oc.reset()
+      oc.components = {}
+      cellTouch(x, y)
+      oc.run("ocsweeper", "8", "8", "50")
+      if contains(oc.frame(), "boom") then
+        check(false, "the first click hit a mine at " .. x .. "," .. y)
+        return
+      end
+    end
+  end
+end)
+
+test("ocsweeper still protects the first click on a crowded board", function()
+  -- 3 mines on a 2 by 2 board leaves no room to clear the neighbourhood, so
+  -- the safe area shrinks to the clicked cell rather than dropping mines
+  for _ = 1, 10 do
+    oc.reset()
+    oc.components = {}
+    cellTouch(1, 1)
+    oc.run("ocsweeper", "2", "2", "3")
+    if contains(oc.frame(), "boom") then
+      check(false, "the first click hit a mine on a crowded board")
+      return
+    end
+  end
+end)
+
+test("ocsweeper flags a cell with the right button", function()
+  cellTouch(2, 2, 1)
+
+  oc.run("ocsweeper", "8", "8", "10")
+  local frame = oc.frame()
+  check(contains(frame, "F"), "no flag drawn")
+  -- the counter shows mines left to find, so flagging one drops it to 9
+  check(contains(frame, "mines 9"), "flag did not change the counter")
+end)
+
+test("ocsweeper ends when a mine is opened", function()
+  -- sweeping the whole board must reach a mine whatever the layout
+  for y = 1, 8 do
+    for x = 1, 8 do
+      cellTouch(x, y)
+    end
+  end
+
+  oc.run("ocsweeper", "8", "8", "20")
+  check(contains(oc.frame(), "boom"), "clicking every cell never hit a mine")
+  check(contains(oc.frame(), "*"), "mines were not shown after the loss")
+end)
+
+test("ocsweeper is won when every safe cell is open", function()
+  -- with no mines the opening click floods the whole board, which reaches the
+  -- win without depending on where mines happened to land
+  cellTouch(1, 1)
+
+  oc.run("ocsweeper", "5", "5", "0")
+  local frame = oc.frame()
+  check(contains(frame, "cleared in"), "board was never won")
+  check(not contains(frame, "boom"), "reported a loss as well as a win")
+end)
+
+test("ocsweeper starts over on r", function()
+  cellTouch(3, 3, 1)
+  oc.push("key_down", "keyboard", 0, 0x13) -- r
+
+  oc.run("ocsweeper", "8", "8", "10")
+  -- the flag placed before the restart is gone, so the counter is back to 10
+  check(contains(oc.frame(), "mines 10"), "restart did not clear the flag")
+end)
+
+-------------------------------------------------------------------------------
 -- ocdump
 
 test("ocdump builds a valid multipart upload", function()

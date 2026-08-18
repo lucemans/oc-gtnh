@@ -237,7 +237,10 @@ function event.pull()
 end
 
 local keyboard = {
-  keys = { q = 0x10, up = 0xC8, down = 0xD0, pageUp = 0xC9, pageDown = 0xD1 },
+  keys = {
+    q = 0x10, e = 0x12, r = 0x13,
+    up = 0xC8, down = 0xD0, pageUp = 0xC9, pageDown = 0xD1,
+  },
 }
 
 local term = {}
@@ -457,12 +460,13 @@ function oc.install()
 end
 
 -- run a program against the current state; returns ok, error
-function oc.run(name)
+-- anything after the name reaches the program as its command line arguments
+function oc.run(name, ...)
   local chunk, reason = loadfile("programs/" .. name .. ".lua")
   if not chunk then
     return false, reason
   end
-  return pcall(chunk)
+  return pcall(chunk, ...)
 end
 
 oc.reset()
