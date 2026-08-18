@@ -1528,6 +1528,41 @@ test("ocwatch stops a machine when a tank runs low", function()
   end
 end)
 
+test("ocwatch acts again after its runtime state was saved into the config", function()
+  local stopped = { value = false }
+  local tank = tankAt("100")
+  oc.components = { tank, furnace(stopped) }
+  -- Opening the editor once used to write the live alert state to disk. A saved
+  -- applied=false then told every later run the furnace had already been
+  -- stopped, so the command was never sent and the alert did nothing for good.
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = {}, watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = tank.address,
+      index = 2,
+      unit = "L",
+      below = 50000,
+      above = 200000,
+      beep = false,
+      tripped = true,
+      applied = false,
+      act = {
+        address = "1c646dd8-0000-0000-0000-000000000005",
+        method = "setWorkAllowed",
+        onTrip = false,
+        onClear = true,
+      },
+    } },
+  })
+
+  oc.run("ocwatch")
+  check(stopped.value == true, "stale saved state stopped the alert from acting")
+  -- watching never rewrites the config, so there is nothing to assert about the
+  -- file here; the editor is the only writer and it goes through save(), which
+  -- strips these fields
+end)
+
 test("ocwatch still finds its reading when the sensor rewords itself", function()
   local stopped = { value = false }
   -- A tank that has run dry drops its fluid name line, so the gauge that used to

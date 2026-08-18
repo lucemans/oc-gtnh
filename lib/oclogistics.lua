@@ -9,6 +9,8 @@ local core = require("oclib")
 
 local lp = {}
 
+lp.VERSION = "0.1.0"
+
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
 end

@@ -5,6 +5,8 @@ local core = require("oclib")
 
 local gt = {}
 
+gt.VERSION = "0.3.0"
+
 local SECTION = core.SECTION
 
 -- names seen in dumps/, where the internal id reads worse than a real name

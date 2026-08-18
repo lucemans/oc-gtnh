@@ -7,6 +7,8 @@ local serialization = require("serialization")
 
 local core = {}
 
+core.VERSION = "0.4.0"
+
 -- the Minecraft section sign, two bytes in UTF-8
 core.SECTION = "\194\167"
 local SECTION = core.SECTION

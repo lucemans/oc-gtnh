@@ -14,7 +14,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu

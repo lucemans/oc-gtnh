@@ -8,7 +8,7 @@ local computer = require("computer")
 local filesystem = require("filesystem")
 local term = require("term")
 
-local VERSION = "0.10.0"
+local VERSION = "0.11.0"
 
 local REPO = "lucemans/oc-gtnh"
 local COMMIT_URL = "https://api.github.com/repos/" .. REPO .. "/commits/master"
@@ -153,19 +153,26 @@ local function versionOf(text)
   return text and text:match('VERSION%s*=%s*"([^"]+)"') or nil
 end
 
+local function shown(version)
+  return version and ("v" .. version) or "-"
+end
+
+-- the version column and the status are separate so the column can be filled in
+-- from disk before anything is fetched, and only the status changes as work runs
 local function describe(existing, contents)
   local version = versionOf(contents)
+  local was = versionOf(existing)
+
   if not existing then
-    return "installed   v" .. (version or "?"), GREEN
+    return shown(version), "installed", GREEN
   end
   if existing == contents then
-    return "up to date  v" .. (version or "?"), DIM
+    return shown(version), "up to date", DIM
   end
-  local was = versionOf(existing)
   if was and version and was ~= version then
-    return "updated     v" .. was .. " -> v" .. version, GREEN
+    return shown(was) .. " -> " .. shown(version), "updated", GREEN
   end
-  return "changed     v" .. (version or "?"), CYAN
+  return shown(version), "changed", CYAN
 end
 
 local function parseManifest(text)
@@ -251,8 +258,8 @@ if not reloaded then
       if latest and latest ~= current then
         term.clearLine()
         write("  " .. file.source .. "  ", WHITE)
-        local status, color = describe(current, latest)
-        write(status .. "\n", color)
+        local version, status, color = describe(current, latest)
+        write(version .. "  " .. status .. "\n", color)
         if writeFile(file.target, latest) then
           write("  reloading into the new ocup\n\n", CYAN)
           paint(WHITE)
@@ -273,12 +280,19 @@ end
 local TEE = "\226\148\156\226\148\128 "
 local ELBOW = "\226\148\148\226\148\128 "
 
-local nameWidth = 0
+-- What is already installed is on disk, so the version column is filled in
+-- before a single request goes out. Only the status changes as work proceeds.
+local nameWidth, versionWidth = 0, 0
 for _, file in ipairs(FILES) do
   local name = file.source:match("/(.+)$") or file.source
   file.name = name
+  file.existing = readFile(file.target)
+  file.version = shown(versionOf(file.existing))
   nameWidth = math.max(nameWidth, #name)
+  versionWidth = math.max(versionWidth, #file.version)
 end
+-- room for the widest transition this run can produce, so nothing shifts later
+versionWidth = math.max(versionWidth * 2 + 4, versionWidth)
 
 local lines = {}
 
@@ -287,9 +301,12 @@ local function addLine(text)
   return #lines
 end
 
-local function rowText(file, status)
+local function rowText(file, status, version)
+  version = version or file.version
   return "  " .. file.branch .. file.name
-    .. string.rep(" ", nameWidth - #file.name) .. "   " .. status
+    .. string.rep(" ", nameWidth - #file.name) .. "   "
+    .. version .. string.rep(" ", math.max(1, versionWidth - #version)) .. "  "
+    .. status
 end
 
 local folder = nil
@@ -358,19 +375,18 @@ end
 local failed = 0
 showBar(0, #FILES, "installing")
 for index, file in ipairs(FILES) do
-  local existing = readFile(file.target)
   -- overwriting a running program is safe: OpenOS loads the whole file first
   local ok, writeReason = writeFile(file.target, file.contents)
 
-  local status, color
+  local version, status, color
   if ok then
     forget(file.target)
-    status, color = describe(existing, file.contents)
+    version, status, color = describe(file.existing, file.contents)
   else
-    status, color = "failed  " .. writeReason, RED
+    version, status, color = file.version, "failed  " .. writeReason, RED
     failed = failed + 1
   end
-  repaint(file.line, rowText(file, status), color)
+  repaint(file.line, rowText(file, status, version), color)
   showBar(index, #FILES, "installing")
 end
 
