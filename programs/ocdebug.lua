@@ -2,12 +2,12 @@
 
 local component = require("component")
 local event = require("event")
+local gt = require("ocgt")
 local keyboard = require("keyboard")
-local serialization = require("serialization")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
 
 -- indirect component calls block until the next server tick, so re-reading a
 -- machine costs real time; two seconds keeps the readings live without
@@ -33,31 +33,13 @@ local BAR = 0x333333
 local SELECTED = 0x0066CC
 local VALUE = 0x66CC66
 local FAILED = 0xCC6666
+local ENERGY = 0xFFFF55
 
 -- written as bytes rather than \u{} so the file still loads on a Lua 5.2 CPU
 local FULL_BLOCK = "\226\150\136"
 local LIGHT_BLOCK = "\226\150\145"
-local SECTION = "\194\167"
-
--- GregTech writes its sensor lines with Minecraft colour codes, so the values
--- can be shown in the colours the game itself uses for them
-local MC_COLORS = {
-  ["0"] = 0x000000, ["1"] = 0x0000AA, ["2"] = 0x00AA00, ["3"] = 0x00AAAA,
-  ["4"] = 0xAA0000, ["5"] = 0xAA00AA, ["6"] = 0xFFAA00, ["7"] = 0xAAAAAA,
-  ["8"] = 0x555555, ["9"] = 0x5555FF, ["a"] = 0x55FF55, ["b"] = 0x55FFFF,
-  ["c"] = 0xFF5555, ["d"] = 0xFF55FF, ["e"] = 0xFFFF55, ["f"] = 0xFFFFFF,
-}
-
-local READABLE = { "get", "is", "has" }
-
-local function isReadable(name)
-  for _, prefix in ipairs(READABLE) do
-    if name:sub(1, #prefix) == prefix then
-      return true
-    end
-  end
-  return false
-end
+local LINE = "\226\148\128"
+local PIPE = "\226\148\130"
 
 local function fit(text, width)
   local length = unicode.len(text)
@@ -71,52 +53,6 @@ local function write(x, y, text, foreground, background)
   gpu.setForeground(foreground or FG)
   gpu.setBackground(background or BG)
   gpu.set(x, y, text)
-end
-
-local function strip(text)
-  return (text:gsub(SECTION .. "%w", ""))
-end
-
-local function segments(text, default)
-  local parts = {}
-  local color = default
-  local index = 1
-  while true do
-    local start, stop, code = text:find(SECTION .. "(%w)", index)
-    if not start then
-      if index <= #text then
-        parts[#parts + 1] = { text = text:sub(index), color = color }
-      end
-      return parts
-    end
-    if start > index then
-      parts[#parts + 1] = { text = text:sub(index, start - 1), color = color }
-    end
-    color = MC_COLORS[code:lower()] or default
-    index = stop + 1
-  end
-end
-
--- component.methods maps a name to whether the call is direct, so an indirect
--- method is present with the value false; only nil means "not offered"
-local function has(methods, name)
-  return methods ~= nil and methods[name] ~= nil
-end
-
-local function try(fn, ...)
-  local ok, value = pcall(fn, ...)
-  if ok then
-    return value
-  end
-  return nil
-end
-
-local function call(address, method)
-  local results = table.pack(pcall(component.invoke, address, method))
-  if not results[1] then
-    return nil
-  end
-  return table.unpack(results, 2, results.n)
 end
 
 local function wrap(text, width)
@@ -140,37 +76,6 @@ local function wrap(text, width)
   return lines
 end
 
-local function oneLine(text)
-  return (text:gsub("%s+", " "))
-end
-
-local function formatValue(value)
-  local kind = type(value)
-  if kind == "string" then
-    return oneLine(value)
-  elseif kind == "table" then
-    local ok, text = pcall(serialization.serialize, value)
-    return ok and oneLine(text) or "table"
-  end
-  return tostring(value)
-end
-
--- only readable methods are invoked: a setter or an action would change the world
-local function preview(address, name)
-  local results = table.pack(pcall(component.invoke, address, name))
-  if not results[1] then
-    return oneLine(tostring(results[2])), FAILED
-  end
-  if results.n < 2 then
-    return nil
-  end
-  local parts = {}
-  for i = 2, results.n do
-    parts[#parts + 1] = formatValue(results[i])
-  end
-  return table.concat(parts, ", "), VALUE
-end
-
 local function comma(number)
   local text = string.format("%d", number)
   local sign, digits = text:match("^(%-?)(%d+)$")
@@ -181,118 +86,43 @@ local function comma(number)
   return sign .. grouped
 end
 
-local function toNumber(text)
-  return tonumber((text:gsub(",", "")))
-end
-
--------------------------------------------------------------------------------
--- what a component says about itself
-
-local function sensorOf(address)
-  local methods = try(component.methods, address)
-  if not has(methods, "getSensorInformation") then
-    return nil
-  end
-  local lines = call(address, "getSensorInformation")
-  if type(lines) ~= "table" or not lines[1] then
-    return nil
-  end
-  return lines
-end
-
--- a tank and a battery buffer open their sensor text with a coloured display
--- name, but a multiblock such as a blast furnace opens straight into readings
-local function looksLikeName(raw)
-  if raw:find(SECTION .. "a", 1, true) and raw:find(SECTION .. "e", 1, true) then
-    return false
-  end
-  local plain = strip(raw)
-  return plain:match("%S") ~= nil and plain:match("%d") == nil
-end
-
-local function prettyName(name)
-  local spaced = name:gsub("%.", " ")
-  return (spaced:gsub("(%a)(%w*)", function(first, rest)
-    return first:upper() .. rest
-  end))
-end
-
 local function friendlyName(entry)
-  if entry.friendly ~= nil then
-    return entry.friendly or entry.kind
-  end
-  entry.friendly = false
-
-  local sensor = sensorOf(entry.address)
-  if sensor and looksLikeName(sensor[1]) then
-    entry.friendly = strip(sensor[1])
-  else
-    local methods = try(component.methods, entry.address)
-    if has(methods, "getName") then
-      local name = call(entry.address, "getName")
-      if type(name) == "string" and name ~= "" then
-        entry.friendly = prettyName(name)
-      end
-    end
+  if entry.friendly == nil then
+    entry.friendly = gt.friendlyName(entry.address) or false
   end
   return entry.friendly or entry.kind
 end
 
--- GregTech marks the current value green and the maximum yellow, on both
--- tanks and energy buffers, so one rule covers every machine that reports one
-local function gaugeFromSensor(raw, color)
-  local current = raw:match(SECTION .. "a([%d,]+)")
-  local maximum = raw:match(SECTION .. "e([%d,]+)")
-  if not (current and maximum) then
-    return nil
-  end
-  local value, limit = toNumber(current), toNumber(maximum)
-  if not value or not limit or limit <= 0 then
-    return nil
-  end
-  local plain = strip(raw)
-  return {
-    value = value,
-    max = limit,
-    current = current,
-    maximum = maximum,
-    unit = plain:match("(%a+)%s*$") or "",
-    color = color,
-    -- whatever precedes the first number labels the reading, e.g. "Stored Items:";
-    -- a line that opens with the number, as a tank's does, has no label
-  }, oneLine((plain:match("^(.-)%d") or ""):gsub("%s+$", ""))
-end
-
 local function statusOf(address, methods)
   local flags = {}
-  if has(methods, "isMachineActive") then
-    flags[#flags + 1] = call(address, "isMachineActive") and "active" or "idle"
+  if gt.has(methods, "isMachineActive") then
+    flags[#flags + 1] = gt.call(address, "isMachineActive") and "active" or "idle"
   end
-  if has(methods, "isWorkAllowed") and call(address, "isWorkAllowed") == false then
+  if gt.has(methods, "isWorkAllowed") and gt.call(address, "isWorkAllowed") == false then
     flags[#flags + 1] = "disabled"
   end
-  if has(methods, "hasWork") and call(address, "hasWork") then
+  if gt.has(methods, "hasWork") and gt.call(address, "hasWork") then
     flags[#flags + 1] = "working"
   end
   return #flags > 0 and table.concat(flags, "  ") or nil
 end
 
 local function summaryLines(entry, methods, add)
-  local sensor = sensorOf(entry.address)
+  local sensor = gt.sensorOf(entry.address)
   local lastColor = nil
 
   if sensor then
-    -- skip the first line only when it is the display name shown in the header
-    for index = looksLikeName(sensor[1]) and 2 or 1, #sensor do
+    for index = gt.firstReading(sensor), #sensor do
       local raw = tostring(sensor[index])
-      local gauge, label = gaugeFromSensor(raw, lastColor or VALUE)
+      local gauge, label = gt.gaugeFromSensor(raw)
       if gauge then
-        if label and label ~= "" then
+        gauge.color = lastColor or VALUE
+        if label ~= "" then
           add(label, DIM)
         end
         add(nil, nil, nil, nil, gauge)
       else
-        local parts = segments(raw, FG)
+        local parts = gt.segments(raw, FG)
         if #parts > 0 then
           add(nil, nil, nil, nil, nil, parts)
           for _, part in ipairs(parts) do
@@ -303,41 +133,32 @@ local function summaryLines(entry, methods, add)
         end
       end
     end
+    return
   end
 
-  -- a machine with sensor text already reports its own progress there, in the
-  -- units it thinks in; only fall back to the raw counters without one
-  if not sensor and has(methods, "getWorkMaxProgress") and has(methods, "getWorkProgress") then
-    local maximum = call(entry.address, "getWorkMaxProgress")
-    local value = call(entry.address, "getWorkProgress")
-    if type(maximum) == "number" and type(value) == "number" and maximum > 0 then
-      add("Progress", DIM)
-      add(nil, nil, nil, nil, {
-        value = value,
-        max = maximum,
-        current = comma(value),
-        maximum = comma(maximum),
-        unit = "",
-        color = VALUE,
-      })
+  -- without sensor text the raw counters are all a machine offers
+  local function numeric(label, currentMethod, maxMethod, color)
+    if not (gt.has(methods, currentMethod) and gt.has(methods, maxMethod)) then
+      return
     end
+    local value = gt.call(entry.address, currentMethod)
+    local maximum = gt.call(entry.address, maxMethod)
+    if type(value) ~= "number" or type(maximum) ~= "number" or maximum <= 0 then
+      return
+    end
+    add(label, DIM)
+    add(nil, nil, nil, nil, {
+      value = value,
+      max = maximum,
+      current = comma(value),
+      maximum = comma(maximum),
+      unit = "",
+      color = color,
+    })
   end
 
-  -- with no sensor text there is still a usable energy reading on GT blocks
-  if not sensor and has(methods, "getEUStored") and has(methods, "getEUMaxStored") then
-    local value = call(entry.address, "getEUStored")
-    local maximum = call(entry.address, "getEUMaxStored")
-    if type(value) == "number" and type(maximum) == "number" and maximum > 0 then
-      add(nil, nil, nil, nil, {
-        value = value,
-        max = maximum,
-        current = comma(value),
-        maximum = comma(maximum),
-        unit = "EU",
-        color = 0xFFFF55,
-      })
-    end
-  end
+  numeric("Energy", "getEUStored", "getEUMaxStored", ENERGY)
+  numeric("Progress", "getWorkProgress", "getWorkMaxProgress", VALUE)
 end
 
 local function detailLines(entry)
@@ -353,13 +174,13 @@ local function detailLines(entry)
     }
   end
 
-  local methods = try(component.methods, entry.address) or {}
+  local methods = gt.methodsOf(entry.address) or {}
 
   add(friendlyName(entry), FG, statusOf(entry.address, methods), VALUE)
 
   local where = ""
-  if has(methods, "getCoordinates") then
-    local x, y, z = call(entry.address, "getCoordinates")
+  if gt.has(methods, "getCoordinates") then
+    local x, y, z = gt.call(entry.address, "getCoordinates")
     if type(x) == "number" then
       where = "  (" .. x .. ", " .. y .. ", " .. z .. ")"
     end
@@ -384,16 +205,17 @@ local function detailLines(entry)
     return lines
   end
 
-  add(string.rep("\226\148\128", math.min(DETAIL_W, 20)) .. " methods", DIM)
+  add(string.rep(LINE, math.min(DETAIL_W, 20)) .. " methods", DIM)
 
   for _, name in ipairs(names) do
-    if isReadable(name) then
-      add(name, FG, preview(entry.address, name))
+    if gt.isReadable(name) then
+      local text, reason = gt.readValue(entry.address, name)
+      add(name, FG, text or reason, text and VALUE or FAILED)
     else
       add(name, FG)
     end
-    local doc = try(component.doc, entry.address, name)
-    if doc then
+    local ok, doc = pcall(component.doc, entry.address, name)
+    if ok and doc then
       for _, text in ipairs(wrap(doc, DETAIL_W - 2)) do
         add("  " .. text, DIM)
       end
@@ -461,6 +283,17 @@ local function select(index)
   end
 end
 
+local function scrollDetail(delta)
+  detailScroll = detailScroll + delta
+  local maximum = math.max(0, #lines - CONTENT_ROWS)
+  if detailScroll > maximum then
+    detailScroll = maximum
+  end
+  if detailScroll < 0 then
+    detailScroll = 0
+  end
+end
+
 -- re-read the selected machine, and notice components attached since startup
 local function rescan()
   local fresh = collect()
@@ -486,17 +319,6 @@ local function rescan()
     end
   end
   select(index)
-end
-
-local function scrollDetail(delta)
-  detailScroll = detailScroll + delta
-  local maximum = math.max(0, #lines - CONTENT_ROWS)
-  if detailScroll > maximum then
-    detailScroll = maximum
-  end
-  if detailScroll < 0 then
-    detailScroll = 0
-  end
 end
 
 local function renderGauge(y, gauge)
@@ -540,7 +362,7 @@ local function render()
 
   gpu.setBackground(BG)
   gpu.setForeground(DIM)
-  gpu.fill(LIST_W + 1, CONTENT_TOP, 1, CONTENT_ROWS, "\226\148\130")
+  gpu.fill(LIST_W + 1, CONTENT_TOP, 1, CONTENT_ROWS, PIPE)
 
   for row = 1, CONTENT_ROWS do
     local entry = entries[listScroll + row]

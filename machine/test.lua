@@ -74,7 +74,7 @@ local GT_MACHINE = {
   },
 }
 
--- taken verbatim from a real dump: dpaste.com/32FW2BMJ6
+-- taken verbatim from a real dump: dumps/002.txt
 local SUPER_TANK = {
   address = "aa11bb22-e712-4134-bce1-b194453d6217",
   kind = "gt_machine",
@@ -159,6 +159,7 @@ test("ocup installs missing programs", function()
     ["ocup.lua"] = program("0.3.0"),
     ["ocdebug.lua"] = program("0.2.0"),
     ["ocdump.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
   })
 
   local ok, reason = oc.run("ocup")
@@ -167,8 +168,9 @@ test("ocup installs missing programs", function()
   local out = oc.printed()
   check(contains(out, "ocup v"), "no version banner")
   check(contains(out, "installed"), "did not report a fresh install")
-  check(contains(out, "3 programs ready"), "no success summary")
+  check(contains(out, "4 files ready"), "no success summary")
   check(oc.files["/bin/ocdump.lua"] == program("0.1.0"), "ocdump.lua not written to /bin")
+  check(oc.files["/lib/ocgt.lua"] ~= nil, "library not written to /lib")
   if show then
     say(out)
   end
@@ -181,6 +183,7 @@ test("ocup reports a version bump", function()
     ["ocup.lua"] = program("0.3.0"),
     ["ocdebug.lua"] = program("0.3.0"),
     ["ocdump.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
   })
 
   oc.run("ocup")
@@ -297,7 +300,7 @@ test("ocdebug gauges carry no stray label", function()
   check(not contains(oc.frame(), "42,000 L\n"), "left a stray label line above the gauge")
 end)
 
--- verbatim from a real dump: dpaste.com/998BEJ3MS
+-- verbatim from a real dump: dumps/003.txt
 local BLAST_FURNACE = {
   address = "1c646dd8-0000-0000-0000-000000000005",
   kind = "gt_machine",

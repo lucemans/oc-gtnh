@@ -7,14 +7,15 @@ local component = require("component")
 local filesystem = require("filesystem")
 local term = require("term")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 
 local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/programs/"
-local INSTALL_DIR = "/bin"
-local PROGRAMS = {
-  "ocup.lua",
-  "ocdebug.lua",
-  "ocdump.lua",
+-- the library is fetched first: the programs that require it are useless without it
+local FILES = {
+  { source = "lib/ocgt.lua", target = "/lib/ocgt.lua" },
+  { source = "ocup.lua", target = "/bin/ocup.lua" },
+  { source = "ocdebug.lua", target = "/bin/ocdebug.lua" },
+  { source = "ocdump.lua", target = "/bin/ocdump.lua" },
 }
 
 local WHITE = 0xFFFFFF
@@ -145,19 +146,24 @@ if not component.isAvailable("internet") then
 end
 
 local nameWidth = 0
-for _, name in ipairs(PROGRAMS) do
-  nameWidth = math.max(nameWidth, #name)
+for _, file in ipairs(FILES) do
+  nameWidth = math.max(nameWidth, #file.source)
 end
 
 write("ocup v" .. VERSION .. "\n\n", WHITE)
 
 local failed = 0
-for index, name in ipairs(PROGRAMS) do
+for index, file in ipairs(FILES) do
+  local name = file.source
   term.clearLine()
-  write("  " .. bar(index - 1, #PROGRAMS, 12) .. " ", CYAN)
+  write("  " .. bar(index - 1, #FILES, 12) .. " ", CYAN)
   write(name, DIM)
 
-  local path = filesystem.concat(INSTALL_DIR, name)
+  local path = file.target
+  local directory = filesystem.path(path)
+  if not filesystem.exists(directory) then
+    filesystem.makeDirectory(directory)
+  end
   local existing = readFile(path)
   local contents, reason = download(BASE_URL .. name)
 
@@ -182,11 +188,11 @@ for index, name in ipairs(PROGRAMS) do
 end
 
 term.clearLine()
-write("  " .. bar(#PROGRAMS, #PROGRAMS, 12) .. " ", CYAN)
+write("  " .. bar(#FILES, #FILES, 12) .. " ", CYAN)
 if failed > 0 then
-  write(failed .. " of " .. #PROGRAMS .. " failed\n", RED)
+  write(failed .. " of " .. #FILES .. " failed\n", RED)
   paint(WHITE)
   return 1
 end
-write(#PROGRAMS .. " programs ready\n", GREEN)
+write(#FILES .. " files ready\n", GREEN)
 paint(WHITE)

@@ -19,6 +19,7 @@ function oc.reset()
   oc.components = {}
   oc.invoked = {}
   oc.frames = {}
+  oc.directories = {}
   oc.deviceInfo = {}
   oc.output = {""}
   oc.osversion = "OpenOS 1.8.9"
@@ -256,8 +257,30 @@ function term.write(text)
 end
 
 local filesystem = {}
+
 function filesystem.concat(a, b)
   return (a:gsub("/$", "")) .. "/" .. b
+end
+
+function filesystem.path(full)
+  return full:match("^(.*)/[^/]*$") or "/"
+end
+
+function filesystem.exists(path)
+  if oc.directories[path] or oc.files[path] then
+    return true
+  end
+  for name in pairs(oc.files) do
+    if name:sub(1, #path + 1) == path .. "/" then
+      return true
+    end
+  end
+  return false
+end
+
+function filesystem.makeDirectory(path)
+  oc.directories[path] = true
+  return true
 end
 
 -- OpenOS counts characters here, not bytes; stubbing these with the string
@@ -327,6 +350,9 @@ end
 -------------------------------------------------------------------------------
 
 function oc.install()
+  package.preload["ocgt"] = function()
+    return dofile("programs/lib/ocgt.lua")
+  end
   package.preload["component"] = function()
     return component
   end

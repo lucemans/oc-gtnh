@@ -1,9 +1,9 @@
 # Notes on the GregTech component API
 
-Everything here was read off real dumps, not documentation. Sources:
-[dump 1](https://dpaste.com/DQ76EXBK4.txt), [dump 2](https://dpaste.com/32FW2BMJ6.txt),
-[dump 3](https://dpaste.com/998BEJ3MS.txt). The pastes expire; re-dump rather
-than trust these if something looks wrong.
+Everything here was read off real dumps, not documentation. Sources are the
+archived dumps in `dumps/`: `001.txt` (first survey), `002.txt` (adds the super
+tank), `003.txt` (adds the blast furnace). Upload links expire, so anything
+worth keeping is copied there and numbered.
 
 ## `component.methods` returns false for indirect methods
 
