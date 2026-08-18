@@ -1,14 +1,22 @@
 -- ocup: installs the latest programs from https://github.com/lucemans/oc-gtnh
 --
+--   ocup         install and update what this computer is set to have
+--   ocup --edit  choose which programs this computer installs
+--
 -- Bootstrap on a fresh computer:
 --   wget https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/programs/ocup.lua /bin/ocup.lua
 
 local component = require("component")
 local computer = require("computer")
 local filesystem = require("filesystem")
+local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.11.0"
+local VERSION = "0.12.0"
+
+-- read here rather than through oclib: on a fresh computer ocup arrives alone
+-- and there is no /lib yet for it to require
+local CONFIG_PATH = "/etc/ocgt.cfg"
 
 local REPO = "lucemans/oc-gtnh"
 local COMMIT_URL = "https://api.github.com/repos/" .. REPO .. "/commits/master"
@@ -139,6 +147,14 @@ local function writeFile(path, contents)
   return true
 end
 
+local function loadConfig()
+  local ok, config = pcall(serialization.unserialize, readFile(CONFIG_PATH) or "")
+  if not ok or type(config) ~= "table" then
+    return {}
+  end
+  return config
+end
+
 -- OpenOS keeps required modules in package.loaded for the whole shell session,
 -- so a library replaced on disk stays stale in memory until a reboot. Dropping
 -- it here means the next program run picks up what was just installed.
@@ -195,6 +211,7 @@ end
 
 local arguments = { ... }
 local reloaded = arguments[1] == "--reloaded"
+local editing = arguments[1] == "--edit"
 
 if not component.isAvailable("internet") then
   io.stderr:write("ocup: no internet card installed\n")
@@ -248,6 +265,94 @@ if #FILES == 0 then
   return 1
 end
 
+local config = loadConfig()
+
+-- A computer that has never chosen gets everything, which is what a fresh one
+-- wants. Once a choice is recorded it is the whole truth: a program missing
+-- from it is not installed, and is taken off the disk if it is already there.
+-- Libraries are not part of the choice, since the programs that are kept need
+-- whichever of them they require.
+local chosen = nil
+if type(config.programs) == "table" then
+  chosen = {}
+  for _, name in ipairs(config.programs) do
+    chosen[name] = true
+  end
+end
+
+local function programName(source)
+  return source:match("^programs/(.+)%.lua$")
+end
+
+local function isWanted(source)
+  -- ocup cannot opt out of itself: nothing would be left to opt back in with
+  if source == SELF or not programName(source) then
+    return true
+  end
+  return chosen == nil or chosen[programName(source)] == true
+end
+
+if editing then
+  local names = {}
+  for _, file in ipairs(FILES) do
+    local name = programName(file.source)
+    if name and file.source ~= SELF then
+      names[#names + 1] = name
+    end
+  end
+
+  while true do
+    term.clear()
+    write("ocup v" .. VERSION .. "   what this computer installs\n\n", WHITE)
+    for index, name in ipairs(names) do
+      local on = isWanted("programs/" .. name .. ".lua")
+      write("  " .. index .. "  " .. (on and "[x] " or "[ ] ") .. name .. "\n",
+        on and WHITE or DIM)
+    end
+    write("\n  ocup and the libraries are always installed\n", DIM)
+    write("  number to toggle, blank to save > ", WHITE)
+
+    local answer = tonumber(io.read())
+    if not answer then
+      break
+    end
+    local name = names[answer]
+    if name then
+      if chosen == nil then
+        chosen = {}
+        for _, each in ipairs(names) do
+          chosen[each] = true
+        end
+      end
+      if chosen[name] then
+        chosen[name] = nil
+      else
+        chosen[name] = true
+      end
+    end
+  end
+
+  local keep = {}
+  for _, name in ipairs(names) do
+    if chosen == nil or chosen[name] then
+      keep[#keep + 1] = name
+    end
+  end
+  config.programs = keep
+  local saved, saveReason = writeFile(CONFIG_PATH, serialization.serialize(config))
+
+  term.clear()
+  if not saved then
+    write("  could not save: " .. tostring(saveReason) .. "\n", RED)
+    paint(WHITE)
+    return 1
+  end
+  write("  " .. #keep .. " of " .. #names .. " programs chosen\n", GREEN)
+  write("  run ocup to apply it\n", DIM)
+  paint(WHITE)
+  return 0
+end
+
 -- ocup updates itself first and hands over to the new copy, so the rest of the
 -- run already uses the behaviour that was just downloaded
 if not reloaded then
@@ -282,12 +387,16 @@ local ELBOW = "\226\148\148\226\148\128 "
 
 -- What is already installed is on disk, so the version column is filled in
 -- before a single request goes out. Only the status changes as work proceeds.
-local nameWidth, versionWidth = 0, 0
+local nameWidth, versionWidth, total = 0, 0, 0
 for _, file in ipairs(FILES) do
   local name = file.source:match("/(.+)$") or file.source
   file.name = name
+  file.wanted = isWanted(file.source)
   file.existing = readFile(file.target)
   file.version = shown(versionOf(file.existing))
+  if file.wanted then
+    total = total + 1
+  end
   nameWidth = math.max(nameWidth, #name)
   versionWidth = math.max(versionWidth, #file.version)
 end
@@ -319,7 +428,11 @@ for index, file in ipairs(FILES) do
   local next = FILES[index + 1]
   local lastOfGroup = not next or (next.source:match("^(.-)/") or "") ~= here
   file.branch = lastOfGroup and ELBOW or TEE
-  file.line = addLine(rowText(file, "pending"))
+  local waiting = "pending"
+  if not file.wanted then
+    waiting = file.existing and "to remove" or "not chosen"
+  end
+  file.line = addLine(rowText(file, waiting))
 end
 
 addLine("")
@@ -341,27 +454,33 @@ local function repaint(line, text, color)
   term.setCursor(1, below)
 end
 
-local function showBar(done, total, note, color)
+-- how many of the chosen files this run has dealt with so far
+local done = 0
+
+local function showBar(note, color)
   repaint(barLine, "  " .. bar(done, total, 12) .. " " .. note, color or CYAN)
 end
 
-showBar(0, #FILES, "fetching")
+showBar("fetching")
 
 -- Everything is fetched before anything is written. Writing as it goes would
 -- let one failed download leave the programs newer than the library they
 -- require, which breaks every one of them until the next run.
 local failure = nil
-for index, file in ipairs(FILES) do
-  repaint(file.line, rowText(file, "fetching"), CYAN)
-  local contents, reason = download(urlFor(file.source))
-  if not contents then
-    repaint(file.line, rowText(file, "failed  " .. reason), RED)
-    failure = file
-    break
+for _, file in ipairs(FILES) do
+  if file.wanted then
+    repaint(file.line, rowText(file, "fetching"), CYAN)
+    local contents, reason = download(urlFor(file.source))
+    if not contents then
+      repaint(file.line, rowText(file, "failed  " .. reason), RED)
+      failure = file
+      break
+    end
+    file.contents = contents
+    repaint(file.line, rowText(file, "fetched"), DIM)
+    done = done + 1
+    showBar("fetching")
   end
-  file.contents = contents
-  repaint(file.line, rowText(file, "fetched"), DIM)
-  showBar(index, #FILES, "fetching")
 end
 
 if failure then
@@ -372,28 +491,51 @@ if failure then
   return 1
 end
 
-local failed = 0
-showBar(0, #FILES, "installing")
-for index, file in ipairs(FILES) do
-  -- overwriting a running program is safe: OpenOS loads the whole file first
-  local ok, writeReason = writeFile(file.target, file.contents)
-
+local failed, removed = 0, 0
+done = 0
+showBar("installing")
+for _, file in ipairs(FILES) do
   local version, status, color
-  if ok then
-    forget(file.target)
-    version, status, color = describe(file.existing, file.contents)
+
+  if not file.wanted then
+    -- opting out means the program leaves the disk, so what is in /bin is
+    -- always what was chosen
+    if file.existing then
+      local ok, removeReason = filesystem.remove(file.target)
+      if ok then
+        removed = removed + 1
+        version, status, color = file.version, "removed", CYAN
+      else
+        version, status, color = file.version,
+          "could not remove  " .. tostring(removeReason), RED
+        failed = failed + 1
+      end
+    end
   else
-    version, status, color = file.version, "failed  " .. writeReason, RED
-    failed = failed + 1
+    -- overwriting a running program is safe: OpenOS loads the whole file first
+    local ok, writeReason = writeFile(file.target, file.contents)
+    if ok then
+      forget(file.target)
+      version, status, color = describe(file.existing, file.contents)
+    else
+      version, status, color = file.version, "failed  " .. writeReason, RED
+      failed = failed + 1
+    end
+    done = done + 1
+    showBar("installing")
   end
-  repaint(file.line, rowText(file, status, version), color)
-  showBar(index, #FILES, "installing")
+
+  if status then
+    repaint(file.line, rowText(file, status, version), color)
+  end
 end
 
+done = total
 if failed > 0 then
-  showBar(#FILES, #FILES, failed .. " of " .. #FILES .. " could not be written", RED)
+  showBar(failed .. " of " .. total .. " could not be written", RED)
   paint(WHITE)
   return 1
 end
-showBar(#FILES, #FILES, #FILES .. " files ready", GREEN)
+showBar(total .. " files ready"
+  .. (removed > 0 and ", " .. removed .. " removed" or ""), GREEN)
 paint(WHITE)

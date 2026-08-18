@@ -420,6 +420,14 @@ function filesystem.makeDirectory(path)
   return true
 end
 
+function filesystem.remove(path)
+  if oc.files[path] == nil then
+    return nil, "no such file or directory"
+  end
+  oc.files[path] = nil
+  return true
+end
+
 -- OpenOS counts characters here, not bytes; stubbing these with the string
 -- library would let multi-byte drawing characters break every width calculation
 local unicode = {}

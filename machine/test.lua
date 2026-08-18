@@ -198,6 +198,97 @@ test("ocup installs missing programs", function()
   end
 end)
 
+-- Not every computer wants every program. The satellite by the blast furnace
+-- has no use for minesweeper, and /bin is small.
+local function serveEverything()
+  return serveProgram({
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+end
+
+test("ocup installs only the programs the config chose", function()
+  oc.components = { INTERNET }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    programs = { "ocdebug" },
+  })
+  oc.respond = serveEverything()
+
+  local ok, reason = oc.run("ocup")
+  check(ok, "ocup crashed: " .. tostring(reason))
+
+  check(oc.files["/bin/ocdebug.lua"] ~= nil, "did not install the chosen program")
+  check(oc.files["/bin/ocdump.lua"] == nil, "installed a program nobody chose")
+  -- a program that opts out still needs ocup to opt back in with
+  check(oc.files["/bin/ocup.lua"] ~= nil, "removed itself")
+  -- the kept programs require whichever libraries they require
+  check(oc.files["/lib/ocgt.lua"] ~= nil, "skipped a library")
+  check(contains(oc.printed(), "not chosen"), "did not say what it left out")
+end)
+
+test("ocup takes a program off the disk once it is opted out", function()
+  oc.components = { INTERNET }
+  oc.files["/bin/ocdump.lua"] = program("0.1.0")
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    programs = { "ocdebug" },
+  })
+  oc.respond = serveEverything()
+
+  oc.run("ocup")
+  check(oc.files["/bin/ocdump.lua"] == nil, "left an opted-out program behind")
+  check(contains(oc.printed(), "removed"), "did not report the removal")
+end)
+
+test("ocup installs everything when nothing has been chosen yet", function()
+  oc.components = { INTERNET }
+  oc.respond = serveEverything()
+
+  oc.run("ocup")
+  -- a fresh computer has an empty config, and asking it to choose before it has
+  -- anything installed would be a poor first run
+  check(oc.files["/bin/ocdump.lua"] ~= nil, "left a program out with no config")
+  check(oc.files["/bin/ocdebug.lua"] ~= nil, "left a program out with no config")
+end)
+
+test("ocup --edit writes the choice and applies nothing yet", function()
+  oc.components = { INTERNET }
+  oc.files["/bin/ocdump.lua"] = program("0.1.0")
+  oc.respond = serveEverything()
+  -- toggle ocdump off, then blank to save
+  oc.reads = { "2", "" }
+
+  local ok, reason = oc.run("ocup", "--edit")
+  check(ok, "ocup --edit crashed: " .. tostring(reason))
+
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  check(saved and saved.programs, "wrote no choice")
+  local chosen = table.concat(saved and saved.programs or {}, ",")
+  check(chosen == "ocdebug", "chose " .. chosen)
+  -- editing decides, running applies: nothing should vanish behind the user
+  check(oc.files["/bin/ocdump.lua"] ~= nil, "removed a file while only editing")
+end)
+
+test("ocup --edit keeps the rest of the config", function()
+  oc.components = { INTERNET }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = { ["aa11bb22"] = "EBF Fluid Tank" },
+    watch = { { address = "aa11bb22", hidden = {} } },
+  })
+  oc.respond = serveEverything()
+  oc.reads = { "" }
+
+  oc.run("ocup", "--edit")
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  check(saved and saved.nicknames and saved.nicknames["aa11bb22"] == "EBF Fluid Tank",
+    "lost what ocwatch had saved")
+  check(saved and saved.watch and #saved.watch == 1, "lost the watch list")
+end)
+
 test("ocup reports a version bump", function()
   oc.components = { INTERNET }
   oc.files["/bin/ocdebug.lua"] = program("0.2.0")
