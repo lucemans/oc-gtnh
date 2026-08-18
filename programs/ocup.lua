@@ -7,16 +7,14 @@ local component = require("component")
 local filesystem = require("filesystem")
 local term = require("term")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
 
-local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/programs/"
--- the library is fetched first: the programs that require it are useless without it
-local FILES = {
-  { source = "lib/ocgt.lua", target = "/lib/ocgt.lua" },
-  { source = "ocup.lua", target = "/bin/ocup.lua" },
-  { source = "ocdebug.lua", target = "/bin/ocdebug.lua" },
-  { source = "ocdump.lua", target = "/bin/ocdump.lua" },
-}
+local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/"
+local MANIFEST = "manifest.txt"
+local SELF = "programs/ocup.lua"
+
+-- the folder a file lives in decides where it installs
+local DESTINATIONS = { programs = "/bin/", lib = "/lib/" }
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999
@@ -112,6 +110,10 @@ local function readFile(path)
 end
 
 local function writeFile(path, contents)
+  local directory = filesystem.path(path)
+  if not filesystem.exists(directory) then
+    filesystem.makeDirectory(directory)
+  end
   local file, reason = io.open(path, "w")
   if not file then
     return nil, tostring(reason)
@@ -140,9 +142,76 @@ local function describe(existing, contents)
   return "changed     v" .. (version or "?"), CYAN
 end
 
+local function parseManifest(text)
+  local files = {}
+  for entry in text:gmatch("[^\n]+") do
+    local source = entry:match("^%s*(%S+)%s*$")
+    if source then
+      -- both captures are bound here: "a and a:match()" would keep only the first
+      local folder, name = source:match("^(%w+)/(.+)$")
+      local destination = folder and DESTINATIONS[folder]
+      if destination then
+        files[#files + 1] = { source = source, target = destination .. name }
+      end
+    end
+  end
+  return files
+end
+
+-------------------------------------------------------------------------------
+
+local arguments = { ... }
+local reloaded = arguments[1] == "--reloaded"
+
 if not component.isAvailable("internet") then
   io.stderr:write("ocup: no internet card installed\n")
   return 1
+end
+
+write("ocup v" .. VERSION .. (reloaded and "  (reloaded)" or "") .. "\n\n", WHITE)
+
+term.clearLine()
+write("  fetching manifest", DIM)
+local manifestText, manifestReason = download(BASE_URL .. MANIFEST)
+if not manifestText then
+  term.clearLine()
+  write("  manifest failed: " .. manifestReason .. "\n", RED)
+  paint(WHITE)
+  return 1
+end
+
+local FILES = parseManifest(manifestText)
+if #FILES == 0 then
+  term.clearLine()
+  write("  manifest is empty\n", RED)
+  paint(WHITE)
+  return 1
+end
+
+-- ocup updates itself first and hands over to the new copy, so the rest of the
+-- run already uses the behaviour that was just downloaded
+if not reloaded then
+  for _, file in ipairs(FILES) do
+    if file.source == SELF then
+      local current = readFile(file.target)
+      local latest = download(BASE_URL .. file.source)
+      if latest and latest ~= current then
+        term.clearLine()
+        write("  " .. file.source .. "  ", WHITE)
+        local status, color = describe(current, latest)
+        write(status .. "\n", color)
+        if writeFile(file.target, latest) then
+          write("  reloading into the new ocup\n\n", CYAN)
+          paint(WHITE)
+          local chunk = loadfile(file.target)
+          if chunk then
+            return chunk("--reloaded")
+          end
+        end
+      end
+      break
+    end
+  end
 end
 
 local nameWidth = 0
@@ -150,30 +219,22 @@ for _, file in ipairs(FILES) do
   nameWidth = math.max(nameWidth, #file.source)
 end
 
-write("ocup v" .. VERSION .. "\n\n", WHITE)
-
 local failed = 0
 for index, file in ipairs(FILES) do
-  local name = file.source
   term.clearLine()
   write("  " .. bar(index - 1, #FILES, 12) .. " ", CYAN)
-  write(name, DIM)
+  write(file.source, DIM)
 
-  local path = file.target
-  local directory = filesystem.path(path)
-  if not filesystem.exists(directory) then
-    filesystem.makeDirectory(directory)
-  end
-  local existing = readFile(path)
-  local contents, reason = download(BASE_URL .. name)
+  local existing = readFile(file.target)
+  local contents, reason = download(BASE_URL .. file.source)
 
   local status, color
   if not contents then
     status, color = "failed      " .. reason, RED
     failed = failed + 1
   else
-    -- overwriting ocup.lua while it runs is safe: OpenOS loads the whole file first
-    local ok, writeReason = writeFile(path, contents)
+    -- overwriting a running program is safe: OpenOS loads the whole file first
+    local ok, writeReason = writeFile(file.target, contents)
     if ok then
       status, color = describe(existing, contents)
     else
@@ -183,7 +244,7 @@ for index, file in ipairs(FILES) do
   end
 
   term.clearLine()
-  write("  " .. name .. string.rep(" ", nameWidth - #name) .. "  ", WHITE)
+  write("  " .. file.source .. string.rep(" ", nameWidth - #file.source) .. "  ", WHITE)
   write(status .. "\n", color)
 end
 

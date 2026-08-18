@@ -135,12 +135,24 @@ local REDSTONE = {
 
 local INTERNET = { address = "01258489-8c4f-4be7-96d2-3f0fc17814ee", kind = "internet", methods = {} }
 
+local MANIFEST = table.concat({
+  "lib/ocgt.lua",
+  "programs/ocup.lua",
+  "programs/ocdebug.lua",
+  "programs/ocdump.lua",
+}, "\n")
+
+-- longest match wins, so "programs/ocup.lua" is not served by an "ocup.lua" key
 local function serveProgram(bodies)
   return function(url)
+    local best, bestLength = nil, -1
     for name, body in pairs(bodies) do
-      if url:find(name, 1, true) then
-        return 200, "OK", body
+      if url:find(name, 1, true) and #name > bestLength then
+        best, bestLength = body, #name
       end
+    end
+    if best then
+      return 200, "OK", best
     end
     return 404, "Not Found", "404: Not Found"
   end
@@ -156,9 +168,10 @@ end
 test("ocup installs missing programs", function()
   oc.components = { INTERNET }
   oc.respond = serveProgram({
-    ["ocup.lua"] = program("0.3.0"),
-    ["ocdebug.lua"] = program("0.2.0"),
-    ["ocdump.lua"] = program("0.1.0"),
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
   })
 
@@ -180,9 +193,10 @@ test("ocup reports a version bump", function()
   oc.components = { INTERNET }
   oc.files["/bin/ocdebug.lua"] = program("0.2.0")
   oc.respond = serveProgram({
-    ["ocup.lua"] = program("0.3.0"),
-    ["ocdebug.lua"] = program("0.3.0"),
-    ["ocdump.lua"] = program("0.1.0"),
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocdebug.lua"] = program("0.3.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
   })
 
@@ -197,7 +211,10 @@ end)
 test("ocup reports unchanged programs", function()
   oc.components = { INTERNET }
   oc.files["/bin/ocdebug.lua"] = program("0.2.0")
-  oc.respond = serveProgram({ ["ocdebug.lua"] = program("0.2.0") })
+  oc.respond = serveProgram({
+    ["manifest.txt"] = "programs/ocdebug.lua\n",
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+  })
 
   oc.run("ocup")
   check(contains(oc.printed(), "up to date"), "did not report an unchanged program")
@@ -346,7 +363,7 @@ test("ocdebug handles a multiblock with no name line", function()
   local summary = frame:sub(1, frame:find("methods", 1, true) or #frame)
   -- its first sensor line is a reading, so it must not become the title
   check(not contains(summary, "Progress: 31 s / 37 s\n"), "used a reading as the title")
-  check(contains(summary, "Multimachine Blastfurnace"), "did not fall back to a tidied getName")
+  check(contains(summary, "Electric Blast Furnace"), "profile name not used for the furnace")
   -- and that first line must still appear as a gauge rather than being skipped
   check(contains(summary, "31 / 37 s"), "dropped the first sensor line")
   check(contains(summary, "1,789 / 3,072 EU"), "dropped the second gauge")
@@ -455,6 +472,175 @@ test("ocdebug survives a getter that needs arguments", function()
   local ok = oc.run("ocdebug")
   check(ok, "ocdebug crashed on a failing getter")
   check(contains(oc.frame(), "bad arguments"), "did not surface the getter error")
+end)
+
+-------------------------------------------------------------------------------
+-- values that serialization.serialize cannot handle
+
+-- a Logistics Pipes block: one method returning a table holding functions,
+-- which is exactly what serialize raises on
+local LOGISTICS = {
+  address = "e1f2a3b4-0000-0000-0000-000000000009",
+  kind = "logisticspipe",
+  methods = { getPipe = "function():table -- Returns the pipe." },
+  values = {
+    getPipe = function()
+      return {
+        name = "Basic Logistics Pipe",
+        isRouted = true,
+        getRouterId = function() end,
+        inventory = { slots = 27, contents = { "minecraft:iron_ingot" } },
+      }
+    end,
+  },
+}
+
+test("ocdebug describes a table it cannot serialize", function()
+  oc.components = { LOGISTICS }
+
+  local ok, reason = oc.run("ocdebug")
+  check(ok, "ocdebug crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  -- the old behaviour printed the bare word "table" and lost everything
+  check(contains(frame, "getRouterId"), "table contents not described at all")
+  check(contains(frame, "<function>"), "function field not reported by type")
+  check(not contains(frame, "getPipe    table"), "still collapsing to the bare word table")
+end)
+
+test("ocdump writes a nested table out in full", function()
+  oc.components = { INTERNET, LOGISTICS }
+  oc.respond = function()
+    return 201, "Created", "https://dpaste.com/TESTTESTT\n"
+  end
+
+  local ok, reason = oc.run("ocdump")
+  check(ok, "ocdump crashed: " .. tostring(reason))
+
+  local body = oc.requests[1] and oc.requests[1].body or ""
+  check(contains(body, "getPipe"), "method missing")
+  check(contains(body, 'name = "Basic Logistics Pipe"'), "table field not expanded")
+  check(contains(body, "inventory = table"), "nested table not walked")
+  check(contains(body, "slots = 27"), "nested field missing")
+  check(contains(body, "getRouterId = <function>"), "function not reported by type")
+  if show then
+    say(body)
+  end
+end)
+
+test("ocdump keeps scalar returns on one line", function()
+  oc.components = { INTERNET, GT_MACHINE }
+  oc.respond = function()
+    return 201, "Created", "https://dpaste.com/TESTTESTT\n"
+  end
+
+  oc.run("ocdump")
+  local body = oc.requests[1] and oc.requests[1].body or ""
+  check(contains(body, "-395, 63, -1088"), "multiple scalar returns not joined")
+end)
+
+-------------------------------------------------------------------------------
+-- ocwatch
+
+local function tankAt(amount)
+  return {
+    address = "aa11bb22-e712-4134-bce1-b194453d6217",
+    kind = "gt_machine",
+    methods = { getSensorInformation = "function():table" },
+    values = {
+      getSensorInformation = function()
+        return {
+          "\194\1679Super Tank\194\167r",
+          "\194\1676Bio Diesel\194\167r",
+          "\194\167a" .. amount .. "\194\167r L \194\167e4,000,000\194\167r L",
+        }
+      end,
+    },
+  }
+end
+
+local function furnace(stopped)
+  return {
+    address = "1c646dd8-0000-0000-0000-000000000005",
+    kind = "gt_machine",
+    methods = {
+      getName = "function():string",
+      setWorkAllowed = "function(work:boolean)",
+      isWorkAllowed = "function():boolean",
+    },
+    values = {
+      getName = function()
+        return "multimachine.blastfurnace"
+      end,
+      isWorkAllowed = function()
+        return not stopped.value
+      end,
+      setWorkAllowed = function(allowed)
+        stopped.value = (allowed == false)
+        return true
+      end,
+    },
+  }
+end
+
+test("ocwatch stops a machine when a tank runs low", function()
+  local stopped = { value = false }
+  local tank = tankAt("100")
+  oc.components = { tank, furnace(stopped) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = { [tank.address] = "EBF Fluid Tank" },
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = tank.address,
+      index = 2,
+      below = 50000,
+      above = 200000,
+      beep = false,
+      act = {
+        address = "1c646dd8-0000-0000-0000-000000000005",
+        method = "setWorkAllowed",
+        onTrip = false,
+        onClear = true,
+      },
+    } },
+  })
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  check(stopped.value == true, "the furnace was not stopped by the low tank")
+  check(contains(oc.frame(), "EBF Fluid Tank"), "nickname not used on the dashboard")
+  check(contains(oc.frame(), "diesel low"), "no notice that the alert tripped")
+  if show then
+    say(oc.frame())
+  end
+end)
+
+test("ocwatch leaves a machine alone above the threshold", function()
+  local stopped = { value = false }
+  local tank = tankAt("3,000,000")
+  oc.components = { tank, furnace(stopped) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = {},
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = tank.address,
+      index = 2,
+      below = 50000,
+      above = 200000,
+      beep = false,
+      act = {
+        address = "1c646dd8-0000-0000-0000-000000000005",
+        method = "setWorkAllowed",
+        onTrip = false,
+        onClear = true,
+      },
+    } },
+  })
+
+  oc.run("ocwatch")
+  check(stopped.value == false, "stopped a machine while the tank was full")
 end)
 
 -------------------------------------------------------------------------------

@@ -1,0 +1,523 @@
+-- ocwatch: a fixed dashboard for the machines you choose, with thresholds that
+-- can beep and can stop a machine before a shortage becomes a power failure.
+--
+--   ocwatch          watch the configured machines
+--   ocwatch --edit   choose machines, nickname them, pick readings, set alerts
+
+local component = require("component")
+local computer = require("computer")
+local event = require("event")
+local gt = require("ocgt")
+local keyboard = require("keyboard")
+local term = require("term")
+local unicode = require("unicode")
+
+local VERSION = "0.1.0"
+local REFRESH_SECONDS = 2
+
+local gpu = component.gpu
+local W, H = gpu.getResolution()
+local GAUGE_W = math.max(16, math.min(40, math.floor((W - 34) / 2)))
+
+local BG = 0x000000
+local FG = 0xFFFFFF
+local DIM = 0x999999
+local BAR = 0x333333
+local OK_COLOR = 0x66CC66
+local ALARM = 0xCC6666
+
+local FULL_BLOCK = "\226\150\136"
+local LIGHT_BLOCK = "\226\150\145"
+
+local config = gt.loadConfig()
+
+local function fit(text, width)
+  local length = unicode.len(text)
+  if length > width then
+    return unicode.sub(text, 1, width)
+  end
+  return text .. string.rep(" ", width - length)
+end
+
+local function write(x, y, text, foreground, background)
+  gpu.setForeground(foreground or FG)
+  gpu.setBackground(background or BG)
+  gpu.set(x, y, text)
+end
+
+local function colorOf(gauge)
+  if gauge.colorCode and gt.MC_COLORS[gauge.colorCode] then
+    return gt.MC_COLORS[gauge.colorCode]
+  end
+  return OK_COLOR
+end
+
+-------------------------------------------------------------------------------
+-- alerts
+
+-- an alert trips below its floor and only clears back above its ceiling, so a
+-- reading sitting on the boundary cannot beep on every refresh
+local function evaluate(alert, value)
+  local tripped = alert.tripped or false
+  if not tripped and alert.below and value < alert.below then
+    tripped = true
+  elseif tripped and alert.above and value >= alert.above then
+    tripped = false
+  elseif not tripped and alert.over and value > alert.over then
+    tripped = true
+  elseif tripped and alert.under and value <= alert.under then
+    tripped = false
+  end
+  return tripped
+end
+
+local function act(alert, tripped)
+  if not alert.act then
+    return nil
+  end
+  -- written out rather than "tripped and onTrip or onClear": onTrip is false
+  -- here, and that expression would fall through and enable the machine
+  local wanted
+  if tripped then
+    wanted = alert.act.onTrip
+  else
+    wanted = alert.act.onClear
+  end
+  if wanted == nil or alert.applied == wanted then
+    return nil
+  end
+  local ok, reason = gt.setValue(alert.act.address, alert.act.method, wanted)
+  if ok then
+    alert.applied = wanted
+    return alert.act.method .. "(" .. tostring(wanted) .. ")"
+  end
+  return "action failed: " .. tostring(reason)
+end
+
+local notices = {}
+
+local function notice(text)
+  notices[#notices + 1] = text
+  while #notices > 3 do
+    table.remove(notices, 1)
+  end
+end
+
+local function checkAlerts(readingsByAddress)
+  for _, alert in ipairs(config.alerts) do
+    local readings = readingsByAddress[alert.address]
+    local reading = readings and readings[alert.index]
+    if reading and reading.kind == "gauge" then
+      local was = alert.tripped or false
+      alert.tripped = evaluate(alert, reading.value)
+      if alert.tripped ~= was then
+        if alert.tripped then
+          notice(alert.name .. " tripped at " .. gt.comma(reading.value))
+          if alert.beep ~= false then
+            pcall(computer.beep, 880, 0.2)
+          end
+        else
+          notice(alert.name .. " cleared at " .. gt.comma(reading.value))
+        end
+      end
+      local done = act(alert, alert.tripped)
+      if done then
+        notice(alert.name .. ": " .. done)
+      end
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
+-- dashboard
+
+local function wanted(entry, reading, index)
+  if reading.usedAsLabel then
+    return false
+  end
+  if reading.kind ~= "gauge" and entry.gaugesOnly then
+    return false
+  end
+  if entry.hidden and entry.hidden[index] then
+    return false
+  end
+  return true
+end
+
+local function drawGauge(x, y, gauge, width)
+  local ratio = gauge.max > 0 and gauge.value / gauge.max or 0
+  if ratio < 0 then
+    ratio = 0
+  elseif ratio > 1 then
+    ratio = 1
+  end
+  local filled = math.floor(width * ratio + 0.5)
+
+  write(x, y, "[", DIM, BG)
+  local cursor = x + 1
+  if filled > 0 then
+    write(cursor, y, string.rep(FULL_BLOCK, filled), colorOf(gauge), BG)
+    cursor = cursor + filled
+  end
+  if width - filled > 0 then
+    write(cursor, y, string.rep(LIGHT_BLOCK, width - filled), DIM, BG)
+    cursor = cursor + width - filled
+  end
+  write(cursor, y, "]", DIM, BG)
+  cursor = cursor + 1
+
+  local unit = gauge.unit ~= "" and (" " .. gauge.unit) or ""
+  local text = string.format("  %s / %s%s  %.1f%%",
+    gauge.current, gauge.maximum, unit, ratio * 100)
+  write(cursor, y, fit(text, math.max(0, W - cursor)), FG, BG)
+end
+
+local function render(cards)
+  gpu.setBackground(BG)
+  gpu.fill(1, 1, W, H, " ")
+  write(1, 1, fit("  ocwatch v" .. VERSION .. "    " .. #cards .. " machines", W), FG, BAR)
+
+  local y = 3
+  for _, card in ipairs(cards) do
+    if y > H - 2 then
+      break
+    end
+    write(3, y, fit(card.name, W - 22), FG, BG)
+    if card.status then
+      write(W - 20, y, fit(card.status, 18), card.alarm and ALARM or OK_COLOR, BG)
+    end
+    y = y + 1
+
+    for index, reading in ipairs(card.readings) do
+      if y > H - 2 then
+        break
+      end
+      if wanted(card.entry, reading, index) then
+        if reading.kind == "gauge" then
+          local label = reading.label ~= "" and reading.label or "value"
+          write(5, y, fit(label, 12), DIM, BG)
+          drawGauge(18, y, reading, GAUGE_W)
+        else
+          local x = 5
+          for _, part in ipairs(gt.segments(reading.raw, DIM)) do
+            local space = W - x - 1
+            if space <= 0 then
+              break
+            end
+            local text = unicode.sub(part.text, 1, space)
+            write(x, y, text, part.color, BG)
+            x = x + unicode.len(text)
+          end
+        end
+        y = y + 1
+      end
+    end
+    y = y + 1
+  end
+
+  for index = 1, #notices do
+    write(3, H - #notices + index - 1, fit(notices[index], W - 4), ALARM, BG)
+  end
+  write(1, H, fit("  [e] edit   [r] refresh   [q] quit      live every "
+    .. REFRESH_SECONDS .. "s", W), FG, BAR)
+end
+
+local function sample()
+  local cards = {}
+  local byAddress = {}
+  for _, entry in ipairs(config.watch) do
+    local readings = gt.readings(entry.address)
+    byAddress[entry.address] = readings
+    cards[#cards + 1] = {
+      entry = entry,
+      name = gt.displayName(entry.address, config) or entry.address:sub(1, 8),
+      status = gt.statusOf(entry.address),
+      readings = readings,
+    }
+  end
+  checkAlerts(byAddress)
+  for _, card in ipairs(cards) do
+    for _, alert in ipairs(config.alerts) do
+      if alert.address == card.entry.address and alert.tripped then
+        card.alarm = true
+      end
+    end
+  end
+  return cards
+end
+
+-------------------------------------------------------------------------------
+-- editor
+
+local function prompt(message)
+  term.clear()
+  print(message)
+  io.write("> ")
+  return io.read()
+end
+
+local function chooseComponent()
+  local list = {}
+  for address, kind in component.list() do
+    list[#list + 1] = { address = address, kind = kind }
+  end
+  table.sort(list, function(a, b)
+    return a.address < b.address
+  end)
+
+  term.clear()
+  print("attached components")
+  for index, entry in ipairs(list) do
+    print(string.format("%3d  %-18s %s  %s", index, entry.kind,
+      entry.address:sub(1, 8), gt.displayName(entry.address, config) or ""))
+  end
+  io.write("number (blank to cancel) > ")
+  local answer = tonumber(io.read())
+  return answer and list[answer] or nil
+end
+
+local function watched(address)
+  for index, entry in ipairs(config.watch) do
+    if entry.address == address then
+      return index
+    end
+  end
+  return nil
+end
+
+local function editAdd()
+  local chosen = chooseComponent()
+  if not chosen then
+    return
+  end
+  if watched(chosen.address) then
+    print("already watched")
+    os.sleep(1)
+    return
+  end
+  config.watch[#config.watch + 1] = { address = chosen.address, hidden = {} }
+  gt.saveConfig(config)
+end
+
+local function editRemove()
+  term.clear()
+  for index, entry in ipairs(config.watch) do
+    print(index .. "  " .. (gt.displayName(entry.address, config) or entry.address))
+  end
+  io.write("number to remove (blank to cancel) > ")
+  local answer = tonumber(io.read())
+  if answer and config.watch[answer] then
+    table.remove(config.watch, answer)
+    gt.saveConfig(config)
+  end
+end
+
+local function editNickname()
+  term.clear()
+  for index, entry in ipairs(config.watch) do
+    print(index .. "  " .. (gt.displayName(entry.address, config) or entry.address))
+  end
+  io.write("number to rename (blank to cancel) > ")
+  local answer = tonumber(io.read())
+  local entry = answer and config.watch[answer]
+  if not entry then
+    return
+  end
+  local name = prompt("nickname for " .. entry.address .. " (blank clears it)")
+  config.nicknames[entry.address] = (name and name ~= "") and name or nil
+  gt.saveConfig(config)
+end
+
+local function editReadings()
+  term.clear()
+  for index, entry in ipairs(config.watch) do
+    print(index .. "  " .. (gt.displayName(entry.address, config) or entry.address))
+  end
+  io.write("number whose readings to toggle (blank to cancel) > ")
+  local answer = tonumber(io.read())
+  local entry = answer and config.watch[answer]
+  if not entry then
+    return
+  end
+
+  entry.hidden = entry.hidden or {}
+  while true do
+    term.clear()
+    local readings = gt.readings(entry.address)
+    print(gt.displayName(entry.address, config) or entry.address)
+    for index, reading in ipairs(readings) do
+      local shown = entry.hidden[index] and "hidden " or "shown  "
+      local label = reading.kind == "gauge"
+        and ((reading.label ~= "" and reading.label or "value")
+          .. "  " .. reading.current .. " / " .. reading.maximum)
+        or reading.plain
+      print(string.format("%3d  %s %s", index, shown, label))
+    end
+    io.write("number to toggle (blank when done) > ")
+    local pick = tonumber(io.read())
+    if not pick or not readings[pick] then
+      break
+    end
+    entry.hidden[pick] = (not entry.hidden[pick]) or nil
+  end
+  gt.saveConfig(config)
+end
+
+local function editAlert()
+  term.clear()
+  print("an alert watches one gauge and may stop a machine when it trips")
+  local chosen = chooseComponent()
+  if not chosen then
+    return
+  end
+
+  local readings = gt.readings(chosen.address)
+  term.clear()
+  print("readings on " .. (gt.displayName(chosen.address, config) or chosen.address))
+  local gauges = {}
+  for index, reading in ipairs(readings) do
+    if reading.kind == "gauge" then
+      gauges[#gauges + 1] = index
+      print(string.format("%3d  %s  %s / %s %s", index,
+        reading.label ~= "" and reading.label or "value",
+        reading.current, reading.maximum, reading.unit))
+    end
+  end
+  if #gauges == 0 then
+    print("this component reports no gauge to watch")
+    os.sleep(2)
+    return
+  end
+
+  io.write("gauge number > ")
+  local index = tonumber(io.read())
+  if not index or not readings[index] or readings[index].kind ~= "gauge" then
+    return
+  end
+
+  local below = tonumber(prompt("trip when the value falls below (blank to skip)"))
+  local above = tonumber(prompt("clear when it rises back to (blank to skip)"))
+  local name = prompt("name for this alert") or "alert"
+
+  local alert = {
+    name = name,
+    address = chosen.address,
+    index = index,
+    below = below,
+    above = above,
+    beep = true,
+  }
+
+  local answer = prompt("stop a machine when this trips? (y/N)")
+  if answer and answer:lower():sub(1, 1) == "y" then
+    local target = chooseComponent()
+    if target and gt.has(gt.methodsOf(target.address), "setWorkAllowed") then
+      alert.act = {
+        address = target.address,
+        method = "setWorkAllowed",
+        onTrip = false,
+        onClear = true,
+      }
+    elseif target then
+      print("that component has no setWorkAllowed, alert saved without an action")
+      os.sleep(2)
+    end
+  end
+
+  config.alerts[#config.alerts + 1] = alert
+  gt.saveConfig(config)
+end
+
+local function editAlertRemove()
+  term.clear()
+  if #config.alerts == 0 then
+    print("no alerts configured")
+    os.sleep(1)
+    return
+  end
+  for index, alert in ipairs(config.alerts) do
+    print(index .. "  " .. alert.name)
+  end
+  io.write("number to remove (blank to cancel) > ")
+  local answer = tonumber(io.read())
+  if answer and config.alerts[answer] then
+    table.remove(config.alerts, answer)
+    gt.saveConfig(config)
+  end
+end
+
+local function editor()
+  while true do
+    term.clear()
+    print("ocwatch v" .. VERSION .. " configuration")
+    print("")
+    print("  " .. #config.watch .. " machines watched, " .. #config.alerts .. " alerts")
+    print("")
+    print("  1  add a machine")
+    print("  2  remove a machine")
+    print("  3  set a nickname")
+    print("  4  choose which readings to show")
+    print("  5  add an alert")
+    print("  6  remove an alert")
+    print("  7  done")
+    io.write("> ")
+
+    local answer = tonumber(io.read())
+    if answer == 1 then
+      editAdd()
+    elseif answer == 2 then
+      editRemove()
+    elseif answer == 3 then
+      editNickname()
+    elseif answer == 4 then
+      editReadings()
+    elseif answer == 5 then
+      editAlert()
+    elseif answer == 6 then
+      editAlertRemove()
+    else
+      return
+    end
+  end
+end
+
+-------------------------------------------------------------------------------
+
+local arguments = { ... }
+if arguments[1] == "--edit" then
+  editor()
+  return 0
+end
+
+if #config.watch == 0 then
+  print("ocwatch: nothing configured yet, starting the editor")
+  os.sleep(1)
+  editor()
+  if #config.watch == 0 then
+    return 0
+  end
+end
+
+term.clear()
+term.setCursorBlink(false)
+
+while true do
+  render(sample())
+  local name, _, _, code = event.pull(REFRESH_SECONDS)
+  if name == "interrupted" then
+    break
+  elseif name == "key_down" then
+    if code == keyboard.keys.q then
+      break
+    elseif code == keyboard.keys.e then
+      editor()
+      config = gt.loadConfig()
+      term.clear()
+      term.setCursorBlink(false)
+    end
+  end
+end
+
+gpu.setForeground(FG)
+gpu.setBackground(BG)
+term.clear()

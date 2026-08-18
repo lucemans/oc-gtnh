@@ -318,13 +318,20 @@ function unicode.sub(text, from, to)
   return text:sub(first, past and past - 1 or #text)
 end
 
+-- must round-trip: ocgt saves its configuration through these, and the keys
+-- include component addresses, which are not valid Lua identifiers
 local serialization = {}
+
 local function serializeValue(value)
-  if type(value) == "string" then
+  local kind = type(value)
+  if kind == "string" then
     return string.format("%q", value)
+  elseif kind == "table" then
+    return serialization.serialize(value)
   end
   return tostring(value)
 end
+
 function serialization.serialize(value)
   if type(value) ~= "table" then
     return serializeValue(value)
@@ -337,21 +344,34 @@ function serialization.serialize(value)
   local keys = {}
   for key in pairs(value) do
     if not (type(key) == "number" and key >= 1 and key <= count) then
-      keys[#keys + 1] = tostring(key)
+      keys[#keys + 1] = key
     end
   end
-  table.sort(keys)
+  table.sort(keys, function(a, b)
+    return tostring(a) < tostring(b)
+  end)
   for _, key in ipairs(keys) do
-    parts[#parts + 1] = key .. "=" .. serializeValue(value[key])
+    local name = (type(key) == "string" and key:match("^[%a_][%w_]*$"))
+      and key or ("[" .. serializeValue(key) .. "]")
+    parts[#parts + 1] = name .. "=" .. serializeValue(value[key])
   end
   return "{" .. table.concat(parts, ",") .. "}"
+end
+
+function serialization.unserialize(text)
+  local chunk = load("return " .. text, "=config", "t", {})
+  if not chunk then
+    return nil
+  end
+  local ok, value = pcall(chunk)
+  return ok and value or nil
 end
 
 -------------------------------------------------------------------------------
 
 function oc.install()
   package.preload["ocgt"] = function()
-    return dofile("programs/lib/ocgt.lua")
+    return dofile("lib/ocgt.lua")
   end
   package.preload["component"] = function()
     return component
@@ -402,6 +422,10 @@ function oc.install()
       end
     end,
   }
+
+  io.read = function()
+    return nil
+  end
 
   io.open = function(path, mode)
     if (mode or "r"):find("w") then

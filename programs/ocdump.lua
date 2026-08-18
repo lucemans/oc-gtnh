@@ -3,16 +3,21 @@
 
 local component = require("component")
 local computer = require("computer")
+local filesystem = require("filesystem")
 local gt = require("ocgt")
 local serialization = require("serialization")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 
+local ARCHIVE_DIR = "/home/dumps"
 local PASTE_URL = "https://dpaste.com/api/v2/"
 local EXPIRY_DAYS = "1"
 -- multipart avoids percent-encoding the dump, which would cost a whole extra
 -- copy of it on a computer that only has a few hundred KB of memory
 local BOUNDARY = "ocdump7f3ab21cBOUNDARY"
+
+-- nicknames set in ocwatch, so a dump names machines the way you do
+local config = gt.loadConfig()
 
 local out = {}
 local function line(text)
@@ -70,11 +75,31 @@ local function dumpComponent(address, kind)
       line("    doc: " .. gt.oneLine(doc))
     end
     if gt.isReadable(name) then
-      local value, reason = gt.readValue(address, name)
-      if value then
-        line("    value: " .. value)
-      else
+      local results, reason = gt.readRaw(address, name)
+      if not results then
         line("    error: " .. reason)
+      elseif results.n < 2 then
+        line("    value: (no return value)")
+      else
+        local nested = false
+        for index = 2, results.n do
+          nested = nested or type(results[index]) == "table"
+        end
+        if not nested then
+          local parts = {}
+          for index = 2, results.n do
+            parts[#parts + 1] = gt.formatValue(results[index])
+          end
+          line("    value: " .. table.concat(parts, ", "))
+        else
+          -- a table is written out in full: this is how an unknown component
+          -- such as a Logistics Pipes block reveals what it actually offers
+          for index = 2, results.n do
+            for _, text in ipairs(gt.describeLines(results[index], "    value: ")) do
+              line(text)
+            end
+          end
+        end
       end
     end
   end
@@ -163,7 +188,7 @@ line("")
 line("== index ==")
 for _, entry in ipairs(entries) do
   line(string.format("%-18s %s  %s", entry.kind, entry.address:sub(1, 8),
-    gt.friendlyName(entry.address) or ""))
+    gt.displayName(entry.address, config) or ""))
 end
 
 line("")
@@ -174,6 +199,31 @@ end
 
 local body = table.concat(out, "\n")
 out = nil -- the dump is held twice while the request body is built
+
+-- kept on disk as well, because the upload expires in a day and a failed
+-- upload should not lose the dump
+local function archive(text)
+  if not filesystem.exists(ARCHIVE_DIR) then
+    filesystem.makeDirectory(ARCHIVE_DIR)
+  end
+  local number = 1
+  while filesystem.exists(string.format("%s/%03d.txt", ARCHIVE_DIR, number)) do
+    number = number + 1
+  end
+  local path = string.format("%s/%03d.txt", ARCHIVE_DIR, number)
+  local file = io.open(path, "w")
+  if not file then
+    return nil
+  end
+  file:write(text)
+  file:close()
+  return path
+end
+
+local saved = archive(body)
+if saved then
+  print("saved " .. saved)
+end
 
 print("uploading " .. #body .. " bytes...")
 local url, reason = upload(body)

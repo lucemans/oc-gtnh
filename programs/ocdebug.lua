@@ -7,7 +7,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 
 -- indirect component calls block until the next server tick, so re-reading a
 -- machine costs real time; two seconds keeps the readings live without
@@ -17,14 +17,14 @@ local REFRESH_SECONDS = 2
 local gpu = component.gpu
 local W, H = gpu.getResolution()
 
-local LIST_W = math.min(34, math.floor(W / 3))
+local LIST_W = math.max(24, math.min(40, math.floor(W / 4)))
 local CONTENT_TOP = 3
 local CONTENT_BOTTOM = H - 1
 local CONTENT_ROWS = CONTENT_BOTTOM - CONTENT_TOP + 1
 local DETAIL_X = LIST_W + 3
 local DETAIL_W = W - DETAIL_X + 1
 local NAME_W = LIST_W - 8
-local GAUGE_W = 16
+local GAUGE_W = math.max(16, math.min(40, math.floor(DETAIL_W / 3)))
 
 local BG = 0x000000
 local FG = 0xFFFFFF
@@ -76,89 +76,33 @@ local function wrap(text, width)
   return lines
 end
 
-local function comma(number)
-  local text = string.format("%d", number)
-  local sign, digits = text:match("^(%-?)(%d+)$")
-  if not digits then
-    return text
-  end
-  local grouped = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
-  return sign .. grouped
-end
+-- nicknames set in ocwatch show here too, since both read the same file
+local config = gt.loadConfig()
 
 local function friendlyName(entry)
   if entry.friendly == nil then
-    entry.friendly = gt.friendlyName(entry.address) or false
+    entry.friendly = gt.displayName(entry.address, config) or false
   end
   return entry.friendly or entry.kind
 end
 
-local function statusOf(address, methods)
-  local flags = {}
-  if gt.has(methods, "isMachineActive") then
-    flags[#flags + 1] = gt.call(address, "isMachineActive") and "active" or "idle"
-  end
-  if gt.has(methods, "isWorkAllowed") and gt.call(address, "isWorkAllowed") == false then
-    flags[#flags + 1] = "disabled"
-  end
-  if gt.has(methods, "hasWork") and gt.call(address, "hasWork") then
-    flags[#flags + 1] = "working"
-  end
-  return #flags > 0 and table.concat(flags, "  ") or nil
-end
-
-local function summaryLines(entry, methods, add)
-  local sensor = gt.sensorOf(entry.address)
-  local lastColor = nil
-
-  if sensor then
-    for index = gt.firstReading(sensor), #sensor do
-      local raw = tostring(sensor[index])
-      local gauge, label = gt.gaugeFromSensor(raw)
-      if gauge then
-        gauge.color = lastColor or VALUE
-        if label ~= "" then
-          add(label, DIM)
-        end
-        add(nil, nil, nil, nil, gauge)
-      else
-        local parts = gt.segments(raw, FG)
-        if #parts > 0 then
-          add(nil, nil, nil, nil, nil, parts)
-          for _, part in ipairs(parts) do
-            if part.color ~= FG and part.text:match("%S") then
-              lastColor = part.color
-            end
-          end
-        end
+local function summaryLines(entry, add)
+  for _, reading in ipairs(gt.readings(entry.address)) do
+    if reading.kind == "gauge" then
+      if reading.label ~= "" then
+        add(reading.label, DIM)
+      end
+      reading.color = (reading.colorCode and gt.MC_COLORS[reading.colorCode])
+        or (reading.unit == "EU" and ENERGY)
+        or VALUE
+      add(nil, nil, nil, nil, reading)
+    elseif not reading.usedAsLabel then
+      local parts = gt.segments(reading.raw, FG)
+      if #parts > 0 then
+        add(nil, nil, nil, nil, nil, parts)
       end
     end
-    return
   end
-
-  -- without sensor text the raw counters are all a machine offers
-  local function numeric(label, currentMethod, maxMethod, color)
-    if not (gt.has(methods, currentMethod) and gt.has(methods, maxMethod)) then
-      return
-    end
-    local value = gt.call(entry.address, currentMethod)
-    local maximum = gt.call(entry.address, maxMethod)
-    if type(value) ~= "number" or type(maximum) ~= "number" or maximum <= 0 then
-      return
-    end
-    add(label, DIM)
-    add(nil, nil, nil, nil, {
-      value = value,
-      max = maximum,
-      current = comma(value),
-      maximum = comma(maximum),
-      unit = "",
-      color = color,
-    })
-  end
-
-  numeric("Energy", "getEUStored", "getEUMaxStored", ENERGY)
-  numeric("Progress", "getWorkProgress", "getWorkMaxProgress", VALUE)
 end
 
 local function detailLines(entry)
@@ -176,7 +120,7 @@ local function detailLines(entry)
 
   local methods = gt.methodsOf(entry.address) or {}
 
-  add(friendlyName(entry), FG, statusOf(entry.address, methods), VALUE)
+  add(friendlyName(entry), FG, gt.statusOf(entry.address, methods), VALUE)
 
   local where = ""
   if gt.has(methods, "getCoordinates") then
@@ -189,7 +133,7 @@ local function detailLines(entry)
   add("")
 
   local before = #lines
-  summaryLines(entry, methods, add)
+  summaryLines(entry, add)
   if #lines > before then
     add("")
   end
