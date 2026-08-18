@@ -1,0 +1,2 @@
+-- debug program that lists all attached components for exploration
+-- gui driven via screeen
