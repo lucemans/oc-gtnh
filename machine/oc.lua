@@ -55,6 +55,16 @@ function oc.frame()
   return table.concat(rows, "\n")
 end
 
+-- the live buffer, not the snapshot taken at the last event.pull: a program that
+-- draws and then returns has nothing captured yet
+function oc.screen()
+  local rows = {}
+  for y = 1, oc.height do
+    rows[y] = table.concat(screen[y])
+  end
+  return table.concat(rows, "\n")
+end
+
 function oc.printed()
   return table.concat(oc.output, "\n")
 end

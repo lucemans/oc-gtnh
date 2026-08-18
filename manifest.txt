@@ -10,3 +10,5 @@ programs/occonnect.lua
 programs/ockeypad.lua
 programs/ocmkfs.lua
 programs/ocglass.lua
+programs/ocserve.lua
+programs/ocview.lua

@@ -13,6 +13,9 @@ local SECTION = core.SECTION
 
 core.CONFIG_PATH = "/etc/ocgt.cfg"
 
+-- the port ocserve answers on and ocview asks on
+core.PORT = 4021
+
 core.MC_COLORS = {
   ["0"] = 0x000000, ["1"] = 0x0000AA, ["2"] = 0x00AA00, ["3"] = 0x00AAAA,
   ["4"] = 0xAA0000, ["5"] = 0xAA00AA, ["6"] = 0xFFAA00, ["7"] = 0xAAAAAA,

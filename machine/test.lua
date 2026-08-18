@@ -874,6 +874,132 @@ test("occonnect survives ntfy being down", function()
 end)
 
 -------------------------------------------------------------------------------
+-- ocserve and ocview
+
+local function fakeModem(address, wireless)
+  local sent = {}
+  return {
+    address = address,
+    kind = "modem",
+    sent = sent,
+    methods = {
+      open = "function(port:number):boolean", close = "function([port]):boolean",
+      isOpen = "function(port:number):boolean", isWireless = "function():boolean",
+      send = "function(address,port,...):boolean",
+      broadcast = "function(port,...):boolean",
+      setStrength = "function(value:number):number",
+      maxPacketSize = "function():number",
+    },
+    values = {
+      open = function()
+        return true
+      end,
+      close = function()
+        return true
+      end,
+      isOpen = function()
+        return true
+      end,
+      isWireless = function()
+        return wireless == true
+      end,
+      setStrength = function(value)
+        sent.strength = value
+        return value
+      end,
+      maxPacketSize = function()
+        return 8192
+      end,
+      send = function(to, port, kind, payload)
+        sent[#sent + 1] = { to = to, port = port, kind = kind, payload = payload }
+        return true
+      end,
+      broadcast = function(port, kind)
+        sent[#sent + 1] = { to = "*", port = port, kind = kind }
+        return true
+      end,
+    },
+  }
+end
+
+local PORT = 4021
+
+test("ocserve answers a status request", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  -- localAddress, remoteAddress, port, distance, then the payload
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus?")
+
+  local ok, reason = oc.run("ocserve", "--once")
+  check(ok, "ocserve crashed: " .. tostring(reason))
+  check(#modem.sent == 1, "expected exactly one reply, got " .. #modem.sent)
+
+  local reply = modem.sent[1]
+  check(reply and reply.to == "bb000000", "did not answer the asker directly")
+  check(reply and reply.kind == "ocstatus!", "wrong reply marker")
+
+  local cards = reply and require("serialization").unserialize(reply.payload)
+  check(type(cards) == "table" and #cards > 0, "sent no machines")
+  check(cards and cards[1].name == "Super Tank", "did not name the machine")
+  check(cards and #cards[1].gauges > 0, "sent no readings")
+  -- the tablet should not have to parse "42,000" back into a number
+  check(cards and type(cards[1].gauges[1].percent) == "number", "no percentage sent")
+end)
+
+test("ocserve raises a wireless card off zero strength", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+
+  oc.run("ocserve", "--once")
+  -- a wireless card sits at zero range until told otherwise, which looks
+  -- exactly like a card that does not work
+  check(modem.sent.strength ~= nil and modem.sent.strength > 0, "never set the strength")
+end)
+
+test("ocserve ignores traffic that is not its own", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", false)
+  oc.components = { modem, SUPER_TANK }
+  oc.push("modem_message", modem.address, "bb000000", PORT, 0, "something else")
+
+  oc.run("ocserve", "--once")
+  check(#modem.sent == 0, "answered a message it should have ignored")
+end)
+
+test("ocview asks and draws what comes back", function()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  local payload = require("serialization").serialize({
+    {
+      name = "Super Tank",
+      status = "idle",
+      gauges = { { label = "Bio Diesel", current = "42,000", maximum = "4,000,000",
+        unit = "L", percent = 1.05 } },
+    },
+  })
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!", payload)
+
+  local ok, reason = oc.run("ocview", "--once")
+  check(ok, "ocview crashed: " .. tostring(reason))
+
+  local frame = oc.screen()
+  check(contains(frame, "Super Tank"), "did not show the machine")
+  check(contains(frame, "42,000 / 4,000,000 L"), "did not show the reading")
+  check(contains(frame, "Bio Diesel"), "did not label the gauge")
+  check(modem.sent[1] and modem.sent[1].kind == "ocstatus?", "never asked")
+  if show then
+    say(frame)
+  end
+end)
+
+test("ocview says so when nothing answers", function()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+
+  oc.run("ocview", "--once")
+  check(contains(oc.screen(), "no answer"), "did not report the silence")
+end)
+
+-------------------------------------------------------------------------------
 -- ocmkfs
 
 -- a filesystem that records what gets written to it, shaped like the component
