@@ -301,3 +301,18 @@ longer fits, since its board size is derived from the screen.
 
 `core.viewport(gpu)` wraps the call and falls back to `getResolution` if a card
 does not offer a viewport.
+
+## What the OpenOS shell does to a command
+
+Driving a machine through `occonnect` means every command passes through
+`sh.execute`, and it is not bash.
+
+- **Double quotes are removed.** `echo print("x")` writes `print(x)`, which is
+  valid Lua and wrong. Lua's long-bracket strings `[[x]]` survive intact.
+- **`<` and `>` are redirects wherever they appear.** `while a<b do` silently
+  became `while a` plus a redirect, and the file was written with a syntax
+  error rather than an error being reported.
+- **`;` does not separate commands.** `echo one; echo two` fails.
+- **`lua -e` is not supported.** The OpenOS `lua` program takes a file path.
+
+This is why `occonnect` gained `:file` and `:lua`, which never reach the shell.

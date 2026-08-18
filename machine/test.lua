@@ -903,6 +903,73 @@ test("occonnect reads a command containing quotes", function()
   check(contains(oc.executed[1] or "", 'echo "hi there"'), "mangled the quotes")
 end)
 
+-- Pushing a file through echo and a redirect costs a round trip per line, and
+-- the shell eats the quotes on the way past.
+test("occonnect writes a file straight from a message", function()
+  connected("ABC12345")
+  oc.components = { INTERNET }
+  local polls = 0
+  oc.respond = function(url)
+    if url:find("poll=1", 1, true) then
+      polls = polls + 1
+      if polls == 1 then
+        return 200, "OK", ""
+      end
+      return 200, "OK", ntfyLine("NEW1",
+        'ABC12345 :file /bin/hello.lua\\nprint(\\"hi\\")\\nreturn 0')
+    end
+    return 200, "OK", ""
+  end
+
+  oc.run("occonnect", "--once")
+  check(#oc.executed == 0, "sent it to the shell instead of writing it")
+  check(oc.files["/bin/hello.lua"] == 'print("hi")\nreturn 0',
+    "wrote " .. tostring(oc.files["/bin/hello.lua"]))
+  check(contains(posted() or "", "/bin/hello.lua"), "did not say what it wrote")
+end)
+
+test("occonnect runs Lua and sends back what it printed", function()
+  connected("ABC12345")
+  oc.components = { INTERNET }
+  local polls = 0
+  oc.respond = function(url)
+    if url:find("poll=1", 1, true) then
+      polls = polls + 1
+      if polls == 1 then
+        return 200, "OK", ""
+      end
+      return 200, "OK", ntfyLine("NEW1",
+        'ABC12345 :lua\\nprint(2 + 3, [[answer]])')
+    end
+    return 200, "OK", ""
+  end
+
+  oc.run("occonnect", "--once")
+  check(#oc.executed == 0, "sent it to the shell instead of running it")
+  local out = posted() or ""
+  check(contains(out, "5\tanswer"), "did not send back what it printed: " .. out)
+end)
+
+test("occonnect reports Lua that does not compile", function()
+  connected("ABC12345")
+  oc.components = { INTERNET }
+  local polls = 0
+  oc.respond = function(url)
+    if url:find("poll=1", 1, true) then
+      polls = polls + 1
+      if polls == 1 then
+        return 200, "OK", ""
+      end
+      return 200, "OK", ntfyLine("NEW1", 'ABC12345 :lua\\nthis is not lua')
+    end
+    return 200, "OK", ""
+  end
+
+  oc.run("occonnect", "--once")
+  -- silence here would look exactly like a command that worked
+  check(contains(posted() or "", "failed"), "did not report the broken chunk")
+end)
+
 test("occonnect survives ntfy being down", function()
   connected("ABC12345")
   oc.components = { INTERNET }

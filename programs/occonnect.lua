@@ -11,6 +11,12 @@
 --
 -- Commands are published to   <server>/<topic>
 -- Output comes back on        <server>/<topic>-out
+--
+-- A message is the pairing code, a space, then either a shell command or one of
+-- these, whose body is everything after the first line:
+--
+--   :file /bin/thing.lua    write the body to that path
+--   :lua                    run the body as Lua and send back what it prints
 
 local component = require("component")
 local computer = require("computer")
@@ -18,7 +24,7 @@ local core = require("oclib")
 local sh = require("sh")
 local term = require("term")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
 -- a poll costs an HTTPS round trip, and this machine has other work to do
 local POLL_SECONDS = 5
@@ -169,6 +175,57 @@ local function run(command)
   return reason ~= false, output
 end
 
+-- A command starting with a colon never reaches the shell. Pushing a file
+-- through echo and a redirect costs one round trip per line and loses every
+-- quote to the shell's own parsing, and there is no way to run a piece of Lua
+-- without first writing it to disk.
+local function direct(command)
+  local verb, rest = command:match("^:(%a+)[ \t]*(.*)$")
+  if not verb then
+    return nil
+  end
+
+  if verb == "file" then
+    local path, body = rest:match("^(%S+)\n(.*)$")
+    if not path then
+      return false, "usage: :file /some/path, then the contents on the next line"
+    end
+    local file, reason = io.open(path, "w")
+    if not file then
+      return false, tostring(reason)
+    end
+    file:write(body)
+    file:close()
+    return true, #body .. " bytes written to " .. path
+  end
+
+  if verb == "lua" then
+    local printed = {}
+    local environment = setmetatable({
+      print = function(...)
+        local parts = table.pack(...)
+        for index = 1, parts.n do
+          parts[index] = tostring(parts[index])
+        end
+        printed[#printed + 1] = table.concat(parts, "\t", 1, parts.n)
+      end,
+    }, { __index = _ENV })
+
+    local chunk, reason = load(rest, "=remote", "t", environment)
+    if not chunk then
+      return false, tostring(reason)
+    end
+    local ok, trouble = pcall(chunk)
+    local output = table.concat(printed, "\n")
+    if not ok then
+      return false, output .. "\n" .. tostring(trouble)
+    end
+    return true, output
+  end
+
+  return false, "no such verb as :" .. verb
+end
+
 -------------------------------------------------------------------------------
 
 local arguments = { ... }
@@ -266,13 +323,18 @@ while true do
           say("  refused a command with the wrong code", RED)
           request(outbox, "refused: wrong pairing code")
         elseif command and command:match("%S") then
-          say("  > " .. command, CYAN)
-          local ok, output = run(command)
+          -- a body of Lua would otherwise scroll the whole screen away
+          say("  > " .. command:match("^[^\n]*"), CYAN)
+          local ok, output = direct(command)
+          if ok == nil then
+            ok, output = run(command)
+          end
           say(ok and "  done" or "  failed", ok and GREEN or RED)
           if #output > MAX_RESULT then
             output = output:sub(1, MAX_RESULT) .. "\n[truncated]"
           end
-          request(outbox, (ok and "ok  " or "failed  ") .. command .. "\n" .. output)
+          request(outbox, (ok and "ok  " or "failed  ")
+            .. command:match("^[^\n]*") .. "\n" .. output)
         end
       end
     end
