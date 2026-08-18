@@ -15,21 +15,33 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
 
 local W, H, GAUGE_W
 
+-- What is already on each row, so a frame only repaints rows that changed.
+-- Clearing the whole screen every two seconds is what made the display flicker,
+-- and on a real machine it also spends the GPU call budget for nothing.
+local drawnRows = {}
+
 -- recomputed on a resize: an attached display is often not the size the program
 -- started on
 local function layout()
   W, H = core.viewport(gpu)
   GAUGE_W = math.max(16, math.min(40, math.floor((W - 34) / 2)))
+  drawnRows = {}
 end
 
 layout()
+
+-- whatever emptied the screen also emptied what this program believes is on it
+local function blank()
+  term.clear()
+  drawnRows = {}
+end
 
 local BG = 0x000000
 local FG = 0xFFFFFF
@@ -71,12 +83,6 @@ local function fit(text, width)
     return unicode.sub(text, 1, width)
   end
   return text .. string.rep(" ", width - length)
-end
-
-local function write(x, y, text, foreground, background)
-  gpu.setForeground(foreground or FG)
-  gpu.setBackground(background or BG)
-  gpu.set(x, y, text)
 end
 
 local function colorOf(gauge)
@@ -235,37 +241,53 @@ local function wanted(entry, reading, index)
   return true
 end
 
-local function drawGauge(x, y, gauge, width)
-  local ratio = gauge.max > 0 and gauge.value / gauge.max or 0
-  if ratio < 0 then
-    ratio = 0
-  elseif ratio > 1 then
-    ratio = 1
-  end
-  local filled = math.floor(width * ratio + 0.5)
-
-  write(x, y, "[", DIM, BG)
-  local cursor = x + 1
-  if filled > 0 then
-    write(cursor, y, string.rep(FULL_BLOCK, filled), colorOf(gauge), BG)
-    cursor = cursor + filled
-  end
-  if width - filled > 0 then
-    write(cursor, y, string.rep(LIGHT_BLOCK, width - filled), DIM, BG)
-    cursor = cursor + width - filled
-  end
-  write(cursor, y, "]", DIM, BG)
-  cursor = cursor + 1
-
-  local unit = gauge.unit ~= "" and (" " .. gauge.unit) or ""
-  local text = string.format("  %s / %s%s  %.1f%%",
-    gauge.current, gauge.maximum, unit, ratio * 100)
-  write(cursor, y, fit(text, math.max(0, W - cursor)), FG, BG)
-end
-
 local function render(cards)
-  gpu.setBackground(BG)
-  gpu.fill(1, 1, W, H, " ")
+  local plan = {}
+
+  -- collected rather than drawn directly: a row is only worth touching once its
+  -- whole contents are known to differ from what is already there
+  local function write(x, row, text, foreground, background)
+    if row < 1 or row > H then
+      return
+    end
+    local ops = plan[row]
+    if not ops then
+      ops = { key = "" }
+      plan[row] = ops
+    end
+    ops[#ops + 1] = { x = x, text = text, fg = foreground, bg = background }
+    ops.key = ops.key .. x .. "\1" .. text .. "\1"
+      .. tostring(foreground) .. "\1" .. tostring(background) .. "\2"
+  end
+
+  local function drawGauge(x, y, gauge, width)
+    local ratio = gauge.max > 0 and gauge.value / gauge.max or 0
+    if ratio < 0 then
+      ratio = 0
+    elseif ratio > 1 then
+      ratio = 1
+    end
+    local filled = math.floor(width * ratio + 0.5)
+
+    write(x, y, "[", DIM, BG)
+    local cursor = x + 1
+    if filled > 0 then
+      write(cursor, y, string.rep(FULL_BLOCK, filled), colorOf(gauge), BG)
+      cursor = cursor + filled
+    end
+    if width - filled > 0 then
+      write(cursor, y, string.rep(LIGHT_BLOCK, width - filled), DIM, BG)
+      cursor = cursor + width - filled
+    end
+    write(cursor, y, "]", DIM, BG)
+    cursor = cursor + 1
+
+    local unit = gauge.unit ~= "" and (" " .. gauge.unit) or ""
+    local text = string.format("  %s / %s%s  %.1f%%",
+      gauge.current, gauge.maximum, unit, ratio * 100)
+    write(cursor, y, fit(text, math.max(0, W - cursor)), FG, BG)
+  end
+
   write(1, 1, fit("  ocwatch v" .. VERSION .. "    " .. #cards .. " machines", W), FG, BAR)
 
   local y = 3
@@ -311,6 +333,22 @@ local function render(cards)
   end
   write(1, H, fit("  [e] edit   [r] refresh   [q] quit      live every "
     .. REFRESH_SECONDS .. "s", W), FG, BAR)
+
+  -- only rows whose contents changed are touched
+  for row = 1, H do
+    local ops = plan[row]
+    local key = ops and ops.key or ""
+    if key ~= drawnRows[row] then
+      gpu.setBackground(BG)
+      gpu.fill(1, row, W, 1, " ")
+      for _, op in ipairs(ops or {}) do
+        gpu.setForeground(op.fg or FG)
+        gpu.setBackground(op.bg or BG)
+        gpu.set(op.x, row, op.text)
+      end
+      drawnRows[row] = key
+    end
+  end
 end
 
 local function sample()
@@ -606,7 +644,7 @@ end
 -- is simply a local dashboard, which is still useful
 local modem = net.modem()
 
-term.clear()
+blank()
 term.setCursorBlink(false)
 
 while true do
@@ -638,7 +676,7 @@ while true do
     elseif code == keyboard.keys.e then
       editor()
       config = core.loadConfig()
-      term.clear()
+      blank()
       term.setCursorBlink(false)
     end
   end

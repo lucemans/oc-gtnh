@@ -13,3 +13,4 @@ programs/ocmkfs.lua
 programs/ocglass.lua
 programs/ocserve.lua
 programs/ocview.lua
+programs/ocping.lua

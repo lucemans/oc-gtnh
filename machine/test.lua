@@ -1069,6 +1069,7 @@ local function fakeModem(address, wireless)
     methods = {
       open = "function(port:number):boolean", close = "function([port]):boolean",
       isOpen = "function(port:number):boolean", isWireless = "function():boolean",
+      getStrength = "function():number",
       send = "function(address,port,...):boolean",
       broadcast = "function(port,...):boolean",
       setStrength = "function(value:number):number",
@@ -1090,6 +1091,9 @@ local function fakeModem(address, wireless)
       setStrength = function(value)
         sent.strength = value
         return value
+      end,
+      getStrength = function()
+        return sent.strength or 0
       end,
       maxPacketSize = function()
         return 8192
@@ -1147,6 +1151,54 @@ test("ocserve ignores traffic that is not its own", function()
 
   oc.run("ocserve", "--once")
   check(#modem.sent == 0, "answered a message it should have ignored")
+end)
+
+-- A satellite runs ocwatch, not ocserve, so this is the path that actually
+-- answers the main computer. It is easy to break without noticing: the dashboard
+-- keeps working while the network half goes quiet.
+test("ocwatch answers a status request while it is watching", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    hostname = "satellite",
+    watch = { { address = SUPER_TANK.address, hidden = {} } },
+    alerts = {},
+  })
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus?")
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  check(#modem.sent == 1, "expected one reply, got " .. #modem.sent)
+
+  local reply = modem.sent[1]
+  check(reply and reply.to == "bb000000", "did not answer the asker directly")
+  check(reply and reply.kind == "ocstatus!", "wrong reply marker")
+  check(contains(oc.frame(), "served"), "did not say it served the request")
+end)
+
+test("ocping answers a ping", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000004", true)
+  oc.components = { modem }
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocping?")
+
+  local ok, reason = oc.run("ocping", "--listen")
+  check(ok, "ocping crashed: " .. tostring(reason))
+  local pong
+  for _, packet in ipairs(modem.sent) do
+    if packet.kind == "ocping!" then
+      pong = packet
+    end
+  end
+  check(pong ~= nil, "never answered the ping")
+  check(pong and pong.to == "bb000000", "answered somebody else")
+end)
+
+test("ocping says plainly when nothing answers", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000004", true)
+  oc.components = { modem }
+
+  oc.run("ocping")
+  check(contains(oc.printed(), "nothing heard"), "did not report the silence")
 end)
 
 test("ocview asks and draws what comes back", function()
@@ -1593,6 +1645,29 @@ test("ocwatch stops a machine when a tank runs low", function()
   if show then
     say(oc.frame())
   end
+end)
+
+test("ocwatch repaints without clearing the screen every frame", function()
+  local tank = tankAt("100")
+  oc.components = { tank }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = {},
+  })
+
+  -- three idle ticks, each one a refresh
+  oc.push()
+  oc.push()
+  oc.push()
+
+  oc.run("ocwatch")
+  local full = 0
+  for _, fill in ipairs(oc.fills) do
+    if fill.w >= oc.width and fill.h >= oc.height then
+      full = full + 1
+    end
+  end
+  check(full <= 1, "cleared the whole screen " .. full .. " times over four frames")
 end)
 
 test("ocwatch acts again after its runtime state was saved into the config", function()
