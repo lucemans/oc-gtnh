@@ -5,6 +5,9 @@
 
 local component = require("component")
 local filesystem = require("filesystem")
+local term = require("term")
+
+local VERSION = "0.3.0"
 
 local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/programs/"
 local INSTALL_DIR = "/bin"
@@ -13,6 +16,34 @@ local PROGRAMS = {
   "ocdebug.lua",
   "ocdump.lua",
 }
+
+local WHITE = 0xFFFFFF
+local DIM = 0x999999
+local GREEN = 0x66CC66
+local CYAN = 0x66CCFF
+local RED = 0xCC6666
+
+local gpu = component.isAvailable("gpu") and component.gpu or nil
+
+local function paint(color)
+  if gpu then
+    gpu.setForeground(color)
+  end
+end
+
+local function write(text, color)
+  paint(color)
+  io.write(text)
+end
+
+-- written as bytes rather than \u{} so the file still loads on a Lua 5.2 CPU
+local FULL_BLOCK = "\226\150\136"
+local LIGHT_BLOCK = "\226\150\145"
+
+local function bar(done, total, width)
+  local filled = math.floor(width * done / total + 0.5)
+  return "[" .. string.rep(FULL_BLOCK, filled) .. string.rep(LIGHT_BLOCK, width - filled) .. "]"
+end
 
 local function waitForConnect(handle)
   while true do
@@ -69,7 +100,17 @@ local function download(url)
   end
 end
 
-local function install(path, contents)
+local function readFile(path)
+  local file = io.open(path, "r")
+  if not file then
+    return nil
+  end
+  local contents = file:read("*a")
+  file:close()
+  return contents
+end
+
+local function writeFile(path, contents)
   local file, reason = io.open(path, "w")
   if not file then
     return nil, tostring(reason)
@@ -79,33 +120,73 @@ local function install(path, contents)
   return true
 end
 
+local function versionOf(text)
+  return text and text:match('VERSION%s*=%s*"([^"]+)"') or nil
+end
+
+local function describe(existing, contents)
+  local version = versionOf(contents)
+  if not existing then
+    return "installed   v" .. (version or "?"), GREEN
+  end
+  if existing == contents then
+    return "up to date  v" .. (version or "?"), DIM
+  end
+  local was = versionOf(existing)
+  if was and version and was ~= version then
+    return "updated     v" .. was .. " -> v" .. version, GREEN
+  end
+  return "changed     v" .. (version or "?"), CYAN
+end
+
 if not component.isAvailable("internet") then
   io.stderr:write("ocup: no internet card installed\n")
   return 1
 end
 
-local failed = 0
+local nameWidth = 0
 for _, name in ipairs(PROGRAMS) do
+  nameWidth = math.max(nameWidth, #name)
+end
+
+write("ocup v" .. VERSION .. "\n\n", WHITE)
+
+local failed = 0
+for index, name in ipairs(PROGRAMS) do
+  term.clearLine()
+  write("  " .. bar(index - 1, #PROGRAMS, 12) .. " ", CYAN)
+  write(name, DIM)
+
   local path = filesystem.concat(INSTALL_DIR, name)
+  local existing = readFile(path)
   local contents, reason = download(BASE_URL .. name)
+
+  local status, color
   if not contents then
-    io.stderr:write("ocup: " .. name .. ": " .. reason .. "\n")
+    status, color = "failed      " .. reason, RED
     failed = failed + 1
   else
     -- overwriting ocup.lua while it runs is safe: OpenOS loads the whole file first
-    local ok, writeReason = install(path, contents)
+    local ok, writeReason = writeFile(path, contents)
     if ok then
-      print(path .. " (" .. #contents .. " bytes)")
+      status, color = describe(existing, contents)
     else
-      io.stderr:write("ocup: " .. path .. ": " .. writeReason .. "\n")
+      status, color = "failed      " .. writeReason, RED
       failed = failed + 1
     end
   end
+
+  term.clearLine()
+  write("  " .. name .. string.rep(" ", nameWidth - #name) .. "  ", WHITE)
+  write(status .. "\n", color)
 end
 
+term.clearLine()
+write("  " .. bar(#PROGRAMS, #PROGRAMS, 12) .. " ", CYAN)
 if failed > 0 then
-  io.stderr:write("ocup: " .. failed .. " of " .. #PROGRAMS .. " failed\n")
+  write(failed .. " of " .. #PROGRAMS .. " failed\n", RED)
+  paint(WHITE)
   return 1
 end
-
-print("ocup: " .. #PROGRAMS .. " programs up to date")
+write(#PROGRAMS .. " programs ready\n", GREEN)
+paint(WHITE)
