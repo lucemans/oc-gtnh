@@ -5,7 +5,6 @@
 
 local component = require("component")
 local filesystem = require("filesystem")
-local internet = require("internet")
 
 local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/programs/"
 local INSTALL_DIR = "/bin"
@@ -30,16 +29,18 @@ local function waitForConnect(handle)
   end
 end
 
+-- the component handle is used directly: the "internet" library wraps it in a
+-- table whose close field shadows the real method and is not callable
 local function download(url)
-  local ok, handle = pcall(internet.request, url)
-  if not ok then
-    return nil, tostring(handle)
+  local handle, reason = component.internet.request(url)
+  if not handle then
+    return nil, tostring(reason)
   end
 
-  local connected, reason = waitForConnect(handle)
+  local connected, connectReason = waitForConnect(handle)
   if not connected then
     handle.close()
-    return nil, tostring(reason)
+    return nil, tostring(connectReason)
   end
 
   local code, message = handle.response()
