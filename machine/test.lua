@@ -961,6 +961,30 @@ test("ocglass draws the watched machines", function()
   end
 end)
 
+test("ocglass sends a bar size as height then width", function()
+  local record = {}
+  oc.components = { fakeGlasses(record), SUPER_TANK }
+
+  oc.run("ocglass", "--once")
+
+  local sizes = {}
+  for _, call in ipairs(record) do
+    if call.method == "setSize" then
+      sizes[#sizes + 1] = call.args
+    end
+  end
+  check(#sizes > 0, "never sized a bar")
+
+  -- Measured on real glasses: setSize(100, 5) drew a vertical line and
+  -- setSize(5, 100) a horizontal one, so the first argument is the height. A
+  -- bar is wide and short, so the second number must be the larger one.
+  local first = sizes[1]
+  check(first and first.n == 2, "setSize wants two arguments")
+  check(first and first[2] > first[1],
+    "sent " .. tostring(first and first[1]) .. ", " .. tostring(first and first[2])
+      .. " which draws a vertical sliver")
+end)
+
 test("ocglass reuses widgets instead of rebuilding the scene", function()
   local record = {}
   local glasses = fakeGlasses(record)

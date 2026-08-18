@@ -271,3 +271,12 @@ Argument shapes, read off a fresh widget of each kind:
 Sending 0 to 255 for colour would wash every widget out to white. A rect offers
 `getSize`/`setSize` where a text label offers `getScale` and `getText`; the rest
 is common to both.
+
+**`setSize` takes height first, then width.** Measured, not read: a calibration
+drawing `setSize(100, 5)` produced a vertical line and `setSize(5, 100)` a
+horizontal one. Community examples show `setSize(250, 30)` as width-then-height,
+which is the opposite, so trust the calibration. `ocglass` wraps this in a
+`setSize(widget, width, height)` helper that swaps the arguments once, and a
+check asserts a bar goes out wider than it is tall.
+
+Whether `setPosition` is reversed the same way is not yet established.

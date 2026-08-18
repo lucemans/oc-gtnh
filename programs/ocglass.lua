@@ -18,7 +18,7 @@ local gt = require("ocgt")
 local keyboard = require("keyboard")
 local lp = require("oclogistics")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
 local REFRESH_SECONDS = 5
 
@@ -72,6 +72,19 @@ local function rgb(color)
   return ((color >> 16) & 0xFF) / 255,
     ((color >> 8) & 0xFF) / 255,
     (color & 0xFF) / 255
+end
+
+-- Measured on real glasses, not taken from the examples floating around: the
+-- arguments are reversed. setSize(100, 5) drew a vertical line and
+-- setSize(5, 100) drew a horizontal one, so the first number is the height.
+local function setSize(widget, width, height)
+  return set(widget, "setSize", height, width)
+end
+
+-- The same reversal has not been established for position, so this stays a
+-- named place to change rather than an assumption spread over the file.
+local function setPosition(widget, x, y)
+  return set(widget, "setPosition", x, y)
 end
 
 -------------------------------------------------------------------------------
@@ -138,32 +151,34 @@ if mode == "calibrate" then
   core.setValue(address, "removeAll")
   say("ocglass v" .. VERSION .. "   calibration", WHITE)
 
+  -- size is settled, so this round asks the one question left: which number in
+  -- setPosition moves a widget sideways
   local shapes = {
-    { name = "A", w = 100, h = 5, x = 20, y = 20, color = 0xFF5555 },
-    { name = "B", w = 5, h = 100, x = 20, y = 40, color = 0x55FF55 },
-    { name = "C", w = 50, h = 50, x = 20, y = 160, color = 0x5555FF },
+    { name = "LEFT-TOP", w = 60, h = 6, x = 10, y = 10, color = 0xFF5555 },
+    { name = "FAR-DOWN", w = 60, h = 6, x = 10, y = 200, color = 0x55FF55 },
+    { name = "FAR-RIGHT", w = 60, h = 6, x = 200, y = 10, color = 0x5555FF },
   }
 
   for _, shape in ipairs(shapes) do
     local rect = core.call(address, "addRect")
-    set(rect, "setPosition", shape.x, shape.y)
-    set(rect, "setSize", shape.w, shape.h)
+    setPosition(rect, shape.x, shape.y)
+    setSize(rect, shape.w, shape.h)
     set(rect, "setColor", rgb(shape.color))
     set(rect, "setAlpha", 0.8)
 
     local text = core.call(address, "addTextLabel")
-    set(text, "setPosition", shape.x + 110, shape.y)
-    set(text, "setText", shape.name .. " setSize(" .. shape.w .. "," .. shape.h .. ")")
+    setPosition(text, shape.x, shape.y + 8)
+    set(text, "setText", shape.name)
     set(text, "setColor", rgb(shape.color))
     set(text, "setScale", TEXT_SCALE)
 
-    say("  " .. shape.name .. "  setSize(" .. shape.w .. ", " .. shape.h
-      .. ")  at (" .. shape.x .. ", " .. shape.y .. ")", DIM)
+    say("  " .. shape.name .. "  setPosition(" .. shape.x .. ", " .. shape.y .. ")", DIM)
   end
 
   say("")
-  say("  A should be a wide flat bar if setSize is (width, height).", DIM)
-  say("  B should be a tall thin bar. C is a square, for scale.", DIM)
+  say("  all three are horizontal bars now, which confirms the size fix.", DIM)
+  say("  if setPosition is (x, y): green sits low, blue sits right.", DIM)
+  say("  if it is reversed: green sits right, blue sits low.", DIM)
   say("  ocglass --clear when done", DIM)
   return 0
 end
@@ -217,7 +232,7 @@ local function label(row, text, color, x, y)
     scene["text" .. row] = widget
     set(widget, "setScale", TEXT_SCALE)
   end
-  set(widget, "setPosition", x, y)
+  setPosition(widget, x, y)
   set(widget, "setText", text)
   set(widget, "setColor", rgb(color))
   return widget
@@ -231,16 +246,18 @@ local function bar(row, ratio, color, x, y)
     set(back, "setColor", rgb(0x333333))
     set(back, "setAlpha", 0.4)
   end
-  set(back, "setPosition", x, y)
-  set(back, "setSize", BAR_W, BAR_H)
+  setPosition(back, x, y)
+  setSize(back, BAR_W, BAR_H)
 
   local fill = scene["fill" .. row]
   if not fill then
     fill = core.call(address, "addRect")
     scene["fill" .. row] = fill
   end
-  set(fill, "setPosition", x, y)
-  set(fill, "setSize", math.max(1, math.floor(BAR_W * ratio)), BAR_H)
+  setPosition(fill, x, y)
+  -- a bar at one percent is a sliver that reads as a broken widget, so it keeps
+  -- a floor wide enough to be seen as a bar
+  setSize(fill, math.max(3, math.floor(BAR_W * ratio)), BAR_H)
   set(fill, "setColor", rgb(color))
   set(fill, "setAlpha", 0.9)
 end
