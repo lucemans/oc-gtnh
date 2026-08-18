@@ -19,6 +19,8 @@ function oc.reset()
   oc.components = {}
   oc.invoked = {}
   oc.frames = {}
+  oc.fills = {}
+  oc.executed = {}
   oc.directories = {}
   oc.deviceInfo = {}
   oc.output = {""}
@@ -110,6 +112,8 @@ function gpu.set(x, y, text)
   end
 end
 function gpu.fill(x, y, w, h, char)
+  -- recorded so a test can tell a targeted repaint from clearing the screen
+  oc.fills[#oc.fills + 1] = { x = x, y = y, w = w, h = h, char = char }
   for row = y, y + h - 1 do
     for column = x, x + w - 1 do
       if screen[row] and column >= 1 and column <= oc.width then
@@ -373,6 +377,20 @@ end
 -------------------------------------------------------------------------------
 
 function oc.install()
+  package.preload["sh"] = function()
+    return {
+      execute = function(_, command)
+        oc.executed[#oc.executed + 1] = command
+        -- the shell writes the command's output to the redirect target, which
+        -- occonnect then reads back
+        local target = command:match(">%s*(%S+)%s*$")
+        if target then
+          oc.files[target] = "output of " .. (command:match("^(.-)%s*>") or command)
+        end
+        return true
+      end,
+    }
+  end
   package.preload["oclib"] = function()
     return dofile("lib/oclib.lua")
   end
@@ -409,6 +427,11 @@ function oc.install()
 
   _G._OSVERSION = oc.osversion
   os.sleep = function() end
+  -- held still alongside computer.uptime, so anything seeding a generator from
+  -- the clock lays out the same board on every run and a test can rely on it
+  os.time = function()
+    return 1700000000
+  end
 
   print = function(...)
     local parts = table.pack(...)

@@ -6,3 +6,4 @@ programs/ocdebug.lua
 programs/ocdump.lua
 programs/ocwatch.lua
 programs/ocsweeper.lua
+programs/occonnect.lua

@@ -722,6 +722,127 @@ test("ocdump keeps scalar returns on one line", function()
 end)
 
 -------------------------------------------------------------------------------
+-- occonnect
+
+local function connected(code)
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = {}, watch = {}, alerts = {},
+    connect = { server = "https://ntfy.sh", topic = "oc-755c25caccec", code = code },
+  })
+end
+
+-- shaped exactly like a real ntfy line, captured from ntfy.sh
+local function ntfyLine(id, message)
+  return '{"id":"' .. id .. '","time":1787070203,"expires":1787113403,'
+    .. '"event":"message","topic":"oc-755c25caccec","message":"' .. message .. '"}'
+end
+
+local function posted()
+  local body = nil
+  for _, request in ipairs(oc.requests) do
+    if request.url:find("-out", 1, true) then
+      body = request.body
+    end
+  end
+  return body
+end
+
+test("occonnect shows a pairing code and a topic", function()
+  oc.components = { INTERNET }
+  oc.respond = function()
+    return 200, "OK", ""
+  end
+
+  oc.run("occonnect", "--once")
+  local out = oc.printed()
+  check(contains(out, "pairing code"), "no pairing code shown")
+  check(contains(out, "oc-755c25ca"), "topic not shown")
+  -- both have to survive a restart or the pairing is worthless
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  check(saved and saved.connect and saved.connect.code ~= nil, "code not saved")
+  check(saved and saved.connect.topic ~= nil, "topic not saved")
+end)
+
+test("occonnect runs a command carrying the right code", function()
+  connected("ABC12345")
+  oc.components = { INTERNET }
+  local polls = 0
+  oc.respond = function(url)
+    if url:find("poll=1", 1, true) then
+      polls = polls + 1
+      -- the first poll only learns where the log is; the second carries work
+      if polls == 1 then
+        return 200, "OK", ntfyLine("OLD1", "ABC12345 should-not-run")
+      end
+      return 200, "OK", ntfyLine("NEW1", "ABC12345 ocup")
+    end
+    return 200, "OK", ""
+  end
+
+  oc.run("occonnect", "--once")
+  check(#oc.executed == 1, "expected exactly one command, got " .. #oc.executed)
+  check(contains(oc.executed[1] or "", "ocup"), "did not run the command")
+  check(not contains(table.concat(oc.executed, " "), "should-not-run"),
+    "replayed a command that was already in the topic at startup")
+  check(posted() ~= nil, "no output published back")
+end)
+
+test("occonnect refuses a command with the wrong code", function()
+  connected("ABC12345")
+  oc.components = { INTERNET }
+  local polls = 0
+  oc.respond = function(url)
+    if url:find("poll=1", 1, true) then
+      polls = polls + 1
+      if polls == 1 then
+        return 200, "OK", ""
+      end
+      return 200, "OK", ntfyLine("NEW1", "WRONGCODE reboot")
+    end
+    return 200, "OK", ""
+  end
+
+  oc.run("occonnect", "--once")
+  -- an ntfy topic is a public pipe, so this is the only thing between a leaked
+  -- topic name and someone running whatever they like on the machine
+  check(#oc.executed == 0, "ran a command that carried the wrong code")
+  check(contains(oc.printed(), "refused"), "did not report the refusal")
+end)
+
+test("occonnect reads a command containing quotes", function()
+  connected("ABC12345")
+  oc.components = { INTERNET }
+  local polls = 0
+  oc.respond = function(url)
+    if url:find("poll=1", 1, true) then
+      polls = polls + 1
+      if polls == 1 then
+        return 200, "OK", ""
+      end
+      -- ntfy escapes the quotes, so a pattern would stop at the first one
+      return 200, "OK", ntfyLine("NEW1", 'ABC12345 echo \\"hi there\\"')
+    end
+    return 200, "OK", ""
+  end
+
+  oc.run("occonnect", "--once")
+  check(#oc.executed == 1, "did not run the quoted command")
+  check(contains(oc.executed[1] or "", 'echo "hi there"'), "mangled the quotes")
+end)
+
+test("occonnect survives ntfy being down", function()
+  connected("ABC12345")
+  oc.components = { INTERNET }
+  oc.respond = function()
+    return 502, "Bad Gateway", ""
+  end
+
+  local ok = oc.run("occonnect", "--once")
+  check(ok, "crashed when ntfy was down")
+  check(#oc.executed == 0, "ran something despite the poll failing")
+end)
+
+-------------------------------------------------------------------------------
 -- ocwatch
 
 local function tankAt(amount)
@@ -828,14 +949,27 @@ end)
 -------------------------------------------------------------------------------
 -- ocsweeper
 
-local SWEEPER_ORIGIN_X, SWEEPER_ORIGIN_Y = 2, 3
+local SWEEPER_CELL_W = 3
+local TOP_LEFT = "\226\148\140"
 
-local function cellTouch(x, y, button)
-  oc.push("touch", "screen", SWEEPER_ORIGIN_X + (x - 1) * 2, SWEEPER_ORIGIN_Y + y - 1, button or 0)
+-- mirrors the layout in programs/ocsweeper.lua: the board is boxed and centred,
+-- so where a cell lands depends on the board size and the screen
+local function sweeperOrigin(width, height)
+  local columns = width * SWEEPER_CELL_W + 1
+  local rows = height + 2
+  local x = math.max(1, math.floor((oc.width - columns) / 2) + 1)
+  local y = 2 + math.max(0, math.floor(((oc.height - 2) - (rows + 1)) / 2))
+  return x, y
+end
+
+local function cellTouch(boardW, boardH, x, y, button)
+  local originX, originY = sweeperOrigin(boardW, boardH)
+  oc.push("touch", "screen",
+    originX + (x - 1) * SWEEPER_CELL_W + 1, originY + y, button or 0)
 end
 
 test("ocsweeper draws a board", function()
-  cellTouch(1, 1)
+  cellTouch(8, 8, 1, 1)
 
   local ok, reason = oc.run("ocsweeper", "8", "8", "10")
   check(ok, "ocsweeper crashed: " .. tostring(reason))
@@ -865,7 +999,7 @@ test("ocsweeper never loses on the first click", function()
     for x = 1, 8 do
       oc.reset()
       oc.components = {}
-      cellTouch(x, y)
+      cellTouch(8, 8, x, y)
       oc.run("ocsweeper", "8", "8", "50")
       if contains(oc.frame(), "boom") then
         check(false, "the first click hit a mine at " .. x .. "," .. y)
@@ -881,7 +1015,7 @@ test("ocsweeper still protects the first click on a crowded board", function()
   for _ = 1, 10 do
     oc.reset()
     oc.components = {}
-    cellTouch(1, 1)
+    cellTouch(2, 2, 1, 1)
     oc.run("ocsweeper", "2", "2", "3")
     if contains(oc.frame(), "boom") then
       check(false, "the first click hit a mine on a crowded board")
@@ -891,7 +1025,7 @@ test("ocsweeper still protects the first click on a crowded board", function()
 end)
 
 test("ocsweeper flags a cell with the right button", function()
-  cellTouch(2, 2, 1)
+  cellTouch(8, 8, 2, 2, 1)
 
   oc.run("ocsweeper", "8", "8", "10")
   local frame = oc.frame()
@@ -904,7 +1038,7 @@ test("ocsweeper ends when a mine is opened", function()
   -- sweeping the whole board must reach a mine whatever the layout
   for y = 1, 8 do
     for x = 1, 8 do
-      cellTouch(x, y)
+      cellTouch(8, 8, x, y)
     end
   end
 
@@ -916,7 +1050,7 @@ end)
 test("ocsweeper is won when every safe cell is open", function()
   -- with no mines the opening click floods the whole board, which reaches the
   -- win without depending on where mines happened to land
-  cellTouch(1, 1)
+  cellTouch(5, 5, 1, 1)
 
   oc.run("ocsweeper", "5", "5", "0")
   local frame = oc.frame()
@@ -924,8 +1058,77 @@ test("ocsweeper is won when every safe cell is open", function()
   check(not contains(frame, "boom"), "reported a loss as well as a win")
 end)
 
+test("ocsweeper centres the board and boxes the cells", function()
+  oc.run("ocsweeper", "8", "8", "10")
+  local frame = oc.frame()
+  check(contains(frame, TOP_LEFT), "no box drawn around the board")
+  check(contains(frame, "\226\148\130"), "no separator between cells")
+
+  local border = nil
+  for line in (frame .. "\n"):gmatch("([^\n]*)\n") do
+    if not border and line:find(TOP_LEFT, 1, true) then
+      border = line
+    end
+  end
+  check(border ~= nil, "no border row found")
+  -- an 8 by 8 board is 25 columns on an 80 column screen, so a centred board
+  -- has to have blank space on both sides of it
+  check(border and border:sub(1, 1) == " ", "board is flush against the left edge")
+  check(border and border:sub(-1) == " ", "board is flush against the right edge")
+end)
+
+test("ocsweeper repaints without clearing the screen every frame", function()
+  -- three idle ticks. Clearing and redrawing on each one is what made it flicker
+  oc.push()
+  oc.push()
+  oc.push()
+
+  oc.run("ocsweeper", "8", "8", "10")
+  local full = 0
+  for _, fill in ipairs(oc.fills) do
+    if fill.w >= oc.width and fill.h >= oc.height then
+      full = full + 1
+    end
+  end
+  check(full <= 1, "cleared the whole screen " .. full .. " times over four frames")
+end)
+
+-- On a 2 by 2 board every cell touches every other, so opening a corner always
+-- shows a 1 and the single mine is one of the three closed cells.
+local CHORD_GUESSES = { { 2, 1 }, { 1, 2 }, { 2, 2 } }
+
+test("ocsweeper opens around a finished number, and never detonates", function()
+  local cleared = 0
+  for _, guess in ipairs(CHORD_GUESSES) do
+    oc.reset()
+    oc.components = {}
+    cellTouch(2, 2, 1, 1)                          -- open the corner
+    cellTouch(2, 2, guess[1], guess[2], 1)         -- flag one of the three
+    cellTouch(2, 2, 1, 1)                          -- click the number
+
+    oc.run("ocsweeper", "2", "2", "1")
+    local frame = oc.frame()
+    -- the whole point: guessing wrong costs nothing, it does not go boom
+    check(not contains(frame, "boom"), "a misplaced flag detonated")
+    if contains(frame, "cleared in") then
+      cleared = cleared + 1
+    end
+  end
+  check(cleared == 1, "expected the one correct flag to clear the board, got " .. cleared)
+end)
+
+test("ocsweeper refuses to open around a number without the flags", function()
+  cellTouch(2, 2, 1, 1)
+  cellTouch(2, 2, 1, 1) -- click the number again, nothing flagged
+
+  oc.run("ocsweeper", "2", "2", "1")
+  local frame = oc.frame()
+  check(not contains(frame, "boom"), "clicking a number detonated")
+  check(not contains(frame, "cleared in"), "opened cells the flags did not account for")
+end)
+
 test("ocsweeper starts over on r", function()
-  cellTouch(3, 3, 1)
+  cellTouch(8, 8, 3, 3, 1)
   oc.push("key_down", "keyboard", 0, 0x13) -- r
 
   oc.run("ocsweeper", "8", "8", "10")
