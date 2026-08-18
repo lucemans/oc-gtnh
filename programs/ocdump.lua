@@ -6,7 +6,7 @@ local component = require("component")
 local computer = require("computer")
 local serialization = require("serialization")
 
-local VERSION = "0.1.0"
+local VERSION = "0.2.0"
 local PASTE_URL = "https://dpaste.com/api/v2/"
 local EXPIRY_DAYS = "1"
 -- multipart avoids percent-encoding the dump, which would cost a whole extra
@@ -50,7 +50,18 @@ local function formatValue(value)
   return tostring(value)
 end
 
--- only "get" methods are invoked: a setter or an action would change the world
+local READABLE = { "get", "is", "has" }
+
+local function isReadable(name)
+  for _, prefix in ipairs(READABLE) do
+    if name:sub(1, #prefix) == prefix then
+      return true
+    end
+  end
+  return false
+end
+
+-- only readable methods are invoked: a setter or an action would change the world
 local function invoke(address, name)
   local results = table.pack(pcall(component.invoke, address, name))
   if not results[1] then
@@ -64,6 +75,37 @@ local function invoke(address, name)
     parts[#parts + 1] = formatValue(results[i])
   end
   return table.concat(parts, ", ")
+end
+
+local function call(address, method)
+  local results = table.pack(pcall(component.invoke, address, method))
+  if not results[1] then
+    return nil
+  end
+  return table.unpack(results, 2, results.n)
+end
+
+-- GregTech puts the machine's display name in the first sensor line, which is
+-- far more useful than either the component type or the internal getName value
+local function friendlyName(address)
+  local methods = try(component.methods, address)
+  if not methods then
+    return nil
+  end
+  -- an indirect method is present with the value false, so only nil means absent
+  if methods.getSensorInformation ~= nil then
+    local sensor = call(address, "getSensorInformation")
+    if type(sensor) == "table" and type(sensor[1]) == "string" then
+      return (sensor[1]:gsub("\194\167%w", ""))
+    end
+  end
+  if methods.getName ~= nil then
+    local name = call(address, "getName")
+    if type(name) == "string" and name ~= "" then
+      return name
+    end
+  end
+  return nil
 end
 
 local function dumpSystem()
@@ -106,7 +148,7 @@ local function dumpComponent(address, kind)
     if doc then
       line("    doc: " .. oneLine(doc))
     end
-    if name:sub(1, 3) == "get" then
+    if isReadable(name) then
       local value, reason = invoke(address, name)
       if value then
         line("    value: " .. value)
@@ -195,6 +237,14 @@ table.sort(entries, function(a, b)
 end)
 
 print("ocdump v" .. VERSION .. ": reading " .. #entries .. " components...")
+
+line("")
+line("== index ==")
+for _, entry in ipairs(entries) do
+  local friendly = friendlyName(entry.address)
+  line(string.format("%-18s %s  %s", entry.kind, entry.address:sub(1, 8), friendly or ""))
+end
+
 line("")
 line("== components (" .. #entries .. ") ==")
 for _, entry in ipairs(entries) do

@@ -30,11 +30,12 @@ end
 local function test(name, fn)
   current = name
   oc.reset()
+  local before = failures
   local ok, reason = pcall(fn)
   if not ok then
     failures = failures + 1
     say("  FAIL  " .. name .. ": crashed: " .. tostring(reason))
-  else
+  elseif failures == before then
     say("  ok    " .. name)
   end
 end
@@ -66,6 +67,54 @@ local GT_MACHINE = {
     end,
     isMachineActive = function()
       return true
+    end,
+    setWorkAllowed = function()
+      error("setWorkAllowed must never be invoked", 0)
+    end,
+  },
+}
+
+-- taken verbatim from a real dump: dpaste.com/32FW2BMJ6
+local SUPER_TANK = {
+  address = "aa11bb22-e712-4134-bce1-b194453d6217",
+  kind = "gt_machine",
+  slot = -1,
+  methods = {
+    getName = "function():string; Returns the machine's name",
+    getSensorInformation = "function():table -- Returns the sensor information.",
+    getEUStored = "function():number; Returns the EU stored in this block",
+    getEUMaxStored = "function():number; Returns the max EU that can be stored",
+    getWorkProgress = "function():number; Returns the current progress",
+    getWorkMaxProgress = "function():number; Returns the max progress",
+    isMachineActive = "function():boolean; Returns whether the machine is active",
+    setWorkAllowed = "function(work:boolean); Sets whether this block may work",
+  },
+  values = {
+    getName = function()
+      return "super.tank.tier.01"
+    end,
+    getSensorInformation = function()
+      return {
+        "\194\1679Super Tank\194\167r",
+        "Stored Fluid:",
+        "\194\1676Bio Diesel\194\167r",
+        "\194\167a42,000 L\194\167r \194\167e4,000,000 L\194\167r",
+      }
+    end,
+    getEUStored = function()
+      return 0
+    end,
+    getEUMaxStored = function()
+      return 0
+    end,
+    getWorkProgress = function()
+      return 0
+    end,
+    getWorkMaxProgress = function()
+      return 0
+    end,
+    isMachineActive = function()
+      return false
     end,
     setWorkAllowed = function()
       error("setWorkAllowed must never be invoked", 0)
@@ -184,6 +233,79 @@ test("ocdebug renders and selects on click", function()
   end
 end)
 
+test("ocdebug summarises a tank from its sensor lines", function()
+  oc.components = { SUPER_TANK }
+
+  local ok, reason = oc.run("ocdebug")
+  check(ok, "ocdebug crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  local divider = frame:find("methods", 1, true)
+  check(divider ~= nil, "no methods divider drawn")
+  local summary = frame:sub(1, divider or #frame)
+
+  check(contains(summary, "Super Tank"), "did not use the sensor name as the title")
+  check(not contains(summary, "super.tank.tier.01"), "titled with the internal name")
+  check(contains(summary, "Bio Diesel"), "did not show the fluid")
+  check(contains(summary, "42,000 / 4,000,000 L"), "did not build a gauge from the sensor line")
+  check(contains(summary, "1.1%"), "did not compute the fill percentage")
+  check(contains(summary, "\226\150\145"), "gauge drew no empty portion")
+  -- the tank reports EU and steam it has no use for; those stay in the method
+  -- list below, but must not reach the summary
+  check(not contains(summary, "EU"), "irrelevant EU reading leaked into the summary")
+  -- getName is still listed as a method further down
+  check(contains(frame, "super.tank.tier.01"), "getName value missing from the method list")
+  if show then
+    say(frame)
+  end
+end)
+
+test("ocdebug labels a gauge that carries one", function()
+  -- verbatim from a real dump: the buffer prefixes its reading, the tank does not
+  oc.components = { {
+    address = "cc33dd44-0000-0000-0000-000000000004",
+    kind = "gt_batterybuffer",
+    methods = { getSensorInformation = "function():table -- sensor info" },
+    values = {
+      getSensorInformation = function()
+        return {
+          "\194\1679Medium Voltage Battery Buffer\194\167r",
+          "Stored Items: \194\167a832,768\194\167r EU / \194\167e832,768\194\167r EU",
+          "Average input: 0 EU/t",
+        }
+      end,
+    },
+  } }
+
+  local ok = oc.run("ocdebug")
+  check(ok, "ocdebug crashed")
+  local frame = oc.frame()
+  check(contains(frame, "Medium Voltage Battery Buffer"), "no title from sensor line")
+  check(contains(frame, "Stored Items:"), "dropped the gauge label")
+  check(contains(frame, "832,768 / 832,768 EU"), "no gauge built")
+  check(contains(frame, "100.0%"), "wrong fill percentage")
+  check(contains(frame, "Average input: 0 EU/t"), "dropped a plain sensor line")
+  if show then
+    say(frame)
+  end
+end)
+
+test("ocdebug gauges carry no stray label", function()
+  oc.components = { SUPER_TANK }
+  oc.run("ocdebug")
+  -- the tank's reading opens with the number, so nothing should precede the bar
+  check(not contains(oc.frame(), "42,000 L\n"), "left a stray label line above the gauge")
+end)
+
+test("ocdebug reads is/has methods", function()
+  oc.components = { GT_MACHINE }
+
+  local ok = oc.run("ocdebug")
+  check(ok, "ocdebug crashed")
+  local invoked = table.concat(oc.invoked, " ")
+  check(contains(invoked, "isMachineActive"), "did not invoke an is method")
+end)
+
 test("ocdebug never invokes a setter", function()
   oc.components = { GT_MACHINE, REDSTONE }
   oc.push("key_down", "keyboard", 0, 0xD0) -- down, selects redstone
@@ -191,7 +313,8 @@ test("ocdebug never invokes a setter", function()
   local ok = oc.run("ocdebug")
   check(ok, "ocdebug crashed")
   for _, method in ipairs(oc.invoked) do
-    check(method:sub(1, 3) == "get", "invoked a non-get method: " .. method)
+    local readable = method:sub(1, 3) == "get" or method:sub(1, 2) == "is" or method:sub(1, 3) == "has"
+    check(readable, "invoked a method that is not a read: " .. method)
   end
 end)
 
@@ -229,7 +352,8 @@ test("ocdump builds a valid multipart upload", function()
   check(contains(oc.printed(), "dpaste.com/TESTTESTT"), "did not print the paste URL")
 
   for _, method in ipairs(oc.invoked) do
-    check(method:sub(1, 3) == "get", "invoked a non-get method: " .. method)
+    local readable = method:sub(1, 3) == "get" or method:sub(1, 2) == "is" or method:sub(1, 3) == "has"
+    check(readable, "invoked a method that is not a read: " .. method)
   end
   if show then
     say(request.body)

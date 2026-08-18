@@ -85,14 +85,25 @@ function gpu.getResolution()
 end
 function gpu.setForeground() end
 function gpu.setBackground() end
+-- one screen cell holds one character, not one byte: the programs draw with
+-- box-drawing and block characters and do their column maths in characters
 function gpu.set(x, y, text)
   assert(type(x) == "number" and type(y) == "number", "gpu.set: non-numeric position")
   assert(y >= 1 and y <= oc.height, "gpu.set: row out of bounds: " .. tostring(y))
   assert(x >= 1, "gpu.set: column out of bounds: " .. tostring(x))
-  for i = 1, #text do
-    local column = x + i - 1
-    if column >= 1 and column <= oc.width then
-      screen[y][column] = text:sub(i, i)
+  local column = x
+  if utf8.len(text) then
+    for _, code in utf8.codes(text) do
+      if column >= 1 and column <= oc.width then
+        screen[y][column] = utf8.char(code)
+      end
+      column = column + 1
+    end
+  else
+    for i = 1, #text do
+      if x + i - 1 <= oc.width then
+        screen[y][x + i - 1] = text:sub(i, i)
+      end
     end
   end
 end
@@ -246,7 +257,40 @@ function filesystem.concat(a, b)
   return (a:gsub("/$", "")) .. "/" .. b
 end
 
-local unicode = { len = string.len, sub = string.sub }
+-- OpenOS counts characters here, not bytes; stubbing these with the string
+-- library would let multi-byte drawing characters break every width calculation
+local unicode = {}
+
+function unicode.len(text)
+  return utf8.len(text) or #text
+end
+
+function unicode.sub(text, from, to)
+  local length = utf8.len(text)
+  if not length then
+    return text:sub(from, to)
+  end
+  if from < 0 then
+    from = length + from + 1
+  end
+  if to == nil then
+    to = length
+  elseif to < 0 then
+    to = length + to + 1
+  end
+  if from < 1 then
+    from = 1
+  end
+  if to > length then
+    to = length
+  end
+  if from > to then
+    return ""
+  end
+  local first = utf8.offset(text, from)
+  local past = utf8.offset(text, to + 1)
+  return text:sub(first, past and past - 1 or #text)
+end
 
 local serialization = {}
 local function serializeValue(value)
