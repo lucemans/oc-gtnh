@@ -8,9 +8,12 @@ local computer = require("computer")
 local filesystem = require("filesystem")
 local term = require("term")
 
-local VERSION = "0.8.0"
+local VERSION = "0.9.0"
 
-local BASE_URL = "https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/"
+local REPO = "lucemans/oc-gtnh"
+local COMMIT_URL = "https://api.github.com/repos/" .. REPO .. "/commits/master"
+local RAW_URL = "https://raw.githubusercontent.com/" .. REPO .. "/"
+local BRANCH = "refs/heads/master"
 local MANIFEST = "manifest.txt"
 local SELF = "programs/ocup.lua"
 
@@ -61,9 +64,11 @@ local function waitForConnect(handle)
   end
 end
 
--- raw.githubusercontent.com holds a file for five minutes per edge node, and it
--- ignores a Cache-Control: no-cache request header. A query string it has not
--- seen before does miss the cache, so every fetch carries a unique one.
+-- A branch path on raw.githubusercontent.com can serve a stale file for minutes
+-- after a push. It ignores Cache-Control: no-cache, and a unique query string
+-- only misses the edge cache, not the layer behind it. A commit path cannot go
+-- stale, so ocup resolves the commit first and fetches everything from that.
+-- The query string is still used where a URL is not immutable.
 local requests = 0
 
 local function fresh(url)
@@ -73,8 +78,8 @@ end
 
 -- the component handle is used directly: the "internet" library wraps it in a
 -- table whose close field shadows the real method and is not callable
-local function download(url)
-  local handle, reason = component.internet.request(fresh(url))
+local function download(url, headers)
+  local handle, reason = component.internet.request(url, nil, headers)
   if not handle then
     return nil, tostring(reason)
   end
@@ -191,9 +196,36 @@ end
 
 write("ocup v" .. VERSION .. (reloaded and "  (reloaded)" or "") .. "\n\n", WHITE)
 
+-- the API rejects a request without a User-Agent
+term.clearLine()
+write("  resolving commit", DIM)
+local commitText = download(fresh(COMMIT_URL), { ["User-Agent"] = "ocup" })
+local commit = commitText and commitText:match('"sha"%s*:%s*"(%x+)"')
+
+local BASE_URL, immutable
+if commit then
+  BASE_URL, immutable = RAW_URL .. commit .. "/", true
+else
+  BASE_URL, immutable = RAW_URL .. BRANCH .. "/", false
+end
+
+local function urlFor(path)
+  if immutable then
+    return BASE_URL .. path
+  end
+  return fresh(BASE_URL .. path)
+end
+
+term.clearLine()
+if commit then
+  write("  commit " .. commit:sub(1, 7) .. "\n", DIM)
+else
+  write("  could not resolve the commit, files may be up to five minutes old\n", RED)
+end
+
 term.clearLine()
 write("  fetching manifest", DIM)
-local manifestText, manifestReason = download(BASE_URL .. MANIFEST)
+local manifestText, manifestReason = download(urlFor(MANIFEST))
 if not manifestText then
   term.clearLine()
   write("  manifest failed: " .. manifestReason .. "\n", RED)
@@ -215,7 +247,7 @@ if not reloaded then
   for _, file in ipairs(FILES) do
     if file.source == SELF then
       local current = readFile(file.target)
-      local latest = download(BASE_URL .. file.source)
+      local latest = download(urlFor(file.source))
       if latest and latest ~= current then
         term.clearLine()
         write("  " .. file.source .. "  ", WHITE)
@@ -253,7 +285,7 @@ for index, file in ipairs(FILES) do
   write("  " .. bar(index - 1, #FILES, 12) .. " ", CYAN)
   write(file.source, DIM)
 
-  local contents, reason = download(BASE_URL .. file.source)
+  local contents, reason = download(urlFor(file.source))
   if not contents then
     failure = { source = file.source, reason = reason }
     break

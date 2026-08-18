@@ -142,9 +142,14 @@ local MANIFEST = table.concat({
   "programs/ocdump.lua",
 }, "\n")
 
+local COMMIT = "e62b7b01adbf2372c7ed15f4600e018ad04ca562"
+
 -- longest match wins, so "programs/ocup.lua" is not served by an "ocup.lua" key
 local function serveProgram(bodies)
   return function(url)
+    if url:find("api.github.com", 1, true) then
+      return 200, "OK", '{\n  "sha": "' .. COMMIT .. '",\n  "node_id": "x"\n}'
+    end
     local best, bestLength = nil, -1
     for name, body in pairs(bodies) do
       if url:find(name, 1, true) and #name > bestLength then
@@ -269,14 +274,40 @@ test("ocup asks for a fresh copy every time", function()
   oc.run("ocup")
   check(#oc.requests > 1, "no requests were made")
 
-  local seen = {}
+  local resolved = 0
   for _, request in ipairs(oc.requests) do
-    -- a plain URL would be answered from the edge cache for five minutes
-    check(request.url:find("?ocup=", 1, true) ~= nil,
-      "request carried no cache buster: " .. request.url)
-    check(seen[request.url] == nil, "two requests shared a URL: " .. request.url)
-    seen[request.url] = true
+    if request.url:find("api.github.com", 1, true) then
+      resolved = resolved + 1
+      -- the commit lookup is the one URL that is not immutable
+      check(request.url:find("?ocup=", 1, true) ~= nil, "commit lookup was not cache busted")
+    else
+      -- a branch path can serve a file that is minutes out of date; a commit
+      -- path is immutable, so it cannot
+      check(request.url:find(COMMIT, 1, true) ~= nil,
+        "file was not fetched from a commit path: " .. request.url)
+      check(request.url:find("refs/heads/master", 1, true) == nil,
+        "file was fetched from the branch: " .. request.url)
+    end
   end
+  check(resolved == 1, "expected exactly one commit lookup, got " .. resolved)
+end)
+
+test("ocup falls back to the branch when the commit cannot be resolved", function()
+  oc.components = { INTERNET }
+  oc.respond = function(url)
+    if url:find("api.github.com", 1, true) then
+      return 403, "Forbidden", "rate limited"
+    end
+    if url:find("manifest.txt", 1, true) then
+      return 200, "OK", "programs/ocdebug.lua"
+    end
+    return 200, "OK", program("0.2.0")
+  end
+
+  oc.run("ocup")
+  local out = oc.printed()
+  check(contains(out, "could not resolve the commit"), "did not warn that files may be stale")
+  check(oc.files["/bin/ocdebug.lua"] ~= nil, "gave up instead of falling back to the branch")
 end)
 
 test("ocup reports a failed download", function()
