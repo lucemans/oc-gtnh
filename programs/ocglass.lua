@@ -3,6 +3,7 @@
 --   ocglass                     draw the watched machines and keep them fresh
 --   ocglass --once              draw one frame, for checking it works
 --   ocglass --clear             remove everything this drew
+--   ocglass --calibrate         draw test shapes, to settle what the numbers mean
 --   ocglass --list              the terminal's own methods and bound players
 --   ocglass --probe [addRect]   describe a widget, to learn what it offers
 --
@@ -92,6 +93,8 @@ while arguments[index] do
     mode = "clear"
   elseif argument == "--once" then
     mode = "once"
+  elseif argument == "--calibrate" then
+    mode = "calibrate"
   end
   index = index + 1
 end
@@ -125,6 +128,43 @@ end
 if mode == "clear" then
   core.setValue(address, "removeAll")
   say("cleared, " .. tostring(core.call(address, "getObjectCount")) .. " widgets left", DIM)
+  return 0
+end
+
+-- The getters report a position and a size as two numbers each, but not what
+-- the numbers mean on screen. This draws shapes whose answer is obvious to look
+-- at, so the geometry is settled by looking rather than by guessing.
+if mode == "calibrate" then
+  core.setValue(address, "removeAll")
+  say("ocglass v" .. VERSION .. "   calibration", WHITE)
+
+  local shapes = {
+    { name = "A", w = 100, h = 5, x = 20, y = 20, color = 0xFF5555 },
+    { name = "B", w = 5, h = 100, x = 20, y = 40, color = 0x55FF55 },
+    { name = "C", w = 50, h = 50, x = 20, y = 160, color = 0x5555FF },
+  }
+
+  for _, shape in ipairs(shapes) do
+    local rect = core.call(address, "addRect")
+    set(rect, "setPosition", shape.x, shape.y)
+    set(rect, "setSize", shape.w, shape.h)
+    set(rect, "setColor", rgb(shape.color))
+    set(rect, "setAlpha", 0.8)
+
+    local text = core.call(address, "addTextLabel")
+    set(text, "setPosition", shape.x + 110, shape.y)
+    set(text, "setText", shape.name .. " setSize(" .. shape.w .. "," .. shape.h .. ")")
+    set(text, "setColor", rgb(shape.color))
+    set(text, "setScale", TEXT_SCALE)
+
+    say("  " .. shape.name .. "  setSize(" .. shape.w .. ", " .. shape.h
+      .. ")  at (" .. shape.x .. ", " .. shape.y .. ")", DIM)
+  end
+
+  say("")
+  say("  A should be a wide flat bar if setSize is (width, height).", DIM)
+  say("  B should be a tall thin bar. C is a square, for scale.", DIM)
+  say("  ocglass --clear when done", DIM)
   return 0
 end
 
@@ -262,6 +302,11 @@ if not core.has(methods, "addTextLabel") then
   io.stderr:write("ocglass: these glasses cannot draw text\n")
   return 1
 end
+
+-- Widgets outlive the program that made them, so a second run stacks its text
+-- on top of the first and everything becomes unreadable. Start from an empty
+-- display every time.
+core.setValue(address, "removeAll")
 
 local players = core.call(address, "getBindPlayers")
 say("ocglass v" .. VERSION .. "   " .. address:sub(1, 8), WHITE)
