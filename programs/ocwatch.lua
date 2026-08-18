@@ -12,11 +12,12 @@ local gt = require("ocgt")
 local lp = require("oclogistics")
 local net = require("ocnet")
 local tank = require("octank")
+local ct = require("occomputronics")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.9.0"
+local VERSION = "0.10.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -188,6 +189,23 @@ local function act(alert, tripped)
   return table.concat(done, ", ")
 end
 
+-- A tripped alert is worth hearing from another room. Computronics gives three
+-- ways to say so and this computer may have none of them, in which case the
+-- built-in beep is still better than silence.
+local function announce(alert, text, urgent)
+  if alert.beep == false then
+    return nil
+  end
+  local used = ct.announce(text, urgent)
+  if not used then
+    pcall(computer.beep, urgent and 880 or 440, 0.2)
+  end
+  return used
+end
+
+-- whether the lamps are showing an alarm, so they are only set on a change
+local lampLit = nil
+
 local notices = {}
 
 local function notice(text)
@@ -262,13 +280,17 @@ local function checkAlerts(readingsByAddress)
       local was = alert.tripped or false
       alert.tripped = evaluate(alert, reading.value)
       if alert.tripped ~= was then
+        local said
         if alert.tripped then
           notice(alert.name .. " tripped at " .. core.comma(reading.value))
-          if alert.beep ~= false then
-            pcall(computer.beep, 880, 0.2)
-          end
+          said = announce(alert, alert.name .. " tripped at "
+            .. core.comma(reading.value) .. " " .. reading.unit, true)
         else
           notice(alert.name .. " cleared at " .. core.comma(reading.value))
+          said = announce(alert, alert.name .. " cleared", false)
+        end
+        if said then
+          notice("told the " .. said:gsub("_", " "))
         end
       end
       local done = act(alert, alert.tripped)
@@ -400,13 +422,28 @@ local function sample()
     byAddress[keyOf(card.entry.address, card.entry.side)] = card.readings
   end
   checkAlerts(byAddress)
+
+  local alarmed = false
   for _, card in ipairs(cards) do
     for _, alert in ipairs(config.alerts) do
       if alert.address == card.entry.address and alert.tripped then
         card.alarm = true
+        alarmed = true
       end
     end
   end
+
+  -- A colourful lamp says from across the room what the screen says up close.
+  -- Only on a change, since setting it is a call into the world.
+  if alarmed ~= lampLit then
+    if alarmed then
+      ct.lamps(ct.rgb(255, 0, 0))
+    else
+      ct.lamps(ct.rgb(0, 255, 0))
+    end
+    lampLit = alarmed
+  end
+
   return cards
 end
 

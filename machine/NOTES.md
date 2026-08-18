@@ -351,3 +351,23 @@ Waiting for a whole round of network answers inside one call meant `ocview`
 ignored the keyboard for as long as the window lasted. It broadcasts and then
 reads answers as ordinary events in the loop it already has, so a satellite's
 reply and a keypress are handled the same way.
+
+## Computronics, read from its own source
+
+The mod's wiki says of itself that its pages are usually outdated, so these
+came from the `@Callback` annotations on the tile classes in
+`Vexatos/Computronics`.
+
+| component | what it offers |
+| --- | --- |
+| `iron_noteblock` | `playNote([instrument,] note [, volume])`. Instruments are named: harp, bd, snare, hat, bassattack, pling, bass. Anything else is refused. Volume 0 to 1. Direct, limited to 10 calls a tick. |
+| `chat_box` | `say(text [, distance])`, and get/set for distance and name. The distance is capped by the server config unless the block is the creative one. |
+| `speech_box` | `say(text)`, `stop()`, `isProcessing()`, `setVolume(0..1)`. Needs MaryTTS installed on the server, and `say` returns false and a reason when it is not. |
+| `colorful_lamp` | `getLampColor()`, `setLampColor(0..0x7FFF)`. Five bits a channel, not eight, so a colour has to be packed. Zero is off. |
+| `tape_drive` | `play stop isReady isEnd getState getPosition getSize seek read write getLabel setLabel setSpeed setVolume`. Speed 0.25 to 2, volume 0 to 1. |
+| `ticket_machine` | `printTicket setDestination getDestination getSelectedTicket setSelectedTicket` and the manual-use permissions. Railcraft only. |
+
+**The Speaker registers no component at all.** Its tile returns null for its
+node and refuses every connection: it is the loudspeaker a tape drive feeds
+over audio cable, not something a program calls. Sound a program chooses comes
+from the note block, speech from the speech box, and words from the chat box.

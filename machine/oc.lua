@@ -216,14 +216,20 @@ function component.getPrimary(kind)
   error("no primary " .. tostring(kind), 0)
 end
 
-function component.list()
+-- the real one takes a filter, and matches a type that contains it
+function component.list(filter)
   local index = 0
   return setmetatable({}, {
     __call = function()
-      index = index + 1
-      local entry = oc.components[index]
-      if entry then
-        return entry.address, entry.kind
+      while true do
+        index = index + 1
+        local entry = oc.components[index]
+        if not entry then
+          return nil
+        end
+        if not filter or entry.kind:find(filter, 1, true) then
+          return entry.address, entry.kind
+        end
       end
     end,
   })
@@ -541,6 +547,9 @@ function oc.install()
   end
   package.preload["octank"] = function()
     return dofile("lib/octank.lua")
+  end
+  package.preload["occomputronics"] = function()
+    return dofile("lib/occomputronics.lua")
   end
   package.preload["ocnet"] = function()
     return dofile("lib/ocnet.lua")

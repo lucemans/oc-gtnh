@@ -13,7 +13,7 @@ local core = require("oclib")
 
 local tank = {}
 
-tank.VERSION = "0.1.0"
+tank.VERSION = "0.2.0"
 
 -- OpenComputers numbers the sides in this order, and calls them these names
 tank.SIDES = { [0] = "down", "up", "north", "south", "west", "east" }
@@ -41,6 +41,48 @@ function tank.sides(address)
     end
   end
   return found
+end
+
+-- GregTech colours its own sensor text and we read the colour out of it. A
+-- transposer hands over none, so the fluid has to choose one from what it is
+-- called. Anything not named here draws in the default gauge colour.
+tank.COLORS = {
+  water = "b",
+  steam = "f",
+  lava = "c",
+  oil = "8",
+  creosote = "6",
+  fuel = "e",
+  diesel = "e",
+  biodiesel = "e",
+  lubricant = "e",
+  milk = "f",
+  honey = "6",
+  glass = "7",
+  ic2coolant = "b",
+  ender = "3",
+  redstone = "c",
+  glowstone = "e",
+}
+
+function tank.colorOf(name)
+  if type(name) ~= "string" then
+    return nil
+  end
+  local plain = name:lower():gsub("[^%a]", "")
+  if tank.COLORS[plain] then
+    return tank.COLORS[plain]
+  end
+  -- A pack renames fluids more often than it invents them: "densesteam" is
+  -- still steam. The longest name wins, or "Creosote Oil" would be whichever of
+  -- creosote and oil the table happened to be walked in first.
+  local best, longest = nil, 0
+  for fluid, code in pairs(tank.COLORS) do
+    if #fluid > longest and plain:find(fluid, 1, true) then
+      best, longest = code, #fluid
+    end
+  end
+  return best
 end
 
 -- One transposer can hold a different tank on each face, so a side is part of
@@ -75,6 +117,7 @@ function tank.inspect(address, side, config)
           current = core.comma(amount),
           maximum = core.comma(capacity),
           unit = "L",
+          colorCode = tank.colorOf(fluid.name) or tank.colorOf(fluid.label),
         }
       end
     end

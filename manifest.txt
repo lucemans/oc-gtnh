@@ -2,6 +2,7 @@ lib/oclib.lua
 lib/ocgt.lua
 lib/oclogistics.lua
 lib/octank.lua
+lib/occomputronics.lua
 lib/ocnet.lua
 programs/ocup.lua
 programs/ocdebug.lua

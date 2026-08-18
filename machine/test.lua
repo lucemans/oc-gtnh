@@ -2051,6 +2051,64 @@ test("ocwatch watches a tank through a side of a transposer", function()
   check(contains(frame, "12,000 / 64,000 L"), "did not show the level")
 end)
 
+-- A transposer reports no colour of its own, unlike GregTech's sensor text, so
+-- steam drew in the default green.
+test("a fluid read through a transposer is coloured by what it is", function()
+  oc.components = {}
+  local octank = require("octank")
+  check(octank.colorOf("steam") == "f", "steam is not white")
+  check(octank.colorOf("water") == "b", "water is not blue")
+  check(octank.colorOf("Creosote Oil") == "6", "creosote took no colour")
+  -- a pack renames fluids more often than it invents them
+  check(octank.colorOf("densesteam") == "f", "a renamed steam lost its colour")
+  check(octank.colorOf("nothing in the table") == nil, "invented a colour")
+end)
+
+test("a lamp colour is packed into the five bits a channel it takes", function()
+  oc.components = {}
+  local ct = require("occomputronics")
+  check(ct.rgb(255, 0, 0) == 31 * 1024, "red is " .. ct.rgb(255, 0, 0))
+  check(ct.rgb(0, 255, 0) == 31 * 32, "green is " .. ct.rgb(0, 255, 0))
+  check(ct.rgb(0, 0, 255) == 31, "blue is " .. ct.rgb(0, 0, 255))
+  check(ct.rgb(255, 255, 255) == 0x7FFF, "white is not the top of the range")
+  check(ct.rgb(0, 0, 0) == 0, "black is not zero")
+  -- the mod refuses anything above 0x7FFF, so nothing may overflow into it
+  check(ct.rgb(999, 999, 999) == 0x7FFF, "a value over 255 escaped the range")
+end)
+
+test("with only a note block, an alert is played rather than spoken", function()
+  local notes = {}
+  local noteBlock = {
+    address = "b0000000-0000-0000-0000-000000000001",
+    kind = "iron_noteblock",
+    methods = { playNote = "function([instrument,] note:number [, volume:number])" },
+    values = {
+      playNote = function(instrument, note)
+        notes[#notes + 1] = { instrument = instrument, note = note }
+        return true
+      end,
+    },
+  }
+  local tank = tankAt("100")
+  oc.components = { tank, noteBlock }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = tank.address,
+      label = "Bio Diesel",
+      below = 50000,
+      above = 200000,
+    } },
+  })
+
+  oc.run("ocwatch")
+  check(#notes == 3, "played " .. #notes .. " notes, expected a figure of three")
+  -- falling for trouble, so it cannot be mistaken for the all clear
+  check(notes[1] and notes[1].note > notes[3].note, "the figure rose for an alarm")
+  check(notes[1] and notes[1].instrument == "harp", "used an instrument the mod refuses")
+end)
+
 test("an alert can watch one face of a transposer", function()
   local stopped = { value = false }
   local reader = transposer(3, 500)
@@ -2075,6 +2133,94 @@ test("an alert can watch one face of a transposer", function()
   oc.run("ocwatch")
   check(stopped.value == true, "the alert on the transposer face did not act")
   check(contains(oc.frame(), "creosote low"), "no notice that it tripped")
+end)
+
+-- Signatures taken from Computronics' own @Callback annotations
+local function speechBox(said)
+  return {
+    address = "5e100000-0000-0000-0000-000000000001",
+    kind = "speech_box",
+    methods = {
+      say = "function(text:string):boolean",
+      stop = "function():boolean",
+      isProcessing = "function():boolean",
+      setVolume = "function(volume:number)",
+    },
+    values = {
+      say = function(text)
+        said[#said + 1] = text
+        return true
+      end,
+    },
+  }
+end
+
+local function colorfulLamp(colors)
+  return {
+    address = "1a300000-0000-0000-0000-000000000001",
+    kind = "colorful_lamp",
+    methods = {
+      getLampColor = "function():number",
+      setLampColor = "function(color:number):boolean",
+    },
+    values = {
+      setLampColor = function(color)
+        colors[#colors + 1] = color
+        return true
+      end,
+      getLampColor = function()
+        return colors[#colors] or 0
+      end,
+    },
+  }
+end
+
+test("a tripped alert is spoken aloud and turns the lamps red", function()
+  local said, colors = {}, {}
+  local tank = tankAt("100")
+  oc.components = { tank, speechBox(said), colorfulLamp(colors) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = { [tank.address] = "EBF Fluid Tank" },
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = tank.address,
+      label = "Bio Diesel",
+      below = 50000,
+      above = 200000,
+    } },
+  })
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  check(#said == 1, "expected one spoken phrase, got " .. #said)
+  check(contains(said[1] or "", "diesel low"), "did not name the alert: " .. tostring(said[1]))
+
+  -- the lamp takes five bits a channel, so full red is 31 shifted up ten places
+  check(#colors == 1, "set the lamp " .. #colors .. " times")
+  check(colors[1] == 31 * 1024, "lit the lamp " .. tostring(colors[1]) .. ", not red")
+end)
+
+test("an alert set not to beep stays quiet", function()
+  local said, colors = {}, {}
+  local tank = tankAt("100")
+  oc.components = { tank, speechBox(said), colorfulLamp(colors) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = tank.address,
+      label = "Bio Diesel",
+      below = 50000,
+      above = 200000,
+      beep = false,
+    } },
+  })
+
+  oc.run("ocwatch")
+  check(#said == 0, "spoke for an alert that was told not to make a noise")
+  -- the lamp is not a noise, and is worth having either way
+  check(#colors == 1, "did not light the lamp")
 end)
 
 test("ocwatch says nothing about a machine that never works", function()
