@@ -141,16 +141,28 @@ local function messageOf(line)
   return nil
 end
 
--- the shell writes to the screen, so the command is redirected to a file and
--- the file is read back. A command that writes only to stderr returns nothing.
+-- The shell writes to the screen, so the command is redirected to a file and the
+-- file is read back. A command that writes only to stderr returns nothing.
+--
+-- A command that redirects on its own is left alone: appending a second redirect
+-- makes the shell apply only one of them, which silently swallowed both the
+-- output and the intended file.
 local function run(command)
-  local ok, reason = pcall(sh.execute, _ENV, command .. " > " .. OUTPUT_PATH)
+  local own = command:find(">") ~= nil
+  local line = own and command or (command .. " > " .. OUTPUT_PATH)
+
+  local ok, reason = pcall(sh.execute, _ENV, line)
   local output = ""
-  local file = io.open(OUTPUT_PATH, "r")
-  if file then
-    output = file:read("*a") or ""
-    file:close()
+  if not own then
+    local file = io.open(OUTPUT_PATH, "r")
+    if file then
+      output = file:read("*a") or ""
+      file:close()
+    end
+  else
+    output = "(output went to the command's own redirect)"
   end
+
   if not ok then
     return false, output .. "\n" .. tostring(reason)
   end

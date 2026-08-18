@@ -156,6 +156,21 @@ function component.isAvailable(kind)
   return false
 end
 
+function component.getPrimary(kind)
+  for _, entry in ipairs(oc.components) do
+    if entry.kind == kind then
+      local proxy = { address = entry.address, type = entry.kind }
+      for name in pairs(entry.methods or {}) do
+        proxy[name] = function(...)
+          return component.invoke(entry.address, name, ...)
+        end
+      end
+      return proxy
+    end
+  end
+  error("no primary " .. tostring(kind), 0)
+end
+
 function component.list()
   local index = 0
   return setmetatable({}, {

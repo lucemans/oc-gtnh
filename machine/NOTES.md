@@ -165,6 +165,42 @@ same proxy, which is why probing is keyed on the name rather than on the entry
 being callable. `canAccess` is not probed either: `can` is deliberately absent
 from the readable prefixes, because `cancelCrafting` also starts with it.
 
+## OpenSecurity keypad
+
+`os_keypad` offers four methods and they are all writes, so `ocdump` lists them
+and never calls them. From `dumps/009.txt`:
+
+```
+setDisplay(text[, color])   0 to 8 characters, colour 0 to 7, one bit per channel
+setEventName(name)          the event a keypress raises
+setKey(idx, text, color)    one key at a time, 1 to 2 characters
+setShouldBeep(boolean)
+```
+
+**There is no getter for the key that was pressed.** Input only arrives as an
+event, so `setEventName` is not optional: without it nothing is heard. The
+[wiki](https://github.com/PC-Logix/OpenSecurity/wiki/Keypad) documents the event
+as `name, address, button, button_label`.
+
+Trust the dump over that wiki for the methods: it describes a table-based
+`setKey` plus `setVolume`/`getVolume`, and this build has neither. `ockeypad`
+reads the label straight off the event rather than calling `setKey`, so it never
+has to guess how the twelve key positions are numbered.
+
+Which bit of the 0 to 7 colour is which channel is undocumented and unverified.
+
+## OpenGlasses
+
+`glasses` builds a scene out of widgets: `addTextLabel`, `addRect`, `addDot`,
+`addQuad`, `addTriangle`, and 3D versions of most of them, plus `addItem` and
+`addFloatingText`. `getBindPlayers` returned `Lucemans`, so the pairing works,
+and `getObjectCount` was `0`.
+
+**The widget methods are still unknown.** Each `add*` returns a widget object,
+and those constructors do not start with `get`, `is` or `has`, so nothing calls
+them and no dump has ever shown what a widget offers. Finding out means calling
+one and describing the result, which `oclib.describeLines` can already do.
+
 ## Colour meanings
 
 `§9` names a block, `§a` marks a current value, `§e` a maximum or a rating,

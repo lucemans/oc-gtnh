@@ -843,6 +843,117 @@ test("occonnect survives ntfy being down", function()
 end)
 
 -------------------------------------------------------------------------------
+-- ockeypad
+
+-- methods verbatim from dumps/009.txt; this build takes setKey per index and
+-- setShouldBeep, not the table-based setKey and setVolume the wiki describes
+local KEYPAD = {
+  address = "01b33e83-6d6d-4974-9fbd-2e60abb5a0f3",
+  kind = "os_keypad",
+  methods = {
+    setDisplay = "function(String:text[, color:number]):boolean",
+    setEventName = "function(String:name):boolean",
+    setKey = "function(idx:number, text:string, color:number):boolean",
+    setShouldBeep = "function(Boolean):boolean",
+  },
+  values = {
+    setDisplay = function()
+      return true
+    end,
+    setEventName = function()
+      return true
+    end,
+    setKey = function()
+      return true
+    end,
+    setShouldBeep = function()
+      return true
+    end,
+  },
+}
+
+local function withPin(pin)
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = {}, watch = {}, alerts = {}, keypad = { pin = pin },
+  })
+end
+
+-- the shape the wiki documents: name, address, button, label
+local function keyPress(label)
+  oc.push("ockeypad", KEYPAD.address, 1, label)
+end
+
+test("ockeypad refuses to guard without a code", function()
+  oc.components = { KEYPAD }
+
+  oc.run("ockeypad")
+  check(contains(oc.printed(), "--pin"), "did not say how to set a code")
+end)
+
+test("ockeypad stores a code and names its own event", function()
+  oc.components = { KEYPAD }
+
+  oc.run("ockeypad", "--pin", "4321")
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  check(saved and saved.keypad and saved.keypad.pin == "4321", "code not stored")
+  -- the keypad has no getter for a keypress, so naming the event is what makes
+  -- input arrive at all
+  check(contains(table.concat(oc.invoked, " "), "setEventName"), "never named its event")
+end)
+
+test("ockeypad opens on the right code", function()
+  oc.components = { KEYPAD }
+  withPin("1234")
+  keyPress("1")
+  keyPress("2")
+  keyPress("3")
+  keyPress("4")
+
+  local ok, reason = oc.run("ockeypad")
+  check(ok, "ockeypad crashed: " .. tostring(reason))
+  check(contains(oc.printed(), "granted"), "the right code was not accepted")
+  check(not contains(oc.printed(), "denied"), "the right code was also denied")
+end)
+
+test("ockeypad stays shut on the wrong code", function()
+  oc.components = { KEYPAD }
+  withPin("1234")
+  keyPress("1")
+  keyPress("2")
+  keyPress("9")
+  keyPress("9")
+
+  oc.run("ockeypad")
+  check(contains(oc.printed(), "denied"), "the wrong code was not refused")
+  check(not contains(oc.printed(), "granted"), "the wrong code opened the door")
+end)
+
+test("ockeypad clears a part-typed code on star", function()
+  oc.components = { KEYPAD }
+  withPin("1234")
+  keyPress("9")
+  keyPress("9")
+  keyPress("*")
+  keyPress("1")
+  keyPress("2")
+  keyPress("3")
+  keyPress("4")
+
+  oc.run("ockeypad")
+  -- without the clear those two nines would still be in the buffer and the
+  -- correct code that follows would be refused
+  check(contains(oc.printed(), "granted"), "star did not clear the entry")
+end)
+
+test("ockeypad says so when nothing can open a door", function()
+  oc.components = { KEYPAD }
+  withPin("1234")
+
+  oc.run("ockeypad")
+  check(contains(oc.printed(), "no redstone"), "did not warn that no door can open")
+end)
+
+-------------------------------------------------------------------------------
 -- ocwatch
 
 local function tankAt(amount)
@@ -1098,7 +1209,6 @@ end)
 
 -- On a 2 by 2 board every cell touches every other, so opening a corner always
 -- shows a 1 and the single mine is one of the three closed cells.
-local CHORD_GUESSES = { { 2, 1 }, { 1, 2 }, { 2, 2 } }
 
 -- Reads the board back off the screen the way a player sees it. Closed and
 -- opened-empty cells are both two spaces, so the background colour is what
@@ -1200,9 +1310,10 @@ local function openingLook()
   return readBoard(BOARD_W, BOARD_H)
 end
 
--- a number whose closed neighbours exactly equal its count: every one is a mine,
--- which is the only thing a player needs to chord it safely
-local function settledNumber(board)
+-- Every mine a player can prove from one look: a number whose closed neighbours
+-- exactly equal its count has all of them as mines.
+local function knownMines(board)
+  local mines, list = {}, {}
   for y = 1, BOARD_H do
     for x = 1, BOARD_W do
       local cell = board[y][x]
@@ -1214,7 +1325,40 @@ local function settledNumber(board)
           end
         end
         if #closed == cell.digit and #closed > 0 then
-          return x, y, closed
+          for _, at in ipairs(closed) do
+            local key = at[2] * 100 + at[1]
+            if not mines[key] then
+              mines[key] = true
+              list[#list + 1] = at
+            end
+          end
+        end
+      end
+    end
+  end
+  return mines, list
+end
+
+-- A number that those flags satisfy and which still has an unflagged closed
+-- neighbour. Chording the number whose neighbours are ALL mines would be sound
+-- but would open nothing, which is why this looks for one with slack.
+local function chordable(board, mines)
+  for y = 1, BOARD_H do
+    for x = 1, BOARD_W do
+      local cell = board[y][x]
+      if cell.opened and cell.digit then
+        local flagged, spare = 0, 0
+        for _, n in ipairs(neighboursOf(board, x, y, BOARD_W, BOARD_H)) do
+          if n[3].closed then
+            if mines[n[2] * 100 + n[1]] then
+              flagged = flagged + 1
+            else
+              spare = spare + 1
+            end
+          end
+        end
+        if flagged == cell.digit and spare > 0 then
+          return x, y
         end
       end
     end
@@ -1229,8 +1373,10 @@ test("ocsweeper opens around a finished number, and never detonates", function()
     return
   end
 
-  local x, y, mines = settledNumber(board)
-  check(x ~= nil, "no number on the opening board had its mines pinned down")
+  local mines, list = knownMines(board)
+  check(#list > 0, "no mine could be proved from the opening board")
+  local x, y = chordable(board, mines)
+  check(x ~= nil, "no number was satisfied by the provable flags with slack left")
   if not x then
     return
   end
@@ -1246,7 +1392,7 @@ test("ocsweeper opens around a finished number, and never detonates", function()
 
   oc.reset()
   cellTouch(BOARD_W, BOARD_H, 5, 4)
-  for _, cell in ipairs(mines) do
+  for _, cell in ipairs(list) do
     cellTouch(BOARD_W, BOARD_H, cell[1], cell[2], 1)
   end
   cellTouch(BOARD_W, BOARD_H, x, y)
@@ -1273,7 +1419,8 @@ test("ocsweeper refuses a chord when a flag is in the wrong place", function()
     return
   end
 
-  local x, y = settledNumber(board)
+  local mines = knownMines(board)
+  local x, y = chordable(board, mines)
   if not x then
     check(false, "no settled number on the opening board")
     return
