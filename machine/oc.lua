@@ -22,6 +22,7 @@ function oc.reset()
   oc.fills = {}
   oc.executed = {}
   oc.colors = {}
+  oc.reads = {}
   oc.directories = {}
   oc.deviceInfo = {}
   oc.output = {""}
@@ -156,6 +157,21 @@ function component.isAvailable(kind)
   return false
 end
 
+function component.proxy(address)
+  for _, entry in ipairs(oc.components) do
+    if entry.address == address then
+      local proxy = { address = entry.address, type = entry.kind }
+      for name in pairs(entry.methods or {}) do
+        proxy[name] = function(...)
+          return component.invoke(entry.address, name, ...)
+        end
+      end
+      return proxy
+    end
+  end
+  return nil
+end
+
 function component.getPrimary(kind)
   for _, entry in ipairs(oc.components) do
     if entry.kind == kind then
@@ -243,6 +259,9 @@ function computer.uptime()
 end
 function computer.address()
   return "755c25ca-ccec-4262-bd4a-038440718514"
+end
+function computer.tmpAddress()
+  return "ab644ac9-35ab-4eb4-91fe-4b45750f14b0"
 end
 function computer.freeMemory()
   return 1106167
@@ -501,8 +520,9 @@ function oc.install()
     end,
   }
 
+  -- tests queue answers in oc.reads to drive a prompt
   io.read = function()
-    return nil
+    return table.remove(oc.reads, 1)
   end
 
   io.open = function(path, mode)

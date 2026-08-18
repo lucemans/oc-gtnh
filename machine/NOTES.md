@@ -189,6 +189,36 @@ has to guess how the twelve key positions are numbered.
 
 Which bit of the 0 to 7 colour is which channel is undocumented and unverified.
 
+## Disks, and how `install` finds one
+
+`computer.getDeviceInfo()` describes **every** filesystem as
+`description="Filesystem"`, so it cannot tell a floppy from a hard drive. Only
+the sizes differ, which is a guess, not a fact. The authoritative link is the
+drive: a `disk_drive` answers `isEmpty()` and `media()`, and `media()` returns
+the address of the filesystem inside it. That is how `ocmkfs` knows which disk
+is removable.
+
+`computer.tmpAddress()` names the temporary filesystem, which is never an
+install medium and is excluded.
+
+OpenOS's `install` (see `bin/install.lua` and `lib/core/install_basics.lua`)
+works like this:
+
+- A candidate **source** is any mounted component filesystem that is non-empty,
+  is not tmpfs, and is not the writable root.
+- It reads `/.prop` at that filesystem's root and parses it with
+  `load("return " .. data)`, so the file is a **Lua table literal**.
+- Fields it uses: `ignore`, `label`, `fromDir`, `root`, `setlabel`, `setboot`,
+  `reboot`, `noclobber`.
+- It then **copies the disk's contents** onto the target, skipping `.prop`
+  itself. It is a file copier, not a script runner.
+
+So a floppy carrying `/.prop` and `/bin/ocup.lua` is offered by name and drops
+`ocup` onto the target. `setboot` and `reboot` are deliberately left out of the
+prop: absent means falsy, and this is dropping a program onto a working machine
+rather than installing an operating system. Setting `setlabel` would rename the
+target's own disk, which is also not wanted.
+
 ## OpenGlasses
 
 `glasses` builds a scene out of widgets: `addTextLabel`, `addRect`, `addDot`,

@@ -843,6 +843,144 @@ test("occonnect survives ntfy being down", function()
 end)
 
 -------------------------------------------------------------------------------
+-- ocmkfs
+
+-- a filesystem that records what gets written to it, shaped like the component
+-- in dumps/009.txt
+local function fakeDisk(address, label, total, readOnly)
+  local written = {}
+  return {
+    address = address,
+    kind = "filesystem",
+    written = written,
+    methods = {
+      getLabel = "function():string", setLabel = "function(value:string):string",
+      isReadOnly = "function():boolean", spaceTotal = "function():number",
+      spaceUsed = "function():number", open = "function(path,mode)",
+      write = "function(handle,value):boolean", close = "function(handle)",
+      makeDirectory = "function(path):boolean",
+    },
+    values = {
+      getLabel = function()
+        return label
+      end,
+      setLabel = function(value)
+        label = value
+        return value
+      end,
+      isReadOnly = function()
+        return readOnly == true
+      end,
+      spaceTotal = function()
+        return total
+      end,
+      spaceUsed = function()
+        return 0
+      end,
+      makeDirectory = function()
+        return true
+      end,
+      open = function(path)
+        written.open = path
+        return 1
+      end,
+      write = function(_, value)
+        written[written.open] = (written[written.open] or "") .. value
+        return true
+      end,
+      close = function()
+        return true
+      end,
+    },
+  }
+end
+
+-- the drive is what makes a filesystem removable: device info calls every
+-- filesystem "Filesystem" and cannot tell them apart
+local function fakeDrive(address, media)
+  return {
+    address = address,
+    kind = "disk_drive",
+    methods = {
+      isEmpty = "function():boolean", media = "function():string",
+      eject = "function([velocity:number]):boolean",
+    },
+    values = {
+      isEmpty = function()
+        return media == nil
+      end,
+      media = function()
+        return media
+      end,
+      eject = function()
+        return true
+      end,
+    },
+  }
+end
+
+local FLOPPY = "3de61ebf-5122-4b20-9f22-b324c66888cf"
+local HDD = "a92767d2-9bb4-4dec-a5dd-ac038ab59250"
+local TMPFS = "ab644ac9-35ab-4eb4-91fe-4b45750f14b0"
+
+test("ocmkfs lists removable media before fixed disks", function()
+  local floppy = fakeDisk(FLOPPY, nil, 524288, false)
+  oc.components = {
+    fakeDisk(HDD, "openos", 4194304, false),
+    fakeDisk(TMPFS, "tmpfs", 65536, false),
+    floppy,
+    fakeDrive("372997ab-4a0c-46ee-a425-e13a3b7b18a4", FLOPPY),
+  }
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+
+  oc.run("ocmkfs")
+  local out = oc.printed()
+  local floppyAt = out:find("floppy", 1, true)
+  local fixedAt = out:find("fixed", 1, true)
+  check(floppyAt ~= nil, "the floppy was not listed")
+  check(fixedAt ~= nil, "the fixed disk was not listed")
+  check(floppyAt < fixedAt, "the fixed disk was listed before the floppy")
+  -- tmpfs is scratch space, never an install medium
+  check(not contains(out, TMPFS:sub(1, 8)), "offered the temporary filesystem")
+end)
+
+test("ocmkfs will not offer a read-only disk", function()
+  oc.components = { fakeDisk(HDD, "rom", 65536, true) }
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+
+  oc.run("ocmkfs")
+  check(contains(oc.printed(), "read only"), "did not mark the disk read only")
+end)
+
+test("ocmkfs needs ocup on the machine before it can copy it", function()
+  oc.components = { fakeDisk(HDD, "openos", 4194304, false) }
+
+  oc.run("ocmkfs")
+  check(contains(oc.printed(), "run ocup first"), "did not say what was missing")
+end)
+
+test("ocmkfs writes the installer and labels the disk", function()
+  local floppy = fakeDisk(FLOPPY, nil, 524288, false)
+  oc.components = {
+    floppy,
+    fakeDrive("372997ab-4a0c-46ee-a425-e13a3b7b18a4", FLOPPY),
+  }
+  oc.files["/bin/ocup.lua"] = "-- the real ocup"
+  oc.reads = { "1" }
+
+  oc.run("ocmkfs")
+
+  check(floppy.written["/bin/ocup.lua"] == "-- the real ocup", "ocup was not copied")
+  -- install parses this as a Lua table and skips copying the file itself
+  local prop = floppy.written["/.prop"]
+  check(prop ~= nil, "no .prop written, so install will not offer the disk")
+  check(prop and contains(prop, "oc-gtnh"), ".prop carries no label")
+  local parsed = prop and load("return " .. prop)
+  check(parsed ~= nil and parsed() ~= nil, ".prop is not a readable Lua table")
+  check(contains(table.concat(oc.invoked, " "), "setLabel"), "disk was not labelled")
+end)
+
+-------------------------------------------------------------------------------
 -- ockeypad
 
 -- methods verbatim from dumps/009.txt; this build takes setKey per index and
