@@ -8,7 +8,9 @@
 
 local component = require("component")
 local computer = require("computer")
+local event = require("event")
 local filesystem = require("filesystem")
+local keyboard = require("keyboard")
 local serialization = require("serialization")
 local term = require("term")
 
@@ -267,11 +269,16 @@ end
 
 local config = loadConfig()
 
--- A computer that has never chosen gets everything, which is what a fresh one
--- wants. Once a choice is recorded it is the whole truth: a program missing
--- from it is not installed, and is taken off the disk if it is already there.
--- Libraries are not part of the choice, since the programs that are kept need
--- whichever of them they require.
+-- What a computer gets before anybody has chosen: enough to look at the
+-- machines in front of it and to ask for help with them. Everything else is
+-- opted into, since no computer wants the lot.
+--
+-- Once a choice is recorded it is the whole truth: a program missing from it is
+-- not installed, and is taken off the disk if it is already there. Libraries
+-- are not part of the choice, since the programs that are kept need whichever
+-- of them they require.
+local DEFAULT = { ocdebug = true, ocdump = true }
+
 local chosen = nil
 if type(config.programs) == "table" then
   chosen = {}
@@ -289,7 +296,11 @@ local function isWanted(source)
   if source == SELF or not programName(source) then
     return true
   end
-  return chosen == nil or chosen[programName(source)] == true
+  local name = programName(source)
+  if chosen == nil then
+    return DEFAULT[name] == true
+  end
+  return chosen[name] == true
 end
 
 if editing then
@@ -301,40 +312,58 @@ if editing then
     end
   end
 
+  -- the first toggle turns the defaults into an explicit list, so what was
+  -- already installed is not silently dropped by editing something else
+  local function toggle(name)
+    if chosen == nil then
+      chosen = {}
+      for _, each in ipairs(names) do
+        chosen[each] = DEFAULT[each]
+      end
+    end
+    if chosen[name] then
+      chosen[name] = nil
+    else
+      chosen[name] = true
+    end
+  end
+
+  local cursor = 1
   while true do
     term.clear()
     write("ocup v" .. VERSION .. "   what this computer installs\n\n", WHITE)
     for index, name in ipairs(names) do
       local on = isWanted("programs/" .. name .. ".lua")
-      write("  " .. index .. "  " .. (on and "[x] " or "[ ] ") .. name .. "\n",
+      local here = index == cursor
+      write((here and "  > " or "    ") .. (on and "[x] " or "[ ] ") .. name .. "\n",
         on and WHITE or DIM)
     end
     write("\n  ocup and the libraries are always installed\n", DIM)
-    write("  number to toggle, blank to save > ", WHITE)
+    write("  up and down to move, space to toggle, enter to save\n", DIM)
 
-    local answer = tonumber(io.read())
-    if not answer then
+    local name, _, _, code = event.pull(nil, "key_down")
+    if name == nil or code == keyboard.keys.enter then
       break
-    end
-    local name = names[answer]
-    if name then
-      if chosen == nil then
-        chosen = {}
-        for _, each in ipairs(names) do
-          chosen[each] = true
-        end
-      end
-      if chosen[name] then
-        chosen[name] = nil
+    elseif code == keyboard.keys.up then
+      if cursor > 1 then
+        cursor = cursor - 1
       else
-        chosen[name] = true
+        cursor = #names
       end
+    elseif code == keyboard.keys.down then
+      if cursor < #names then
+        cursor = cursor + 1
+      else
+        cursor = 1
+      end
+    elseif code == keyboard.keys.space and names[cursor] then
+      toggle(names[cursor])
     end
   end
 
   local keep = {}
   for _, name in ipairs(names) do
-    if chosen == nil or chosen[name] then
+    if isWanted("programs/" .. name .. ".lua") then
       keep[#keep + 1] = name
     end
   end
@@ -402,6 +431,35 @@ for _, file in ipairs(FILES) do
 end
 -- room for the widest transition this run can produce, so nothing shifts later
 versionWidth = math.max(versionWidth * 2 + 4, versionWidth)
+
+-- What this run is doing comes first, and what it is leaving alone sinks to the
+-- bottom of its folder, so the interesting rows are together. Folders stay in
+-- manifest order because the tree draws them as one group each.
+local ordered = {}
+local folders = {}
+for _, file in ipairs(FILES) do
+  local here = file.source:match("^(.-)/") or ""
+  if not ordered[here] then
+    ordered[here] = { wanted = {}, rest = {} }
+    folders[#folders + 1] = here
+  end
+  local group = ordered[here]
+  if file.wanted then
+    group.wanted[#group.wanted + 1] = file
+  else
+    group.rest[#group.rest + 1] = file
+  end
+end
+
+FILES = {}
+for _, here in ipairs(folders) do
+  for _, file in ipairs(ordered[here].wanted) do
+    FILES[#FILES + 1] = file
+  end
+  for _, file in ipairs(ordered[here].rest) do
+    FILES[#FILES + 1] = file
+  end
+end
 
 local lines = {}
 

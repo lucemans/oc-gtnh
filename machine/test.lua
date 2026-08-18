@@ -244,23 +244,49 @@ test("ocup takes a program off the disk once it is opted out", function()
   check(contains(oc.printed(), "removed"), "did not report the removal")
 end)
 
-test("ocup installs everything when nothing has been chosen yet", function()
+test("ocup installs only the default set when nothing has been chosen yet", function()
   oc.components = { INTERNET }
+  oc.respond = serveProgram({
+    ["manifest.txt"] = MANIFEST .. "\nprograms/ocsweeper.lua",
+    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["programs/ocsweeper.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+
+  oc.run("ocup")
+  -- enough to look at the machines in front of it and to ask for help with
+  -- them; no computer wants the lot
+  check(oc.files["/bin/ocdebug.lua"] ~= nil, "left ocdebug out of the default set")
+  check(oc.files["/bin/ocdump.lua"] ~= nil, "left ocdump out of the default set")
+  check(oc.files["/bin/ocup.lua"] ~= nil, "left itself out")
+  check(oc.files["/bin/ocsweeper.lua"] == nil, "installed a program nobody opted into")
+end)
+
+test("ocup sinks what it is not installing to the bottom of its folder", function()
+  oc.components = { INTERNET }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    programs = { "ocdump" },
+  })
   oc.respond = serveEverything()
 
   oc.run("ocup")
-  -- a fresh computer has an empty config, and asking it to choose before it has
-  -- anything installed would be a poor first run
-  check(oc.files["/bin/ocdump.lua"] ~= nil, "left a program out with no config")
-  check(oc.files["/bin/ocdebug.lua"] ~= nil, "left a program out with no config")
+  local out = oc.printed()
+  check(out:find("ocdump", 1, true) < out:find("ocdebug", 1, true),
+    "left an untouched program above the ones being installed")
 end)
 
 test("ocup --edit writes the choice and applies nothing yet", function()
   oc.components = { INTERNET }
   oc.files["/bin/ocdump.lua"] = program("0.1.0")
   oc.respond = serveEverything()
-  -- toggle ocdump off, then blank to save
-  oc.reads = { "2", "" }
+  -- down to ocdump, space to turn it off, enter to save
+  oc.push("key_down", "keyboard", 0, 0xD0)
+  oc.push("key_down", "keyboard", 32, 0x39)
+  oc.push("key_down", "keyboard", 13, 0x1C)
 
   local ok, reason = oc.run("ocup", "--edit")
   check(ok, "ocup --edit crashed: " .. tostring(reason))
@@ -280,7 +306,7 @@ test("ocup --edit keeps the rest of the config", function()
     watch = { { address = "aa11bb22", hidden = {} } },
   })
   oc.respond = serveEverything()
-  oc.reads = { "" }
+  oc.push("key_down", "keyboard", 13, 0x1C)
 
   oc.run("ocup", "--edit")
   local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
@@ -1256,8 +1282,11 @@ local function fakeModem(address, wireless)
       maxPacketSize = function()
         return 8192
       end,
-      send = function(to, port, kind, payload)
-        sent[#sent + 1] = { to = to, port = port, kind = kind, payload = payload }
+      -- a status reply carries the satellite's name before its payload, so all
+      -- five are kept: capturing four silently recorded the name as the payload
+      send = function(to, port, kind, host, payload)
+        sent[#sent + 1] = { to = to, port = port, kind = kind,
+          host = host, payload = payload }
         return true
       end,
       broadcast = function(port, kind)
@@ -1284,12 +1313,14 @@ test("ocserve answers a status request", function()
   check(reply and reply.to == "bb000000", "did not answer the asker directly")
   check(reply and reply.kind == "ocstatus!", "wrong reply marker")
 
-  local cards = reply and require("serialization").unserialize(reply.payload)
+  local report = reply and require("serialization").unserialize(reply.payload)
+  local cards = report and report.cards
   check(type(cards) == "table" and #cards > 0, "sent no machines")
   check(cards and cards[1].name == "Super Tank", "did not name the machine")
   check(cards and #cards[1].gauges > 0, "sent no readings")
   -- the tablet should not have to parse "42,000" back into a number
   check(cards and type(cards[1].gauges[1].percent) == "number", "no percentage sent")
+  check(report and type(report.alerts) == "table", "sent no alert list")
 end)
 
 test("ocserve raises a wireless card off zero strength", function()
@@ -1363,12 +1394,15 @@ test("ocview asks and draws what comes back", function()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
   local payload = require("serialization").serialize({
-    {
-      name = "Super Tank",
-      status = "idle",
-      gauges = { { label = "Bio Diesel", current = "42,000", maximum = "4,000,000",
-        unit = "L", percent = 1.05 } },
+    cards = {
+      {
+        name = "Super Tank",
+        status = "idle",
+        gauges = { { label = "Bio Diesel", current = "42,000", maximum = "4,000,000",
+          unit = "L", percent = 1.05 } },
+      },
     },
+    alerts = { { name = "diesel low", tripped = true } },
   })
   -- the reply now names the satellite, so several can be told apart
   oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!", "satellite-1", payload)
@@ -1380,6 +1414,8 @@ test("ocview asks and draws what comes back", function()
   check(contains(frame, "Super Tank"), "did not show the machine")
   check(contains(frame, "42,000 / 4,000,000 L"), "did not show the reading")
   check(contains(frame, "Bio Diesel"), "did not label the gauge")
+  -- a tripped alert is the reason to be looking at this screen at all
+  check(contains(frame, "diesel low"), "did not show the alert")
   check(modem.sent[1] and modem.sent[1].kind == "ocstatus?", "never asked")
   if show then
     say(frame)
@@ -1391,8 +1427,10 @@ test("ocview collects every satellite, not just the quickest", function()
   oc.components = { modem }
   local serialize = require("serialization").serialize
 
-  local first = serialize({ { name = "EBF1", status = "working", gauges = {} } })
-  local second = serialize({ { name = "Super Tank", status = "idle", gauges = {} } })
+  local first = serialize({
+    cards = { { name = "EBF1", status = "working", gauges = {} } }, alerts = {} })
+  local second = serialize({
+    cards = { { name = "Super Tank", status = "idle", gauges = {} } }, alerts = {} })
   oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!", "boiler-room", first)
   oc.push("modem_message", modem.address, "dd000000", PORT, 40, "ocstatus!", "tank-farm", second)
 
@@ -1418,12 +1456,14 @@ test("ocview shows one satellite once however often it answers", function()
   oc.components = { modem }
   local serialize = require("serialization").serialize
 
-  local payload = serialize({ { name = "EBF1", status = "working", gauges = {} } })
+  local payload = serialize({
+    cards = { { name = "EBF1", status = "working", gauges = {} } }, alerts = {} })
   for _ = 1, 4 do
     oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
       "boiler-room", payload)
   end
-  local other = serialize({ { name = "Super Tank", status = "idle", gauges = {} } })
+  local other = serialize({
+    cards = { { name = "Super Tank", status = "idle", gauges = {} } }, alerts = {} })
   oc.push("modem_message", modem.address, "dd000000", PORT, 40, "ocstatus!",
     "tank-farm", other)
 

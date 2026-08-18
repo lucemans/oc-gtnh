@@ -15,7 +15,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -111,27 +111,52 @@ local function evaluate(alert, value)
   return tripped
 end
 
-local function act(alert, tripped)
+-- An alert used to stop one machine. One tank feeds both blast furnaces, so it
+-- stops a list of them now. A configuration written before that carries a
+-- single action, which is the same thing with one entry.
+local function actions(alert)
   if not alert.act then
+    return {}
+  end
+  if alert.act.address then
+    return { alert.act }
+  end
+  return alert.act
+end
+
+local function act(alert, tripped)
+  local list = actions(alert)
+  if #list == 0 then
     return nil
   end
-  -- written out rather than "tripped and onTrip or onClear": onTrip is false
-  -- here, and that expression would fall through and enable the machine
-  local wanted
-  if tripped then
-    wanted = alert.act.onTrip
-  else
-    wanted = alert.act.onClear
+
+  alert.applied = alert.applied or {}
+  local done = {}
+
+  for index, action in ipairs(list) do
+    -- written out rather than "tripped and onTrip or onClear": onTrip is false
+    -- here, and that expression would fall through and enable the machine
+    local wanted
+    if tripped then
+      wanted = action.onTrip
+    else
+      wanted = action.onClear
+    end
+    if wanted ~= nil and alert.applied[index] ~= wanted then
+      local ok, reason = core.setValue(action.address, action.method, wanted)
+      if ok then
+        alert.applied[index] = wanted
+        done[#done + 1] = action.method .. "(" .. tostring(wanted) .. ")"
+      else
+        done[#done + 1] = "action failed: " .. tostring(reason)
+      end
+    end
   end
-  if wanted == nil or alert.applied == wanted then
+
+  if #done == 0 then
     return nil
   end
-  local ok, reason = core.setValue(alert.act.address, alert.act.method, wanted)
-  if ok then
-    alert.applied = wanted
-    return alert.act.method .. "(" .. tostring(wanted) .. ")"
-  end
-  return "action failed: " .. tostring(reason)
+  return table.concat(done, ", ")
 end
 
 local notices = {}
@@ -260,8 +285,8 @@ local function render(cards)
       .. tostring(foreground) .. "\1" .. tostring(background) .. "\2"
   end
 
-  local function drawGauge(x, y, gauge, width)
-    local ratio = gauge.max > 0 and gauge.value / gauge.max or 0
+  local function drawGauge(x, y, gauge, width, max, isLocal)
+    local ratio = max > 0 and gauge.value / max or 0
     if ratio < 0 then
       ratio = 0
     elseif ratio > 1 then
@@ -284,7 +309,12 @@ local function render(cards)
 
     local unit = gauge.unit ~= "" and (" " .. gauge.unit) or ""
     local text = string.format("  %s / %s%s  %.1f%%",
-      gauge.current, gauge.maximum, unit, ratio * 100)
+      gauge.current, core.comma(max), unit, ratio * 100)
+    -- the real capacity still belongs on screen, or a local maximum quietly
+    -- becomes a lie about how much the tank holds
+    if isLocal then
+      text = text .. "   of " .. gauge.maximum
+    end
     write(cursor, y, fit(text, math.max(0, W - cursor)), FG, BG)
   end
 
@@ -301,15 +331,20 @@ local function render(cards)
     end
     y = y + 1
 
+    local ordinal = 0
     for index, reading in ipairs(card.readings) do
       if y > H - 2 then
         break
+      end
+      if reading.kind == "gauge" then
+        ordinal = ordinal + 1
       end
       if wanted(card.entry, reading, index) then
         if reading.kind == "gauge" then
           local label = reading.label ~= "" and reading.label or "value"
           write(5, y, fit(label, 12), DIM, BG)
-          drawGauge(18, y, reading, GAUGE_W)
+          local max, isLocal = core.scale(reading, net.limitOf(card.entry, ordinal))
+          drawGauge(18, y, reading, GAUGE_W, max, isLocal)
         else
           local x = 5
           for _, part in ipairs(core.segments(reading.raw, DIM)) do
@@ -352,18 +387,12 @@ local function render(cards)
 end
 
 local function sample()
-  local cards = {}
+  -- the same read the network half serves from, so a question costs no further
+  -- calls into the machines
+  local cards = net.machines(config)
   local byAddress = {}
-  for _, entry in ipairs(config.watch) do
-    local readings = gt.readings(entry.address)
-    byAddress[entry.address] = readings
-    cards[#cards + 1] = {
-      entry = entry,
-      name = gt.displayName(entry.address, config) or lp.displayName(entry.address)
-        or entry.address:sub(1, 8),
-      status = gt.statusOf(entry.address),
-      readings = readings,
-    }
+  for _, card in ipairs(cards) do
+    byAddress[card.entry.address] = card.readings
   end
   checkAlerts(byAddress)
   for _, card in ipairs(cards) do
@@ -550,23 +579,90 @@ local function editAlert()
     beep = true,
   }
 
-  local answer = prompt("stop a machine when this trips? (y/N)")
-  if answer and answer:lower():sub(1, 1) == "y" then
+  -- one tank can feed more than one furnace, so this asks until you say no
+  local acts = {}
+  while true do
+    local question = "stop a machine when this trips? (y/N)"
+    if #acts > 0 then
+      question = "stop another machine as well? (y/N)   " .. #acts .. " so far"
+    end
+    local answer = prompt(question)
+    if not (answer and answer:lower():sub(1, 1) == "y") then
+      break
+    end
+
     local target = chooseComponent()
-    if target and core.has(core.methodsOf(target.address), "setWorkAllowed") then
-      alert.act = {
+    if not target then
+      break
+    end
+    if core.has(core.methodsOf(target.address), "setWorkAllowed") then
+      acts[#acts + 1] = {
         address = target.address,
         method = "setWorkAllowed",
         onTrip = false,
         onClear = true,
       }
-    elseif target then
-      print("that component has no setWorkAllowed, alert saved without an action")
+    else
+      print("that component has no setWorkAllowed, skipped")
       os.sleep(2)
     end
   end
+  if #acts > 0 then
+    alert.act = acts
+  end
 
   config.alerts[#config.alerts + 1] = alert
+  save()
+end
+
+-- A super tank holds four million litres. If its diesel only ever moves between
+-- 5,000 and 10,000 then a bar against four million never leaves zero, so the
+-- maximum worth drawing against is set per gauge here.
+local function editLimit()
+  term.clear()
+  if #config.watch == 0 then
+    print("no machines watched yet")
+    os.sleep(1)
+    return
+  end
+  for index, entry in ipairs(config.watch) do
+    print(index .. "  " .. (gt.displayName(entry.address, config)
+      or lp.displayName(entry.address) or entry.address))
+  end
+  io.write("machine number (blank to cancel) > ")
+  local which = tonumber(io.read())
+  local entry = which and config.watch[which]
+  if not entry then
+    return
+  end
+
+  term.clear()
+  local gauges = {}
+  for _, reading in ipairs(gt.readings(entry.address)) do
+    if reading.kind == "gauge" then
+      gauges[#gauges + 1] = reading
+      local limit = net.limitOf(entry, #gauges)
+      print(string.format("%3d  %s  %s / %s %s%s", #gauges,
+        reading.label ~= "" and reading.label or "value",
+        reading.current, reading.maximum, reading.unit,
+        limit and ("   showing against " .. core.comma(limit)) or ""))
+    end
+  end
+  if #gauges == 0 then
+    print("this machine reports no gauge")
+    os.sleep(2)
+    return
+  end
+
+  io.write("gauge number (blank to cancel) > ")
+  local ordinal = tonumber(io.read())
+  if not ordinal or not gauges[ordinal] then
+    return
+  end
+
+  local limit = tonumber(prompt("draw the bar against what maximum? (blank to clear)"))
+  entry.limits = entry.limits or {}
+  entry.limits[ordinal] = limit
   save()
 end
 
@@ -599,9 +695,10 @@ local function editor()
     print("  2  remove a machine")
     print("  3  set a nickname")
     print("  4  choose which readings to show")
-    print("  5  add an alert")
-    print("  6  remove an alert")
-    print("  7  done")
+    print("  5  set the maximum a bar is drawn against")
+    print("  6  add an alert")
+    print("  7  remove an alert")
+    print("  8  done")
     io.write("> ")
 
     local answer = tonumber(io.read())
@@ -614,8 +711,10 @@ local function editor()
     elseif answer == 4 then
       editReadings()
     elseif answer == 5 then
-      editAlert()
+      editLimit()
     elseif answer == 6 then
+      editAlert()
+    elseif answer == 7 then
       editAlertRemove()
     else
       return
@@ -647,8 +746,14 @@ local modem = net.modem()
 blank()
 term.setCursorBlink(false)
 
+-- what the last refresh read, kept so a question is answered from it rather
+-- than by reading every machine again
+local latest
+
 while true do
-  render(sample())
+  local cards = sample()
+  latest = net.report(config, cards)
+  render(cards)
   -- packed rather than unpacked into fixed names: a key event carries a code
   -- in the fourth slot where a modem message carries a port, and reading one
   -- as the other is how a dispatch quietly stops matching
@@ -662,14 +767,14 @@ while true do
     -- a satellite answers for the machines it watches while it is watching
     -- them, so one program does both rather than fighting for the terminal
     if modem then
-      local sent = net.answer(modem, packed[4], packed[3], packed[6], config)
+      local sent = net.answer(modem, packed[4], packed[3], packed[6], config, latest)
       if sent then
         notice("served " .. sent)
       end
     end
   elseif name == "screen_resized" then
     layout()
-    render(sample())
+    render(cards)
   elseif name == "key_down" then
     if code == keyboard.keys.q then
       break

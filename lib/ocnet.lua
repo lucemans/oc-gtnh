@@ -13,7 +13,7 @@ local serialization = require("serialization")
 
 local net = {}
 
-net.VERSION = "0.2.0"
+net.VERSION = "0.3.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -59,46 +59,90 @@ local function targets(config)
   return found
 end
 
-function net.snapshot(config)
+-- Reads every machine this computer is responsible for. ocwatch calls this once
+-- per refresh for its own dashboard and hands the result straight to net.report,
+-- so a question costs no machine reads at all: on a busy satellite each one is a
+-- server tick, and doing them again per request was most of the delay a tablet
+-- saw.
+function net.machines(config)
   local cards = {}
   for _, entry in ipairs(targets(config)) do
-    local card = {
+    cards[#cards + 1] = {
+      entry = entry,
       name = gt.displayName(entry.address, config)
         or lp.displayName(entry.address)
         or entry.address:sub(1, 8),
       status = gt.statusOf(entry.address),
-      gauges = {},
+      readings = gt.readings(entry.address),
     }
-    for _, reading in ipairs(gt.readings(entry.address)) do
-      if reading.kind == "gauge" then
-        card.gauges[#card.gauges + 1] = {
-          label = reading.label,
-          current = reading.current,
-          maximum = reading.maximum,
-          unit = reading.unit,
-          -- computed here so the asking machine never has to turn "42,000"
-          -- back into a number
-          percent = reading.max > 0 and (reading.value / reading.max * 100) or 0,
-        }
-      end
-    end
-    cards[#cards + 1] = card
   end
   return cards
 end
 
--- Answers one request. Returns a description of what was sent, or nil when the
--- message was not a question this understands.
-function net.answer(modem, port, remote, request, config)
+-- the local maximum chosen for the nth gauge of a machine, kept by position
+-- rather than by label because a tank drops its fluid name when it runs dry
+function net.limitOf(entry, ordinal)
+  return entry and entry.limits and entry.limits[ordinal] or nil
+end
+
+-- What travels over the wire. Gauges arrive already rescaled and already
+-- formatted, so the asking machine never turns "42,000" back into a number.
+function net.report(config, cards)
+  local report = { cards = {}, alerts = {} }
+
+  for _, card in ipairs(cards) do
+    local out = {
+      name = card.name,
+      status = card.status,
+      alarm = card.alarm,
+      gauges = {},
+    }
+    local ordinal = 0
+    for _, reading in ipairs(card.readings) do
+      if reading.kind == "gauge" then
+        ordinal = ordinal + 1
+        local max, isLocal = core.scale(reading, net.limitOf(card.entry, ordinal))
+        out.gauges[#out.gauges + 1] = {
+          label = reading.label,
+          current = reading.current,
+          maximum = core.comma(max),
+          -- only sent when the bar is drawn against a local maximum, so the
+          -- real capacity is still visible somewhere
+          capacity = isLocal and reading.maximum or nil,
+          unit = reading.unit,
+          percent = max > 0 and (reading.value / max * 100) or 0,
+        }
+      end
+    end
+    report.cards[#report.cards + 1] = out
+  end
+
+  for _, alert in ipairs(config and config.alerts or {}) do
+    report.alerts[#report.alerts + 1] = {
+      name = alert.name,
+      tripped = alert.tripped or false,
+    }
+  end
+
+  return report
+end
+
+-- Answers one request with a report somebody else has already prepared. Returns
+-- a description of what was sent, or nil when the message was not a question
+-- this understands.
+function net.answer(modem, port, remote, request, config, report)
   if port ~= core.PORT or request ~= net.ASK then
     return nil
   end
 
-  local payload = serialization.serialize(net.snapshot(config))
+  local payload = serialization.serialize(report)
   local limit = modem.maxPacketSize and modem.maxPacketSize() or 8192
   if #payload > limit then
     -- better a short answer than a packet the card silently refuses
-    payload = serialization.serialize({ { name = "too many machines to send" } })
+    payload = serialization.serialize({
+      cards = { { name = "too many machines to send", gauges = {} } },
+      alerts = {},
+    })
   end
 
   modem.send(remote, core.PORT, net.REPLY, net.hostname(config), payload)
@@ -108,12 +152,15 @@ end
 -- Asks everyone in range and collects every answer within the window, rather
 -- than taking the first: a base has more than one satellite.
 --
--- The window is real time, not a count of messages. A satellite answers between
--- refreshes, and reading six GregTech machines takes a second or more of server
--- ticks, so an impatient window gives up before a busy machine gets a word in.
+-- The window is real time, not a count of messages, because a satellite that is
+-- busy needs a moment to get a word in. Waiting it out every round is what made
+-- a tablet feel seconds behind, so once `expected` satellites have answered the
+-- round ends immediately. The caller passes what the last round found, so only
+-- the first round after a start or a satellite going quiet pays the full wait.
+--
 -- Also returns what was heard, which is the difference between "nobody
 -- answered" and "somebody answered something I could not read".
-function net.ask(modem, event, seconds, computerLib)
+function net.ask(modem, event, seconds, expected, computerLib)
   modem.broadcast(core.PORT, net.ASK)
 
   local clock = (computerLib or computer).uptime
@@ -138,12 +185,15 @@ function net.ask(modem, event, seconds, computerLib)
     heard = heard + 1
 
     if port == core.PORT and kind == net.REPLY then
-      local ok, cards = pcall(serialization.unserialize, payload)
-      if ok and type(cards) == "table" then
+      local ok, report = pcall(serialization.unserialize, payload)
+      -- a satellite still on an older ocwatch sends a bare list of machines,
+      -- which lands here as unreadable and is reported as a version mismatch
+      if ok and type(report) == "table" and type(report.cards) == "table" then
         local answer = {
           host = host or tostring(remote):sub(1, 8),
           address = remote,
-          cards = cards,
+          cards = report.cards,
+          alerts = report.alerts or {},
         }
         if place[remote] then
           -- the later copy is the fresher reading
@@ -155,6 +205,10 @@ function net.ask(modem, event, seconds, computerLib)
       else
         unreadable = unreadable + 1
       end
+    end
+
+    if expected and expected > 0 and #answers >= expected then
+      break
     end
   end
 

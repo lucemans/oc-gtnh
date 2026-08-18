@@ -345,6 +345,7 @@ local keyboard = {
   keys = {
     q = 0x10, e = 0x12, r = 0x13,
     up = 0xC8, down = 0xD0, pageUp = 0xC9, pageDown = 0xD1,
+    space = 0x39, enter = 0x1C,
   },
 }
 

@@ -14,12 +14,14 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
 
--- a satellite answers between refreshes, and reading six GregTech machines
--- costs a second or more of server ticks; three seconds was too impatient
+-- How long to wait when it is not yet known who is out there. Once a round has
+-- found some satellites the next round stops as soon as that many have answered,
+-- so this is the cost of starting up or of a satellite going quiet, not the cost
+-- of every refresh.
 local ANSWER_TIMEOUT = 8
-local REFRESH_SECONDS = 5
+local REFRESH_SECONDS = 2
 
 local BG = 0x000000
 local FG = 0xFFFFFF
@@ -57,13 +59,20 @@ local function write(x, y, text, foreground, background)
   gpu.set(x, y, text)
 end
 
+-- how many satellites the last good round found, so this one can stop as soon
+-- as they have all answered instead of sitting out the whole window
+local expected = 0
+
 -- Every satellite in range is collected, not just the quickest: a base has more
 -- than one, and taking the first answer would hide the rest.
 local function ask(modem)
-  local answers, seen = net.ask(modem, event, ANSWER_TIMEOUT)
+  local answers, seen = net.ask(modem, event, ANSWER_TIMEOUT, expected)
   if #answers > 0 then
+    expected = #answers
     return answers
   end
+  -- somebody has gone quiet, so the next round waits properly again
+  expected = 0
 
   -- Saying only "no answer" hides which half is broken. Whether anything at all
   -- arrived separates a satellite that never heard the question from one that
@@ -100,6 +109,11 @@ local function drawGauge(x, y, gauge, width)
 
   local unit = (gauge.unit and gauge.unit ~= "") and (" " .. gauge.unit) or ""
   local text = string.format("  %s / %s%s", tostring(gauge.current), tostring(gauge.maximum), unit)
+  -- the satellite sends this only when its bar is drawn against a local
+  -- maximum, so the real capacity is never lost
+  if gauge.capacity then
+    text = text .. "  of " .. tostring(gauge.capacity)
+  end
   write(cursor + 1, y, fit(text, math.max(0, W - cursor - 1)), FG, BG)
 end
 
@@ -129,13 +143,26 @@ local function render(answers, problem)
     write(1, y, fit(" " .. answer.host, W), FG, BAR)
     y = y + 1
 
+    -- An alert that has tripped is the reason to be looking at this screen at
+    -- all, so it goes above the machines rather than being deduced from them.
+    for _, alert in ipairs(answer.alerts or {}) do
+      if y > H - 2 then
+        break
+      end
+      local mark = alert.tripped and "!" or "ok"
+      write(3, y, fit(mark .. "  " .. tostring(alert.name), W - 4),
+        alert.tripped and ALARM or DIM, BG)
+      y = y + 1
+    end
+
     for _, card in ipairs(answer.cards) do
       if y > H - 2 then
         break
       end
       write(3, y, fit(card.name or "?", W - 14), FG, BG)
       if card.status then
-        write(math.max(1, W - 12), y, fit(card.status, 11), OK_COLOR, BG)
+        write(math.max(1, W - 12), y, fit(card.status, 11),
+          card.alarm and ALARM or OK_COLOR, BG)
       end
       y = y + 1
 

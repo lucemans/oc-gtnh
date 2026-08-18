@@ -7,7 +7,7 @@ local serialization = require("serialization")
 
 local core = {}
 
-core.VERSION = "0.4.0"
+core.VERSION = "0.5.0"
 
 -- the Minecraft section sign, two bytes in UTF-8
 core.SECTION = "\194\167"
@@ -105,6 +105,20 @@ function core.viewport(gpu)
     return width, height
   end
   return gpu.getResolution()
+end
+
+-- A super tank holds four million litres and its diesel only ever moves between
+-- 5,000 and 10,000, so a bar against the real maximum is empty forever. A local
+-- maximum rescales the bar to the part actually in use. The real maximum takes
+-- over again once the value climbs past the local one, so a reading is never
+-- drawn as more than full.
+--
+-- Returns the maximum to draw against, and whether that is the local one.
+function core.scale(gauge, limit)
+  if not limit or limit <= 0 or gauge.value > limit then
+    return gauge.max, false
+  end
+  return limit, true
 end
 
 function core.comma(number)
