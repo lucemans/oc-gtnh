@@ -256,6 +256,18 @@ function term.clear()
   end
 end
 function term.setCursorBlink() end
+
+-- The real terminal overwrites the row the cursor sits on. Modelling that would
+-- need a grid; instead every repaint becomes its own output line, so a test sees
+-- the whole sequence of states a row passed through rather than only the last.
+function term.getCursor()
+  return 1, #oc.output
+end
+
+function term.setCursor()
+  oc.output[#oc.output + 1] = ""
+end
+
 function term.clearLine()
   oc.output[#oc.output] = ""
 end

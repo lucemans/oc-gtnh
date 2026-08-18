@@ -8,7 +8,7 @@ local computer = require("computer")
 local filesystem = require("filesystem")
 local term = require("term")
 
-local VERSION = "0.9.0"
+local VERSION = "0.10.0"
 
 local REPO = "lucemans/oc-gtnh"
 local COMMIT_URL = "https://api.github.com/repos/" .. REPO .. "/commits/master"
@@ -267,43 +267,97 @@ if not reloaded then
   end
 end
 
+-- The manifest already says what the run will touch, so the whole list is drawn
+-- before any of it is fetched. Rows are then repainted in place, which reserves
+-- the right amount of space up front instead of growing as results arrive.
+local TEE = "\226\148\156\226\148\128 "
+local ELBOW = "\226\148\148\226\148\128 "
+
 local nameWidth = 0
 for _, file in ipairs(FILES) do
-  nameWidth = math.max(nameWidth, #file.source)
+  local name = file.source:match("/(.+)$") or file.source
+  file.name = name
+  nameWidth = math.max(nameWidth, #name)
 end
 
-local function label(name)
-  return "  " .. name .. string.rep(" ", nameWidth - #name) .. "  "
+local lines = {}
+
+local function addLine(text)
+  lines[#lines + 1] = text
+  return #lines
 end
+
+local function rowText(file, status)
+  return "  " .. file.branch .. file.name
+    .. string.rep(" ", nameWidth - #file.name) .. "   " .. status
+end
+
+local folder = nil
+for index, file in ipairs(FILES) do
+  local here = file.source:match("^(.-)/") or ""
+  if here ~= folder then
+    addLine("  " .. here .. "/")
+    folder = here
+  end
+  local next = FILES[index + 1]
+  local lastOfGroup = not next or (next.source:match("^(.-)/") or "") ~= here
+  file.branch = lastOfGroup and ELBOW or TEE
+  file.line = addLine(rowText(file, "pending"))
+end
+
+addLine("")
+local barLine = addLine("")
+
+for _, text in ipairs(lines) do
+  write(text .. "\n", DIM)
+end
+
+-- anchored to where the cursor ended up, so a screen that scrolled while the
+-- block was printed still resolves to the right rows
+local _, below = term.getCursor()
+local firstRow = below - #lines
+
+local function repaint(line, text, color)
+  term.setCursor(1, firstRow + line - 1)
+  term.clearLine()
+  write(text, color)
+  term.setCursor(1, below)
+end
+
+local function showBar(done, total, note, color)
+  repaint(barLine, "  " .. bar(done, total, 12) .. " " .. note, color or CYAN)
+end
+
+showBar(0, #FILES, "fetching")
 
 -- Everything is fetched before anything is written. Writing as it goes would
 -- let one failed download leave the programs newer than the library they
 -- require, which breaks every one of them until the next run.
 local failure = nil
 for index, file in ipairs(FILES) do
-  term.clearLine()
-  write("  " .. bar(index - 1, #FILES, 12) .. " ", CYAN)
-  write(file.source, DIM)
-
+  repaint(file.line, rowText(file, "fetching"), CYAN)
   local contents, reason = download(urlFor(file.source))
   if not contents then
-    failure = { source = file.source, reason = reason }
+    repaint(file.line, rowText(file, "failed  " .. reason), RED)
+    failure = file
     break
   end
   file.contents = contents
+  repaint(file.line, rowText(file, "fetched"), DIM)
+  showBar(index, #FILES, "fetching")
 end
 
 if failure then
-  term.clearLine()
-  write(label(failure.source), WHITE)
-  write("failed      " .. failure.reason .. "\n", RED)
-  write("  nothing was installed, the machine is unchanged\n", RED)
+  -- the row shows the reason, but a failure is worth naming in full: the tree
+  -- splits the path across a group header and a leaf
+  repaint(barLine, "  " .. failure.source .. " failed, nothing was installed", RED)
   paint(WHITE)
   return 1
 end
 
 local failed = 0
-for _, file in ipairs(FILES) do
+showBar(0, #FILES, "installing")
+for index, file in ipairs(FILES) do
   local existing = readFile(file.target)
   -- overwriting a running program is safe: OpenOS loads the whole file first
   local ok, writeReason = writeFile(file.target, file.contents)
@@ -313,21 +367,17 @@ for _, file in ipairs(FILES) do
     forget(file.target)
     status, color = describe(existing, file.contents)
   else
-    status, color = "failed      " .. writeReason, RED
+    status, color = "failed  " .. writeReason, RED
     failed = failed + 1
   end
-
-  term.clearLine()
-  write(label(file.source), WHITE)
-  write(status .. "\n", color)
+  repaint(file.line, rowText(file, status), color)
+  showBar(index, #FILES, "installing")
 end
 
-term.clearLine()
-write("  " .. bar(#FILES, #FILES, 12) .. " ", CYAN)
 if failed > 0 then
-  write(failed .. " of " .. #FILES .. " could not be written\n", RED)
+  showBar(#FILES, #FILES, failed .. " of " .. #FILES .. " could not be written", RED)
   paint(WHITE)
   return 1
 end
-write(#FILES .. " files ready\n", GREEN)
+showBar(#FILES, #FILES, #FILES .. " files ready", GREEN)
 paint(WHITE)
