@@ -10,10 +10,11 @@ local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
 local serialization = require("serialization")
+local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.3.0"
+net.VERSION = "0.4.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -67,16 +68,19 @@ end
 function net.machines(config)
   local cards = {}
   for _, entry in ipairs(targets(config)) do
-    -- the status depends on the readings: whether a machine can be idle at all
-    -- is decided by whether it reports progress
-    local readings = gt.readings(entry.address)
+    -- a side means a tank read through a transposer, which is how a block with
+    -- no driver of its own gets onto the dashboard
+    local look
+    if entry.side then
+      look = tank.inspect(entry.address, entry.side, config)
+    else
+      look = gt.inspect(entry.address, config)
+    end
     cards[#cards + 1] = {
       entry = entry,
-      name = gt.displayName(entry.address, config)
-        or lp.displayName(entry.address)
-        or entry.address:sub(1, 8),
-      status = gt.statusOf(entry.address, readings),
-      readings = readings,
+      name = look.name or lp.displayName(entry.address) or entry.address:sub(1, 8),
+      status = look.status,
+      readings = look.readings,
     }
   end
   return cards
@@ -152,70 +156,34 @@ function net.answer(modem, port, remote, request, config, report)
   return tostring(remote):sub(1, 8) .. "  " .. #payload .. " bytes"
 end
 
--- Asks everyone in range and collects every answer within the window, rather
--- than taking the first: a base has more than one satellite.
---
--- The window is real time, not a count of messages, because a satellite that is
--- busy needs a moment to get a word in. Waiting it out every round is what made
--- a tablet feel seconds behind, so once `expected` satellites have answered the
--- round ends immediately. The caller passes what the last round found, so only
--- the first round after a start or a satellite going quiet pays the full wait.
---
--- Also returns what was heard, which is the difference between "nobody
--- answered" and "somebody answered something I could not read".
-function net.ask(modem, event, seconds, expected, computerLib)
-  modem.broadcast(core.PORT, net.ASK)
+-- Puts the question to everyone in range. The answers come back as ordinary
+-- modem messages, which the asker reads in its own event loop through decode:
+-- blocking here until a window ran out was what made a tablet ignore the
+-- keyboard for seconds at a time.
+function net.ask(modem)
+  return modem.broadcast(core.PORT, net.ASK)
+end
 
-  local clock = (computerLib or computer).uptime
-  local until_ = clock() + (seconds or 8)
-  local answers, heard, unreadable = {}, 0, 0
-  -- A relay repeats what it forwards, so one question reaches a satellite over
-  -- several paths and every reply comes back over several paths. One card is
-  -- one satellite however many copies of its answer arrive.
-  local place = {}
-
-  while true do
-    local left = until_ - clock()
-    if left <= 0 then
-      break
-    end
-
-    local name, _, remote, port, _, kind, host, payload =
-      event.pull(left, "modem_message")
-    if name == nil then
-      break
-    end
-    heard = heard + 1
-
-    if port == core.PORT and kind == net.REPLY then
-      local ok, report = pcall(serialization.unserialize, payload)
-      -- a satellite still on an older ocwatch sends a bare list of machines,
-      -- which lands here as unreadable and is reported as a version mismatch
-      if ok and type(report) == "table" and type(report.cards) == "table" then
-        local answer = {
-          host = host or tostring(remote):sub(1, 8),
-          address = remote,
-          cards = report.cards,
-          alerts = report.alerts or {},
-        }
-        if place[remote] then
-          -- the later copy is the fresher reading
-          answers[place[remote]] = answer
-        else
-          place[remote] = #answers + 1
-          answers[#answers + 1] = answer
-        end
-      else
-        unreadable = unreadable + 1
-      end
-    end
-
-    if expected and expected > 0 and #answers >= expected then
-      break
-    end
+-- Reads one modem message. Returns the answer it carries, or nil, and with nil
+-- a reason when the message was an answer that could not be understood. A
+-- satellite still on an older ocwatch sends a bare list of machines, which
+-- lands here as unreadable and is reported as a version mismatch.
+function net.decode(port, remote, kind, host, payload)
+  if port ~= core.PORT or kind ~= net.REPLY then
+    return nil
   end
 
-  return answers, { heard = heard, unreadable = unreadable }
+  local ok, report = pcall(serialization.unserialize, payload)
+  if not ok or type(report) ~= "table" or type(report.cards) ~= "table" then
+    return nil, "unreadable"
+  end
+
+  return {
+    host = host or tostring(remote):sub(1, 8),
+    address = remote,
+    cards = report.cards,
+    alerts = report.alerts or {},
+  }
 end
 
 return net

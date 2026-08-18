@@ -9,7 +9,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.8.0"
+local VERSION = "0.9.0"
 
 -- indirect component calls block until the next server tick, so re-reading a
 -- machine costs real time; two seconds keeps the readings live without
@@ -20,6 +20,8 @@ local gpu = component.gpu
 
 local W, H, LIST_W, CONTENT_TOP, CONTENT_BOTTOM, CONTENT_ROWS
 local DETAIL_X, DETAIL_W, NAME_W, GAUGE_W
+
+local paint = core.painter(gpu)
 
 -- Recomputed rather than fixed at startup: a screen can be resized under a
 -- running program, and an attached display is often not the size it began with.
@@ -33,6 +35,7 @@ local function layout()
   DETAIL_W = W - DETAIL_X + 1
   NAME_W = LIST_W - 8
   GAUGE_W = math.max(16, math.min(40, math.floor(DETAIL_W / 3)))
+  paint.forget()
 end
 
 layout()
@@ -60,11 +63,7 @@ local function fit(text, width)
   return text .. string.rep(" ", width - length)
 end
 
-local function write(x, y, text, foreground, background)
-  gpu.setForeground(foreground or FG)
-  gpu.setBackground(background or BG)
-  gpu.set(x, y, text)
-end
+local write = paint.write
 
 local function wrap(text, width)
   local lines = {}
@@ -97,8 +96,8 @@ local function friendlyName(entry)
   return entry.friendly or entry.kind
 end
 
-local function summaryLines(entry, add)
-  for _, reading in ipairs(gt.readings(entry.address)) do
+local function summaryLines(readings, add)
+  for _, reading in ipairs(readings) do
     if reading.kind == "gauge" then
       if reading.label ~= "" then
         add(reading.label, DIM)
@@ -130,8 +129,13 @@ local function detailLines(entry)
   end
 
   local methods = core.methodsOf(entry.address) or {}
+  -- one read of the sensor for the name, the readings and the status alike:
+  -- each of these blocks until the next server tick
+  local sensor = gt.sensorOf(entry.address, methods)
+  local readings = gt.readings(entry.address, sensor, methods)
 
-  add(friendlyName(entry), FG, gt.statusOf(entry.address, nil, methods), VALUE)
+  add(friendlyName(entry), FG,
+    gt.statusOf(entry.address, readings, methods, sensor ~= nil), VALUE)
 
   local where = ""
   if core.has(methods, "getCoordinates") then
@@ -144,7 +148,7 @@ local function detailLines(entry)
   add("")
 
   local before = #lines
-  summaryLines(entry, add)
+  summaryLines(readings, add)
   if #lines > before then
     add("")
   end
@@ -308,16 +312,13 @@ local function renderGauge(y, gauge)
 end
 
 local function render()
-  gpu.setBackground(BG)
-  gpu.fill(1, 1, W, H, " ")
-
   write(1, 1, fit("  ocdebug v" .. VERSION .. "    " .. #entries .. " components attached", W), FG, BAR)
   write(1, H, fit("  [click/up/down] select   [wheel/pgup/pgdn] scroll   [r] refresh   [q] quit"
     .. "      live every " .. REFRESH_SECONDS .. "s", W), FG, BAR)
 
-  gpu.setBackground(BG)
-  gpu.setForeground(DIM)
-  gpu.fill(LIST_W + 1, CONTENT_TOP, 1, CONTENT_ROWS, PIPE)
+  for row = CONTENT_TOP, CONTENT_BOTTOM do
+    write(LIST_W + 1, row, PIPE, DIM, BG)
+  end
 
   for row = 1, CONTENT_ROWS do
     local entry = entries[listScroll + row]
@@ -359,6 +360,8 @@ local function render()
       end
     end
   end
+
+  paint.flush(W, H, BG, FG)
 end
 
 if #entries == 0 then

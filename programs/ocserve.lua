@@ -17,7 +17,7 @@ local event = require("event")
 local keyboard = require("keyboard")
 local net = require("ocnet")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999

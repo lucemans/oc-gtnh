@@ -5,7 +5,7 @@ local core = require("oclib")
 
 local gt = {}
 
-gt.VERSION = "0.5.0"
+gt.VERSION = "0.6.0"
 
 local SECTION = core.SECTION
 
@@ -19,8 +19,8 @@ gt.PROFILES = {
 -- Every GT block worth inspecting has this. It returns the lines the in-game
 -- scanner shows, and it is machine-specific in a way the generic getters are
 -- not: a super tank still answers getEUStored, it just means nothing.
-function gt.sensorOf(address)
-  if not core.has(core.methodsOf(address), "getSensorInformation") then
+function gt.sensorOf(address, methods)
+  if not core.has(methods or core.methodsOf(address), "getSensorInformation") then
     return nil
   end
   local lines = core.call(address, "getSensorInformation")
@@ -53,18 +53,22 @@ function gt.firstReading(sensor)
 end
 
 -- the name to show a person, or nil when this is not a GregTech machine
-function gt.displayName(address, config)
+function gt.displayName(address, config, sensor, methods)
   local nickname = core.nickname(config, address)
   if nickname then
     return nickname
   end
 
-  local sensor = gt.sensorOf(address)
+  -- a caller that passed the methods has already read the sensor, and a nil
+  -- there means the machine has none
+  if sensor == nil and methods == nil then
+    sensor = gt.sensorOf(address)
+  end
   if sensor and gt.looksLikeName(sensor[1]) then
     return core.strip(sensor[1])
   end
 
-  if core.has(core.methodsOf(address), "getName") then
+  if core.has(methods or core.methodsOf(address), "getName") then
     local name = core.call(address, "getName")
     if type(name) == "string" and name ~= "" then
       return gt.PROFILES[name] or gt.prettyName(name)
@@ -103,9 +107,12 @@ end
 
 -- Everything a machine reports, in order, as a list of gauges and text lines.
 -- ocdebug draws it, ocwatch draws a chosen subset, alerts index into it.
-function gt.readings(address)
-  local methods = core.methodsOf(address) or {}
-  local sensor = gt.sensorOf(address)
+function gt.readings(address, sensor, methods)
+  local known = methods ~= nil
+  methods = methods or core.methodsOf(address) or {}
+  if sensor == nil and not known then
+    sensor = gt.sensorOf(address, methods)
+  end
   local out = {}
 
   if sensor then
@@ -171,25 +178,6 @@ function gt.readings(address)
   return out
 end
 
--- A super tank answers isMachineActive as readily as a blast furnace does, so
--- calling it "idle" said nothing: it never works. What separates the two is
--- that a machine which processes reports how far along it is.
---
--- A machine with nothing running reports "Progress: 0 s / 0 s", which is no
--- gauge at all because its maximum is zero, so the plain line has to be read
--- too. That is exactly the machine this has to recognise.
-local function processes(readings)
-  for _, reading in ipairs(readings or {}) do
-    if reading.label == "Progress" then
-      return true
-    end
-    if reading.plain and reading.plain:match("^%s*Progress") then
-      return true
-    end
-  end
-  return false
-end
-
 -- A battery buffer is not working because it is switched on, it is working when
 -- power is leaving it. It says so itself, as an average over the last ticks,
 -- which is the only honest answer for a block that runs no recipe. Returns the
@@ -208,23 +196,19 @@ local function outflow(readings)
   return nil
 end
 
--- One word, chosen so a program can colour it without knowing GregTech:
--- "stopped" when work is not allowed, which is what an alert does to a machine,
--- "working" while it is busy, "idle" for a machine that has work to do and is
--- not doing it, and nothing at all for one that has no work to be idle from.
+-- What the sensor text alone says about whether a machine is busy, or nil when
+-- it says nothing either way.
 --
--- What counts as busy depends on the machine: power leaving a buffer, a recipe
--- running in a furnace.
-function gt.statusOf(address, readings, methods)
-  methods = methods or core.methodsOf(address) or {}
-
-  if core.has(methods, "isWorkAllowed")
-    and core.call(address, "isWorkAllowed") == false then
-    return "stopped"
-  end
-
-  -- asked before isMachineActive, which a battery buffer answers yes to while
-  -- it sits there passing nothing along
+-- This is read rather than asked because every ask is an indirect call that
+-- blocks until the next server tick, and because the text is the better
+-- witness: a battery buffer answers isMachineActive yes while it sits there
+-- passing nothing along.
+--
+-- A super tank says neither, and that is the right answer for it: it has no
+-- work to be idle from. A machine with a recipe running reports a progress
+-- gauge; one with nothing running reports "Progress: 0 s / 0 s", which is no
+-- gauge at all because its maximum is zero, so the plain line is read too.
+local function sensorStatus(readings)
   local leaving = outflow(readings)
   if leaving then
     if leaving > 0 then
@@ -233,16 +217,86 @@ function gt.statusOf(address, readings, methods)
     return "idle"
   end
 
+  for _, reading in ipairs(readings or {}) do
+    -- matched loosely: a gauge keeps the colon its sensor line had, so the
+    -- label reads "Progress:" rather than "Progress"
+    if reading.kind == "gauge" and reading.label and reading.label:match("^Progress") then
+      return "working"
+    end
+    if reading.plain and reading.plain:match("^%s*Progress") then
+      return "idle"
+    end
+  end
+  return nil
+end
+
+-- One word, chosen so a program can colour it without knowing GregTech:
+-- "stopped" when work is not allowed, which is what an alert does to a machine,
+-- "working" while it is busy, "idle" for a machine that has work to do and is
+-- not doing it, and nothing at all for one that has no work to be idle from.
+--
+-- What counts as busy depends on the machine: power leaving a buffer, a recipe
+-- running in a furnace.
+function gt.statusOf(address, readings, methods, hasSensor)
+  methods = methods or core.methodsOf(address) or {}
+
+  if core.has(methods, "isWorkAllowed")
+    and core.call(address, "isWorkAllowed") == false then
+    return "stopped"
+  end
+
+  local said = sensorStatus(readings)
+  if said then
+    return said
+  end
+
+  -- For a machine that has sensor text, the text is the whole answer: text that
+  -- mentions neither progress nor throughput belongs to a block with no work to
+  -- be idle from. Asking anyway spent two server ticks per machine per refresh
+  -- to learn nothing, and a super tank answers both questions yes regardless.
+  if hasSensor then
+    return nil
+  end
+
   if core.has(methods, "isMachineActive") and core.call(address, "isMachineActive") then
     return "working"
   end
   if core.has(methods, "hasWork") and core.call(address, "hasWork") then
     return "working"
   end
-  if processes(readings) then
-    return "idle"
-  end
   return nil
 end
+
+-- What each machine calls itself, which does not change while the world runs.
+-- A nickname is looked up first and separately, so renaming one in the editor
+-- still takes effect at once.
+local names = {}
+
+-- One look at a machine: the name, the readings and the status all come out of
+-- a single read of the sensor. Reading it three times over, once for each, was
+-- most of what made a refresh slow, since every read blocks until the next
+-- server tick.
+function gt.inspect(address, config)
+  local methods = core.methodsOf(address) or {}
+  local sensor = gt.sensorOf(address, methods)
+  local readings = gt.readings(address, sensor, methods)
+
+  local name = core.nickname(config, address)
+  if not name then
+    if names[address] == nil then
+      names[address] = gt.displayName(address, nil, sensor, methods) or false
+    end
+    if names[address] then
+      name = names[address]
+    end
+  end
+
+  return {
+    name = name,
+    status = gt.statusOf(address, readings, methods, sensor ~= nil),
+    readings = readings,
+  }
+end
+
 
 return gt

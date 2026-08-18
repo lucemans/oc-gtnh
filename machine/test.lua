@@ -1481,33 +1481,31 @@ test("ocview shows one satellite once however often it answers", function()
   end
 end)
 
--- Sitting out the whole window on every round is what made a tablet feel
--- seconds behind what the satellite was reading.
-test("asking stops as soon as every known satellite has answered", function()
+-- Waiting a whole window out inside the ask is what made a tablet ignore the
+-- keyboard for seconds and kept its screen a round behind. Answers are read one
+-- at a time now, from whatever loop the program already runs.
+test("an answer is read from a single message", function()
   oc.components = {}
   local net = require("ocnet")
-  local payload = require("serialization").serialize({ cards = {}, alerts = {} })
+  local payload = require("serialization").serialize({
+    cards = { { name = "EBF1", gauges = {} } },
+    alerts = { { name = "diesel low", tripped = true } },
+  })
 
-  local queue = {
-    { "modem_message", "me", "bb000000", PORT, 12, "ocstatus!", "boiler-room", payload },
-  }
-  local pulls = 0
-  local fakeEvent = {
-    pull = function()
-      pulls = pulls + 1
-      local item = table.remove(queue, 1)
-      if not item then
-        return nil
-      end
-      return table.unpack(item)
-    end,
-  }
-  local fakeComputer = { uptime = function() return 0 end }
-  local modem = { broadcast = function() return true end }
+  local answer = net.decode(PORT, "bb000000", "ocstatus!", "boiler-room", payload)
+  check(answer ~= nil, "did not read the answer")
+  check(answer and answer.host == "boiler-room", "lost the satellite name")
+  check(answer and #answer.cards == 1, "lost the machines")
+  check(answer and answer.alerts[1].tripped == true, "lost the alerts")
 
-  local answers = net.ask(modem, fakeEvent, 8, 1, fakeComputer)
-  check(#answers == 1, "did not collect the answer")
-  check(pulls == 1, "kept listening after everyone had answered, " .. pulls .. " pulls")
+  check(net.decode(PORT, "bb000000", "ocstatus?", nil, nil) == nil, "read a question as an answer")
+  check(net.decode(9999, "bb000000", "ocstatus!", "x", payload) == nil, "read the wrong port")
+
+  -- a satellite on an older ocwatch sends a bare list, which is a version
+  -- mismatch rather than an answer with no machines in it
+  local old = require("serialization").serialize({ { name = "EBF1", gauges = {} } })
+  local none, why = net.decode(PORT, "bb000000", "ocstatus!", "boiler-room", old)
+  check(none == nil and why == "unreadable", "took an old payload as current")
 end)
 
 test("ocview says so when nothing answers", function()
@@ -1899,8 +1897,9 @@ local function furnace(stopped)
   }
 end
 
--- a blast furnace between jobs: it reports progress, so it can be idle
-local function blastFurnace(active)
+-- A blast furnace, which reports progress and so can be idle. With a recipe
+-- running the progress line carries a maximum; between jobs it reads 0 s / 0 s.
+local function blastFurnace(running)
   return {
     address = "1c646dd8-0000-0000-0000-000000000009",
     kind = "gt_machine",
@@ -1910,13 +1909,17 @@ local function blastFurnace(active)
     },
     values = {
       getSensorInformation = function()
+        local progress = "Progress: \194\167a0\194\167r s / \194\167e0\194\167r s"
+        if running then
+          progress = "Progress: \194\167a12\194\167r s / \194\167e120\194\167r s"
+        end
         return {
-          "Progress: \194\167a0\194\167r s / \194\167e0\194\167r s",
+          progress,
           "Stored Energy: \194\167a1,536\194\167r EU / \194\167e1,536\194\167r EU",
         }
       end,
       isMachineActive = function()
-        return active
+        return running
       end,
     },
   }
@@ -1968,6 +1971,110 @@ test("ocwatch calls a battery buffer idle while nothing leaves it", function()
   })
   oc.run("ocwatch")
   check(contains(oc.frame(), "working"), "did not notice power leaving the buffer")
+end)
+
+-- Every indirect call blocks until the next server tick. Six machines read
+-- three times over came to well over a second of every two, which is what made
+-- the dashboard lag and swallow keystrokes.
+test("ocwatch reads each machine once per refresh", function()
+  local watch = {}
+  oc.components = {}
+  for index = 1, 6 do
+    local machine = tankAt("100,000")
+    machine.address = string.format("aa11bb%02d-e712-4134-bce1-b194453d6217", index)
+    oc.components[#oc.components + 1] = machine
+    watch[#watch + 1] = { address = machine.address, hidden = {} }
+  end
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = watch, alerts = {},
+  })
+
+  oc.run("ocwatch")
+
+  local reads = 0
+  for _, method in ipairs(oc.invoked) do
+    if method == "getSensorInformation" then
+      reads = reads + 1
+    end
+  end
+  check(reads == 6, "read the sensor " .. reads .. " times for 6 machines")
+  -- a tank says in its own text that it has no work, so asking is wasted ticks
+  for _, method in ipairs(oc.invoked) do
+    check(method ~= "isMachineActive" and method ~= "hasWork",
+      "asked " .. method .. " of a machine whose sensor had already answered")
+  end
+end)
+
+-- Shaped from dumps/014-satellite-transposer.txt. A Railcraft tank has no
+-- component of its own, so it is read through the side of a transposer.
+local function transposer(side, amount)
+  return {
+    address = "2e06d349-23e2-4bec-9cd1-cfceb00fe3da",
+    kind = "transposer",
+    methods = {
+      getTankCount = "function(side:number):number",
+      getTankLevel = "function(side:number [, tank:number]):number",
+      getTankCapacity = "function(side:number [, tank:number]):number",
+      getFluidInTank = "function(side:number [, tank:number]):table",
+    },
+    values = {
+      getTankCount = function(asked)
+        if asked == side then
+          return 1
+        end
+        return 0
+      end,
+      getFluidInTank = function(asked)
+        if asked ~= side then
+          return {}
+        end
+        return { { name = "creosote", label = "Creosote Oil",
+          amount = amount, capacity = 64000 } }
+      end,
+    },
+  }
+end
+
+test("ocwatch watches a tank through a side of a transposer", function()
+  local reader = transposer(3, 12000)
+  oc.components = { reader }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = reader.address, side = 3, hidden = {} } },
+    alerts = {},
+  })
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  local frame = oc.frame()
+  check(contains(frame, "tank south"), "did not name the side the tank is on")
+  check(contains(frame, "Creosote Oil"), "did not name the fluid")
+  check(contains(frame, "12,000 / 64,000 L"), "did not show the level")
+end)
+
+test("an alert can watch one face of a transposer", function()
+  local stopped = { value = false }
+  local reader = transposer(3, 500)
+  oc.components = { reader, furnace(stopped) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = reader.address, side = 3, hidden = {} } },
+    alerts = { {
+      name = "creosote low",
+      address = reader.address,
+      -- one transposer can hold a different tank on each face, so the side is
+      -- part of what the alert is watching
+      side = 3,
+      label = "Creosote Oil",
+      below = 1000,
+      above = 5000,
+      beep = false,
+      act = { { address = "1c646dd8-0000-0000-0000-000000000005",
+        method = "setWorkAllowed", onTrip = false, onClear = true } },
+    } },
+  })
+
+  oc.run("ocwatch")
+  check(stopped.value == true, "the alert on the transposer face did not act")
+  check(contains(oc.frame(), "creosote low"), "no notice that it tripped")
 end)
 
 test("ocwatch says nothing about a machine that never works", function()

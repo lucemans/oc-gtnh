@@ -7,6 +7,7 @@
 -- base answers with everything ocwatch is configured to watch.
 
 local component = require("component")
+local computer = require("computer")
 local core = require("oclib")
 local event = require("event")
 local net = require("ocnet")
@@ -14,14 +15,15 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 
--- How long to wait when it is not yet known who is out there. Once a round has
--- found some satellites the next round stops as soon as that many have answered,
--- so this is the cost of starting up or of a satellite going quiet, not the cost
--- of every refresh.
+-- How long to give up on before saying so on screen. Answers are absorbed as
+-- they arrive rather than waited for, so this is only how long a blank screen
+-- may stay blank before it explains itself.
 local ANSWER_TIMEOUT = 8
 local REFRESH_SECONDS = 2
+-- a satellite unheard for this long is shown as stale rather than as current
+local QUIET_SECONDS = 12
 
 local BG = 0x000000
 local FG = 0xFFFFFF
@@ -37,10 +39,13 @@ local gpu = component.gpu
 
 local W, H, GAUGE_W
 
+local paint = core.painter(gpu)
+
 -- recomputed on a resize: a tablet docked to a screen changes size under us
 local function layout()
   W, H = core.viewport(gpu)
   GAUGE_W = math.max(8, math.min(20, math.floor(W / 3)))
+  paint.forget()
 end
 
 layout()
@@ -53,37 +58,49 @@ local function fit(text, width)
   return text .. string.rep(" ", width - length)
 end
 
-local function write(x, y, text, foreground, background)
-  gpu.setForeground(foreground or FG)
-  gpu.setBackground(background or BG)
-  gpu.set(x, y, text)
+local write = paint.write
+
+-- What each satellite last said, kept between rounds rather than gathered
+-- inside one blocking call. A relay repeats what it forwards, so the same
+-- answer arrives several times over different paths: keying on the answering
+-- card means one satellite stays one entry however many copies land.
+local satellites = {}
+local order = {}
+local seen = { heard = 0, unreadable = 0 }
+local started = computer.uptime()
+
+local function absorb(packed)
+  seen.heard = seen.heard + 1
+  local answer, why = net.decode(packed[4], packed[3], packed[6], packed[7], packed[8])
+  if not answer then
+    if why then
+      seen.unreadable = seen.unreadable + 1
+    end
+    return false
+  end
+
+  answer.at = computer.uptime()
+  if not satellites[answer.address] then
+    order[#order + 1] = answer.address
+  end
+  satellites[answer.address] = answer
+  return true
 end
 
--- how many satellites the last good round found, so this one can stop as soon
--- as they have all answered instead of sitting out the whole window
-local expected = 0
-
--- Every satellite in range is collected, not just the quickest: a base has more
--- than one, and taking the first answer would hide the rest.
-local function ask(modem)
-  local answers, seen = net.ask(modem, event, ANSWER_TIMEOUT, expected)
-  if #answers > 0 then
-    expected = #answers
-    return answers
+-- Saying only "no answer" hides which half is broken. Whether anything at all
+-- arrived separates a satellite that never heard the question from one that
+-- answered with something unreadable.
+local function problem()
+  if #order > 0 then
+    return nil
   end
-  -- somebody has gone quiet, so the next round waits properly again
-  expected = 0
-
-  -- Saying only "no answer" hides which half is broken. Whether anything at all
-  -- arrived separates a satellite that never heard the question from one that
-  -- answered with something unreadable.
   if seen.unreadable > 0 then
-    return nil, "heard " .. seen.unreadable .. " unreadable answers: version mismatch?"
+    return "heard " .. seen.unreadable .. " unreadable answers: version mismatch?"
   end
   if seen.heard > 0 then
-    return nil, "heard " .. seen.heard .. " messages, none of them answers"
+    return "heard " .. seen.heard .. " messages, none of them answers"
   end
-  return nil, "no answer in " .. ANSWER_TIMEOUT .. "s: is ocwatch running there, and in range?"
+  return "no answer yet: is ocwatch running there, and in range?"
 end
 
 -- green only for a machine that is actually doing something, red for one an
@@ -129,30 +146,31 @@ local function drawGauge(x, y, gauge, width)
   write(cursor + 1, y, fit(text, math.max(0, W - cursor - 1)), FG, BG)
 end
 
-local function render(answers, problem)
-  gpu.setBackground(BG)
-  gpu.fill(1, 1, W, H, " ")
-
+local function render()
+  local trouble = problem()
   local machines = 0
-  for _, answer in ipairs(answers or {}) do
-    machines = machines + #answer.cards
+  for _, address in ipairs(order) do
+    machines = machines + #satellites[address].cards
   end
   write(1, 1, fit("  ocview v" .. VERSION .. "    "
-    .. (answers and (#answers .. " satellites, " .. machines .. " machines")
+    .. (#order > 0 and (#order .. " satellites, " .. machines .. " machines")
       or "no data"), W), FG, BAR)
 
-  if problem then
-    write(3, 3, fit(problem, W - 4), ALARM, BG)
+  if trouble then
+    write(3, 3, fit(trouble, W - 4), ALARM, BG)
   end
 
   local y = 3
-  for _, answer in ipairs(answers or {}) do
+  for _, address in ipairs(order) do
+    local answer = satellites[address]
     if y > H - 2 then
       break
     end
     -- naming the satellite matters once there is more than one: otherwise two
     -- machines called EBF1 on different computers are indistinguishable
-    write(1, y, fit(" " .. answer.host, W), FG, BAR)
+    local quiet = computer.uptime() - answer.at > QUIET_SECONDS
+    write(1, y, fit(" " .. answer.host
+      .. (quiet and "   not answering" or ""), W), FG, BAR)
     y = y + 1
 
     -- An alert that has tripped is the reason to be looking at this screen at
@@ -192,6 +210,7 @@ local function render(answers, problem)
   end
 
   write(1, H, fit("  [r] refresh   [q] quit      every " .. REFRESH_SECONDS .. "s", W), FG, BAR)
+  paint.flush(W, H, BG, FG)
 end
 
 -------------------------------------------------------------------------------
@@ -207,37 +226,51 @@ end
 
 term.clear()
 term.setCursorBlink(false)
+paint.forget()
 
-local cards, problem = ask(modem)
-render(cards, problem)
-
-if once then
-  gpu.setForeground(FG)
-  return 0
-end
+-- One loop, so a keypress is read the moment it arrives. Waiting for a whole
+-- round of answers inside the ask is what made this ignore the keyboard for
+-- seconds at a time, and what kept the screen a round behind the machines.
+--
+-- Backdated so the first turn of the loop asks rather than waiting a round.
+local asked = computer.uptime() - REFRESH_SECONDS
 
 while true do
-  local name, _, _, code = event.pull(REFRESH_SECONDS)
+  local now = computer.uptime()
+  if now - asked >= REFRESH_SECONDS then
+    net.ask(modem)
+    asked = now
+  end
+  render()
+
+  -- one screen, but not before every satellite in range has had its say
+  if once and now - started >= ANSWER_TIMEOUT then
+    break
+  end
+
+  local wait = math.max(0.1, asked + REFRESH_SECONDS - computer.uptime())
+  local packed = table.pack(event.pull(wait))
+  local name = packed[1]
 
   if name == "interrupted" then
     break
+  elseif name == "modem_message" then
+    absorb(packed)
   elseif name == "screen_resized" then
     layout()
-    render(cards, problem)
-  elseif name == "key_down" and code == keyboard.keys.q then
-    break
-  elseif name == "key_down" and code == keyboard.keys.r then
-    local fresh, trouble = ask(modem)
-    -- a missed round keeps the last good picture rather than blanking it
-    cards, problem = fresh or cards, trouble
-    render(cards, problem)
-  elseif name == nil then
-    local fresh, trouble = ask(modem)
-    cards, problem = fresh or cards, trouble
-    render(cards, problem)
+  elseif name == "key_down" then
+    local code = packed[4]
+    if code == keyboard.keys.q then
+      break
+    elseif code == keyboard.keys.r then
+      asked = 0
+    end
   end
 end
 
 gpu.setForeground(FG)
-gpu.setBackground(BG)
-term.clear()
+-- --once exists to be looked at, so it leaves its one screen up
+if not once then
+  gpu.setBackground(BG)
+  term.clear()
+end

@@ -11,28 +11,26 @@ local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
 local net = require("ocnet")
+local tank = require("octank")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.8.0"
+local VERSION = "0.9.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
 
 local W, H, GAUGE_W
 
--- What is already on each row, so a frame only repaints rows that changed.
--- Clearing the whole screen every two seconds is what made the display flicker,
--- and on a real machine it also spends the GPU call budget for nothing.
-local drawnRows = {}
+local paint = core.painter(gpu)
 
 -- recomputed on a resize: an attached display is often not the size the program
 -- started on
 local function layout()
   W, H = core.viewport(gpu)
   GAUGE_W = math.max(16, math.min(40, math.floor((W - 34) / 2)))
-  drawnRows = {}
+  paint.forget()
 end
 
 layout()
@@ -40,7 +38,7 @@ layout()
 -- whatever emptied the screen also emptied what this program believes is on it
 local function blank()
   term.clear()
-  drawnRows = {}
+  paint.forget()
 end
 
 local BG = 0x000000
@@ -95,6 +93,25 @@ local function statusColor(status, alarm)
     return OK_COLOR
   end
   return DIM
+end
+
+-- A watched thing is an address, and for a tank read through a transposer also
+-- which of its six faces. Alerts and nicknames are keyed the same way, or two
+-- tanks on one transposer would be the same thing to both.
+local function keyOf(address, side)
+  if side then
+    return tank.key(address, side)
+  end
+  return address
+end
+
+local function entryName(entry)
+  if entry.side then
+    return tank.name(entry.address, entry.side, config)
+  end
+  return gt.displayName(entry.address, config)
+    or lp.displayName(entry.address)
+    or entry.address
 end
 
 local function colorOf(gauge)
@@ -231,7 +248,7 @@ end
 
 local function checkAlerts(readingsByAddress)
   for _, alert in ipairs(config.alerts) do
-    local readings = readingsByAddress[alert.address]
+    local readings = readingsByAddress[keyOf(alert.address, alert.side)]
     local reading = findReading(alert, readings)
 
     -- Saying nothing was the worse half of the bug: an alert that could not find
@@ -279,23 +296,7 @@ local function wanted(entry, reading, index)
 end
 
 local function render(cards)
-  local plan = {}
-
-  -- collected rather than drawn directly: a row is only worth touching once its
-  -- whole contents are known to differ from what is already there
-  local function write(x, row, text, foreground, background)
-    if row < 1 or row > H then
-      return
-    end
-    local ops = plan[row]
-    if not ops then
-      ops = { key = "" }
-      plan[row] = ops
-    end
-    ops[#ops + 1] = { x = x, text = text, fg = foreground, bg = background }
-    ops.key = ops.key .. x .. "\1" .. text .. "\1"
-      .. tostring(foreground) .. "\1" .. tostring(background) .. "\2"
-  end
+  local write = paint.write
 
   local function drawGauge(x, y, gauge, width, max, isLocal)
     local ratio = 0
@@ -387,21 +388,7 @@ local function render(cards)
   write(1, H, fit("  [e] edit   [r] refresh   [q] quit      live every "
     .. REFRESH_SECONDS .. "s", W), FG, BAR)
 
-  -- only rows whose contents changed are touched
-  for row = 1, H do
-    local ops = plan[row]
-    local key = ops and ops.key or ""
-    if key ~= drawnRows[row] then
-      gpu.setBackground(BG)
-      gpu.fill(1, row, W, 1, " ")
-      for _, op in ipairs(ops or {}) do
-        gpu.setForeground(op.fg or FG)
-        gpu.setBackground(op.bg or BG)
-        gpu.set(op.x, row, op.text)
-      end
-      drawnRows[row] = key
-    end
-  end
+  paint.flush(W, H, BG, FG)
 end
 
 local function sample()
@@ -410,7 +397,7 @@ local function sample()
   local cards = net.machines(config)
   local byAddress = {}
   for _, card in ipairs(cards) do
-    byAddress[card.entry.address] = card.readings
+    byAddress[keyOf(card.entry.address, card.entry.side)] = card.readings
   end
   checkAlerts(byAddress)
   for _, card in ipairs(cards) do
@@ -462,24 +449,62 @@ local function watched(address)
   return nil
 end
 
+-- A transposer is not itself worth watching: what is worth watching is the tank
+-- on one of its six faces, which is how a Railcraft tank gets onto the
+-- dashboard at all, having no component of its own.
+local function chooseSide(address)
+  term.clear()
+  print("looking for tanks around it")
+  local sides = tank.sides(address)
+  if #sides == 0 then
+    print("no tank on any side of it")
+    os.sleep(2)
+    return nil
+  end
+
+  for index, side in ipairs(sides) do
+    local look = tank.inspect(address, side, config)
+    local holds = "empty"
+    if look.readings[1] then
+      holds = look.readings[1].label .. "  " .. look.readings[1].current
+        .. " / " .. look.readings[1].maximum .. " L"
+    end
+    print(string.format("%3d  %-6s %s", index, tank.sideName(side), holds))
+  end
+
+  io.write("number (blank to cancel) > ")
+  local answer = tonumber(io.read())
+  return answer and sides[answer] or nil
+end
+
 local function editAdd()
   local chosen = chooseComponent()
   if not chosen then
     return
   end
-  if watched(chosen.address) then
+
+  local side = nil
+  if tank.isReader(chosen.kind) then
+    side = chooseSide(chosen.address)
+    if not side then
+      return
+    end
+  elseif watched(chosen.address) then
     print("already watched")
     os.sleep(1)
     return
   end
-  config.watch[#config.watch + 1] = { address = chosen.address, hidden = {} }
+
+  config.watch[#config.watch + 1] = {
+    address = chosen.address, side = side, hidden = {},
+  }
   save()
 end
 
 local function editRemove()
   term.clear()
   for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. (gt.displayName(entry.address, config) or lp.displayName(entry.address) or entry.address))
+    print(index .. "  " .. entryName(entry))
   end
   io.write("number to remove (blank to cancel) > ")
   local answer = tonumber(io.read())
@@ -492,7 +517,7 @@ end
 local function editNickname()
   term.clear()
   for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. (gt.displayName(entry.address, config) or lp.displayName(entry.address) or entry.address))
+    print(index .. "  " .. entryName(entry))
   end
   io.write("number to rename (blank to cancel) > ")
   local answer = tonumber(io.read())
@@ -501,14 +526,15 @@ local function editNickname()
     return
   end
   local name = prompt("nickname for " .. entry.address .. " (blank clears it)")
-  config.nicknames[entry.address] = (name and name ~= "") and name or nil
+  config.nicknames[keyOf(entry.address, entry.side)] =
+    (name and name ~= "") and name or nil
   save()
 end
 
 local function editReadings()
   term.clear()
   for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. (gt.displayName(entry.address, config) or lp.displayName(entry.address) or entry.address))
+    print(index .. "  " .. entryName(entry))
   end
   io.write("number whose readings to toggle (blank to cancel) > ")
   local answer = tonumber(io.read())
@@ -548,9 +574,19 @@ local function editAlert()
     return
   end
 
-  local readings = gt.readings(chosen.address)
+  local side, readings
+  if tank.isReader(chosen.kind) then
+    side = chooseSide(chosen.address)
+    if not side then
+      return
+    end
+    readings = tank.inspect(chosen.address, side, config).readings
+  else
+    readings = gt.readings(chosen.address)
+  end
+
   term.clear()
-  print("readings on " .. (gt.displayName(chosen.address, config) or lp.displayName(chosen.address) or chosen.address))
+  print("readings on " .. entryName({ address = chosen.address, side = side }))
   local gauges = {}
   for index, reading in ipairs(readings) do
     if reading.kind == "gauge" then
@@ -588,6 +624,7 @@ local function editAlert()
   local alert = {
     name = name,
     address = chosen.address,
+    side = side,
     label = readings[index].label,
     unit = readings[index].unit,
     gauge = ordinal,
@@ -767,15 +804,33 @@ term.setCursorBlink(false)
 -- what the last refresh read, kept so a question is answered from it rather
 -- than by reading every machine again
 local latest
+local cards = {}
+local due = 0
 
-while true do
-  local cards = sample()
+-- Reading the machines is the expensive part of a refresh, so it happens on a
+-- clock rather than once per event. The loop used to sample at the top of every
+-- turn, which meant a keypress cost a full read of every machine before it was
+-- even looked at, and holding a key made the program crawl.
+local function refresh()
+  cards = sample()
   latest = net.report(config, cards)
   render(cards)
+  due = computer.uptime() + REFRESH_SECONDS
+end
+
+refresh()
+
+while true do
+  local wait = due - computer.uptime()
+  if wait <= 0 then
+    refresh()
+    wait = REFRESH_SECONDS
+  end
+
   -- packed rather than unpacked into fixed names: a key event carries a code
   -- in the fourth slot where a modem message carries a port, and reading one
   -- as the other is how a dispatch quietly stops matching
-  local packed = table.pack(event.pull(REFRESH_SECONDS))
+  local packed = table.pack(event.pull(wait))
   local name = packed[1]
   local code = packed[4]
 
@@ -788,6 +843,9 @@ while true do
       local sent = net.answer(modem, packed[4], packed[3], packed[6], config, latest)
       if sent then
         notice("served " .. sent)
+        -- drawing is cheap, and it is the only way the notice reaches the screen
+        -- before the next refresh comes round
+        render(cards)
       end
     end
   elseif name == "screen_resized" then
@@ -796,11 +854,14 @@ while true do
   elseif name == "key_down" then
     if code == keyboard.keys.q then
       break
+    elseif code == keyboard.keys.r then
+      refresh()
     elseif code == keyboard.keys.e then
       editor()
       config = core.loadConfig()
       blank()
       term.setCursorBlink(false)
+      refresh()
     end
   end
 end

@@ -316,3 +316,38 @@ Driving a machine through `occonnect` means every command passes through
 - **`lua -e` is not supported.** The OpenOS `lua` program takes a file path.
 
 This is why `occonnect` gained `:file` and `:lua`, which never reach the shell.
+
+## What a refresh actually costs
+
+Every indirect component call blocks until the next server tick, about 50ms.
+Six machines read once each is therefore already a third of a second, and the
+programs were reading each machine three times over: once for its name, once
+for its readings, once for its status. That came to 36 calls, near two seconds
+of every two, which is what made the dashboards lag and swallow keystrokes.
+
+Three rules keep it down:
+
+- **One read of the sensor per machine per refresh.** `gt.inspect` does the read
+  and hands the same lines to the name, the readings and the status.
+- **Read the sensor text rather than asking the machine.** A machine that has
+  sensor text says in it whether it is busy: a progress gauge, or an average
+  output above zero. `isMachineActive` and `hasWork` cost a tick each and are
+  worse witnesses, since a battery buffer answers both yes while passing
+  nothing along.
+- **Names are cached.** A machine's own name cannot change while the world
+  runs. Nicknames are looked up separately, so renaming one still takes effect
+  at once.
+
+That leaves the sensor and `isWorkAllowed`, which has to be asked because an
+alert changes it. Six machines cost 12 calls.
+
+## Two loop shapes that felt like lag
+
+Sampling at the top of the event loop meant every keypress paid for a full
+read of every machine before it was even looked at. Machines are now read on a
+clock, and the loop only draws in between, so a key is handled at once.
+
+Waiting for a whole round of network answers inside one call meant `ocview`
+ignored the keyboard for as long as the window lasted. It broadcasts and then
+reads answers as ordinary events in the loop it already has, so a satellite's
+reply and a keypress are handled the same way.

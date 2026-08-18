@@ -7,7 +7,7 @@ local serialization = require("serialization")
 
 local core = {}
 
-core.VERSION = "0.6.0"
+core.VERSION = "0.7.0"
 
 -- the Minecraft section sign, two bytes in UTF-8
 core.SECTION = "\194\167"
@@ -49,8 +49,10 @@ function core.methodsOf(address)
   return ok and methods or nil
 end
 
-function core.call(address, method)
-  local results = table.pack(pcall(component.invoke, address, method))
+-- Arguments are passed through: a transposer answers nothing useful without
+-- being told which of its six sides is meant.
+function core.call(address, method, ...)
+  local results = table.pack(pcall(component.invoke, address, method, ...))
   if not results[1] then
     return nil
   end
@@ -123,6 +125,53 @@ function core.scale(gauge, limit)
     return gauge.max, false
   end
   return limit, true
+end
+
+-- A painter that only touches the rows whose contents changed.
+--
+-- Clearing the whole screen and drawing it again every refresh is what makes a
+-- dashboard flicker, and on a real machine it spends the GPU call budget on
+-- rows that already say the right thing. Draws are collected first, because a
+-- row is only worth touching once its whole contents are known.
+function core.painter(gpu)
+  local drawn, plan = {}, {}
+  local painter = {}
+
+  function painter.write(x, row, text, foreground, background)
+    local ops = plan[row]
+    if not ops then
+      ops = { key = "" }
+      plan[row] = ops
+    end
+    ops[#ops + 1] = { x = x, text = text, fg = foreground, bg = background }
+    ops.key = ops.key .. x .. "\1" .. text .. "\1"
+      .. tostring(foreground) .. "\1" .. tostring(background) .. "\2"
+  end
+
+  function painter.flush(width, height, background, foreground)
+    for row = 1, height do
+      local ops = plan[row]
+      local key = ops and ops.key or ""
+      if key ~= drawn[row] then
+        gpu.setBackground(background)
+        gpu.fill(1, row, width, 1, " ")
+        for _, op in ipairs(ops or {}) do
+          gpu.setForeground(op.fg or foreground)
+          gpu.setBackground(op.bg or background)
+          gpu.set(op.x, row, op.text)
+        end
+        drawn[row] = key
+      end
+    end
+    plan = {}
+  end
+
+  -- whatever emptied the screen also emptied what this believes is on it
+  function painter.forget()
+    drawn = {}
+  end
+
+  return painter
 end
 
 function core.comma(number)
