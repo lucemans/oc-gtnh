@@ -9,3 +9,4 @@ programs/ocsweeper.lua
 programs/occonnect.lua
 programs/ockeypad.lua
 programs/ocmkfs.lua
+programs/ocglass.lua
