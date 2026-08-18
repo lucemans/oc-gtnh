@@ -232,16 +232,12 @@ local function probe(key, item)
   end
   local results = table.pack(pcall(item))
   if not results[1] then
-    return "error: " .. gt.oneLine(tostring(results[2]))
+    return nil, "error: " .. gt.oneLine(tostring(results[2]))
   end
   if results.n < 2 then
-    return "(no return value)"
+    return nil, "(no return value)"
   end
-  local parts = {}
-  for index = 2, results.n do
-    parts[#parts + 1] = inline(results[index], 2, {})
-  end
-  return table.concat(parts, ", ")
+  return results
 end
 
 -- an indented block, for a dump that someone will read to learn an API
@@ -261,10 +257,24 @@ function gt.describeLines(value, prefix)
       if type(item) == "table" and not seen[item] and depth < MAX_DEPTH then
         lines[#lines + 1] = indent .. keyText(key) .. " = " .. tableKind(item)
           .. (callDoc(item) or "")
-        local result = probe(key, item)
-        if result then
-          lines[#lines + 1] = indent .. "  -> " .. result
+
+        local results, note = probe(key, item)
+        if note then
+          lines[#lines + 1] = indent .. "  -> " .. note
+        elseif results then
+          for position = 2, results.n do
+            local result = results[position]
+            -- a proxy method often returns another proxy, so the returned
+            -- object is walked rather than flattened onto one line
+            if type(result) == "table" and not seen[result] and depth < MAX_DEPTH then
+              lines[#lines + 1] = indent .. "  -> " .. tableKind(result)
+              walk(result, indent .. "    ", depth + 1)
+            else
+              lines[#lines + 1] = indent .. "  -> " .. inline(result, 2, seen)
+            end
+          end
         end
+
         walk(item, indent .. "  ", depth + 1)
       else
         lines[#lines + 1] = indent .. keyText(key) .. " = " .. inline(item, 1, seen)
@@ -355,12 +365,15 @@ function gt.displayName(address, config)
     return gt.strip(sensor[1])
   end
 
-  if gt.has(gt.methodsOf(address), "getName") then
+  local methods = gt.methodsOf(address)
+
+  if gt.has(methods, "getName") then
     local name = gt.call(address, "getName")
     if type(name) == "string" and name ~= "" then
       return gt.PROFILES[name] or gt.prettyName(name)
     end
   end
+
   return nil
 end
 

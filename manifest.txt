@@ -1,4 +1,5 @@
 lib/ocgt.lua
+lib/oclogistics.lua
 programs/ocup.lua
 programs/ocdebug.lua
 programs/ocdump.lua

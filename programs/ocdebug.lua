@@ -3,11 +3,12 @@
 local component = require("component")
 local event = require("event")
 local gt = require("ocgt")
+local lp = require("oclogistics")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 
 -- indirect component calls block until the next server tick, so re-reading a
 -- machine costs real time; two seconds keeps the readings live without
@@ -81,7 +82,7 @@ local config = gt.loadConfig()
 
 local function friendlyName(entry)
   if entry.friendly == nil then
-    entry.friendly = gt.displayName(entry.address, config) or false
+    entry.friendly = gt.displayName(entry.address, config) or lp.displayName(entry.address) or false
   end
   return entry.friendly or entry.kind
 end

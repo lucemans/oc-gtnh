@@ -373,6 +373,9 @@ function oc.install()
   package.preload["ocgt"] = function()
     return dofile("lib/ocgt.lua")
   end
+  package.preload["oclogistics"] = function()
+    return dofile("lib/oclogistics.lua")
+  end
   package.preload["component"] = function()
     return component
   end

@@ -137,6 +137,7 @@ local INTERNET = { address = "01258489-8c4f-4be7-96d2-3f0fc17814ee", kind = "int
 
 local MANIFEST = table.concat({
   "lib/ocgt.lua",
+  "lib/oclogistics.lua",
   "programs/ocup.lua",
   "programs/ocdebug.lua",
   "programs/ocdump.lua",
@@ -178,6 +179,7 @@ test("ocup installs missing programs", function()
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
   })
 
   local ok, reason = oc.run("ocup")
@@ -186,7 +188,7 @@ test("ocup installs missing programs", function()
   local out = oc.printed()
   check(contains(out, "ocup v"), "no version banner")
   check(contains(out, "installed"), "did not report a fresh install")
-  check(contains(out, "4 files ready"), "no success summary")
+  check(contains(out, "5 files ready"), "no success summary")
   check(oc.files["/bin/ocdump.lua"] == program("0.1.0"), "ocdump.lua not written to /bin")
   check(oc.files["/lib/ocgt.lua"] ~= nil, "library not written to /lib")
   if show then
@@ -203,6 +205,7 @@ test("ocup reports a version bump", function()
     ["programs/ocdebug.lua"] = program("0.3.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
   })
 
   oc.run("ocup")
@@ -252,6 +255,7 @@ test("ocup drops a replaced library from the module cache", function()
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
   })
 
   -- OpenOS would otherwise hand this stale table to every later program in the
@@ -269,6 +273,7 @@ test("ocup asks for a fresh copy every time", function()
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
     ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
   })
 
   oc.run("ocup")
@@ -645,6 +650,12 @@ local function logisticsPipe(written)
           type = "userdata",
           getRouterId = proxyMethod("getRouterId", 42),
           hasLogisticsModule = proxyMethod("hasLogisticsModule", true),
+          -- a proxy method that returns another proxy, as getLP does
+          getLogisticsModule = proxyMethod("getLogisticsModule", {
+            type = "userdata",
+            isDefaultRoute = proxyMethod("isDefaultRoute", false),
+            setDefaultRoute = proxyMethod("setDefaultRoute", nil),
+          }),
           sendMessage = setmetatable({ name = "sendMessage" }, {
             __call = function()
               written.value = true
@@ -673,9 +684,25 @@ test("ocdump reads a proxy method and reports its signature", function()
   check(contains(body, "-> 42"), "did not call the readable proxy method")
   check(contains(body, "-> true"), "did not call the has method")
   check(written.value == false, "called a proxy method that writes")
+  -- a returned proxy must be walked, not flattened onto one line
+  check(contains(body, "isDefaultRoute = table <callable"), "nested proxy was not walked")
+  check(contains(body, "-> false"), "did not read through into the nested proxy")
   if show then
     say(body)
   end
+end)
+
+test("ocdump names a logistics pipe by its router id", function()
+  local written = { value = false }
+  oc.components = { INTERNET, logisticsPipe(written) }
+  oc.respond = function()
+    return 201, "Created", "https://dpaste.com/TESTTESTT\n"
+  end
+
+  oc.run("ocdump")
+  local body = oc.requests[1] and oc.requests[1].body or ""
+  -- the index line was blank before, since a pipe answers no getName
+  check(contains(body, "Logistics Pipe #42"), "pipe not named by its router id")
 end)
 
 test("ocdump keeps scalar returns on one line", function()

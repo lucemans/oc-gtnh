@@ -5,9 +5,10 @@ local component = require("component")
 local computer = require("computer")
 local filesystem = require("filesystem")
 local gt = require("ocgt")
+local lp = require("oclogistics")
 local serialization = require("serialization")
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 
 local ARCHIVE_DIR = "/home/dumps"
 local PASTE_URL = "https://dpaste.com/api/v2/"
@@ -188,7 +189,7 @@ line("")
 line("== index ==")
 for _, entry in ipairs(entries) do
   line(string.format("%-18s %s  %s", entry.kind, entry.address:sub(1, 8),
-    gt.displayName(entry.address, config) or ""))
+    gt.displayName(entry.address, config) or lp.displayName(entry.address) or ""))
 end
 
 line("")

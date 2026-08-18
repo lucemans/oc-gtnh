@@ -109,8 +109,8 @@ not build a summary from those.
 
 ## Pipes
 
-Two components appear once an adapter touches a Logistics Pipe, and they are
-not the same thing.
+This part lives in `lib/oclogistics.lua`, not in `ocgt`. Two components appear
+once an adapter touches a Logistics Pipe, and they are not the same thing.
 
 `bc_pipe` is the BuildCraft view. Plain methods, all documented, all indirect:
 `getPipeType` returns `LOGISTICS`, and `hasGate(side)`, `isPipeConnected(side)`,
@@ -135,10 +135,30 @@ Every entry is `table <callable, __tostring>`, confirmed in `dumps/005.txt`, so
 `pipe.getRouterId()` works: the `__call` metamethod does the work and the entry
 itself arrives as the argument. This is the same shape as the OpenOS `internet`
 library's wrapped `close`, and it is why a `pairs()` walk alone was misleading.
+`__tostring` on an entry yields its documentation.
 
-`__tostring` on an entry yields its signature, so `ocdump` prints it beside the
-name, and calls any entry whose own name reads (`get`, `is`, `has`), printing
-the result under `->`.
+Read live from `dumps/006.txt`:
+
+| method | returns |
+| --- | --- |
+| `getRouterId()` | `1`, an integer unique per pipe, stable for the run |
+| `getRouterUUID()` | `7bd7e234-e410-45de-8354-765ffb9c45bb`, stable across runs |
+| `hasLogisticsModule()` | `true` |
+| `getTurtleConnect()` | `false` |
+| `getPipeForUUID(String)` | needs the UUID; the error names the overload |
+| `getLP()` | a proxy: `getItemIdentifierBuilder`, `identify` |
+| `getLogisticsModule()` | a proxy: `getFilterInventory`, `hasGui`, `isDefaultRoute`, `setDefaultRoute` |
+
+So a pipe has two identities: `getRouterId` for a short label, `getRouterUUID`
+for anything that must survive a restart. `ocgt.displayName` uses the id, since
+a pipe answers no `getName`.
+
+### Messaging
+
+`sendMessage(computerId, ...)` and `sendBroadcast(...)` push to other computers
+on the LP network and raise the events `LP_MESSAGE` and `LP_BROADCAST`. That is
+a message bus between computers that needs no modem, and it is the most
+interesting thing the pipe offers.
 
 `sendMessage`, `sendBroadcast` and `setTurtleConnect` are writes and sit in the
 same proxy, which is why probing is keyed on the name rather than on the entry

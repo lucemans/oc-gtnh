@@ -8,11 +8,12 @@ local component = require("component")
 local computer = require("computer")
 local event = require("event")
 local gt = require("ocgt")
+local lp = require("oclogistics")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.1.0"
+local VERSION = "0.2.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -230,7 +231,8 @@ local function sample()
     byAddress[entry.address] = readings
     cards[#cards + 1] = {
       entry = entry,
-      name = gt.displayName(entry.address, config) or entry.address:sub(1, 8),
+      name = gt.displayName(entry.address, config) or lp.displayName(entry.address)
+        or entry.address:sub(1, 8),
       status = gt.statusOf(entry.address),
       readings = readings,
     }
@@ -269,7 +271,7 @@ local function chooseComponent()
   print("attached components")
   for index, entry in ipairs(list) do
     print(string.format("%3d  %-18s %s  %s", index, entry.kind,
-      entry.address:sub(1, 8), gt.displayName(entry.address, config) or ""))
+      entry.address:sub(1, 8), gt.displayName(entry.address, config) or lp.displayName(entry.address) or ""))
   end
   io.write("number (blank to cancel) > ")
   local answer = tonumber(io.read())
@@ -302,7 +304,7 @@ end
 local function editRemove()
   term.clear()
   for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. (gt.displayName(entry.address, config) or entry.address))
+    print(index .. "  " .. (gt.displayName(entry.address, config) or lp.displayName(entry.address) or entry.address))
   end
   io.write("number to remove (blank to cancel) > ")
   local answer = tonumber(io.read())
@@ -315,7 +317,7 @@ end
 local function editNickname()
   term.clear()
   for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. (gt.displayName(entry.address, config) or entry.address))
+    print(index .. "  " .. (gt.displayName(entry.address, config) or lp.displayName(entry.address) or entry.address))
   end
   io.write("number to rename (blank to cancel) > ")
   local answer = tonumber(io.read())
@@ -331,7 +333,7 @@ end
 local function editReadings()
   term.clear()
   for index, entry in ipairs(config.watch) do
-    print(index .. "  " .. (gt.displayName(entry.address, config) or entry.address))
+    print(index .. "  " .. (gt.displayName(entry.address, config) or lp.displayName(entry.address) or entry.address))
   end
   io.write("number whose readings to toggle (blank to cancel) > ")
   local answer = tonumber(io.read())
@@ -373,7 +375,7 @@ local function editAlert()
 
   local readings = gt.readings(chosen.address)
   term.clear()
-  print("readings on " .. (gt.displayName(chosen.address, config) or chosen.address))
+  print("readings on " .. (gt.displayName(chosen.address, config) or lp.displayName(chosen.address) or chosen.address))
   local gauges = {}
   for index, reading in ipairs(readings) do
     if reading.kind == "gauge" then
