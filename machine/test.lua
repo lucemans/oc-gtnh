@@ -1528,6 +1528,74 @@ test("ocwatch stops a machine when a tank runs low", function()
   end
 end)
 
+test("ocwatch still finds its reading when the sensor rewords itself", function()
+  local stopped = { value = false }
+  -- A tank that has run dry drops its fluid name line, so the gauge that used to
+  -- sit on line 3 now sits on line 2. The alert was configured against the old
+  -- shape, and must still fire: this is the case that silently stopped working.
+  local dry = {
+    address = "aa11bb22-e712-4134-bce1-b194453d6217",
+    kind = "gt_machine",
+    methods = { getSensorInformation = "function():table" },
+    values = {
+      getSensorInformation = function()
+        return {
+          "\194\1679Super Tank\194\167r",
+          "\194\167a100\194\167r L \194\167e4,000,000\194\167r L",
+        }
+      end,
+    },
+  }
+  oc.components = { dry, furnace(stopped) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = {}, watch = { { address = dry.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = dry.address,
+      -- what the editor recorded when the tank still named its fluid
+      label = "Bio Diesel",
+      unit = "L",
+      gauge = 1,
+      index = 3,
+      below = 50000,
+      above = 200000,
+      beep = false,
+      act = {
+        address = "1c646dd8-0000-0000-0000-000000000005",
+        method = "setWorkAllowed",
+        onTrip = false,
+        onClear = true,
+      },
+    } },
+  })
+
+  oc.run("ocwatch")
+  check(stopped.value == true, "the alert did not fire after the sensor changed shape")
+end)
+
+test("ocwatch says so when an alert matches no reading", function()
+  local stopped = { value = false }
+  oc.components = { tankAt("100"), furnace(stopped) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = {},
+    watch = { { address = "aa11bb22-e712-4134-bce1-b194453d6217", hidden = {} } },
+    alerts = { {
+      name = "broken alert",
+      address = "aa11bb22-e712-4134-bce1-b194453d6217",
+      label = "Nothing Like This",
+      unit = "kJ",
+      gauge = 9,
+      index = 99,
+      below = 1,
+      beep = false,
+    } },
+  })
+
+  oc.run("ocwatch")
+  -- silence was the real bug: an unwatchable alert looked like a happy one
+  check(contains(oc.frame(), "watching nothing"), "an alert that matches nothing said nothing")
+end)
+
 test("ocwatch leaves a machine alone above the threshold", function()
   local stopped = { value = false }
   local tank = tankAt("3,000,000")

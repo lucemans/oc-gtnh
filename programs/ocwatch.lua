@@ -33,6 +33,28 @@ local LIGHT_BLOCK = "\226\150\145"
 
 local config = core.loadConfig()
 
+-- Whether an alert has tripped, and whether its action has been applied, are
+-- facts about this run. They used to be written into the configuration by the
+-- editor, and a saved `applied = false` then convinced every later run that the
+-- machine had already been stopped, so the command was never sent again. The
+-- alert looked configured and did nothing.
+local RUNTIME = { "tripped", "applied", "warned" }
+
+local function forgetRuntime()
+  for _, alert in ipairs(config.alerts) do
+    for _, field in ipairs(RUNTIME) do
+      alert[field] = nil
+    end
+  end
+end
+
+local function save()
+  forgetRuntime()
+  return core.saveConfig(config)
+end
+
+forgetRuntime()
+
 local function fit(text, width)
   local length = unicode.len(text)
   if length > width then
@@ -105,10 +127,67 @@ local function notice(text)
   end
 end
 
+-- An alert used to remember which line of the sensor output it watched. GregTech
+-- rewrites those lines as a machine changes: a tank drops its fluid name when it
+-- runs dry, so the line moved and the alert quietly stopped firing at exactly
+-- the moment it was meant to. Match on what the reading is, not where it sits.
+local function findReading(alert, readings)
+  if not readings then
+    return nil
+  end
+
+  local gauges = {}
+  for _, reading in ipairs(readings) do
+    if reading.kind == "gauge" then
+      gauges[#gauges + 1] = reading
+    end
+  end
+
+  if alert.label and alert.label ~= "" then
+    for _, gauge in ipairs(gauges) do
+      if gauge.label == alert.label then
+        return gauge
+      end
+    end
+  end
+
+  -- a tank has one reading in litres however its text is worded
+  if alert.unit and alert.unit ~= "" then
+    local matches = {}
+    for _, gauge in ipairs(gauges) do
+      if gauge.unit == alert.unit then
+        matches[#matches + 1] = gauge
+      end
+    end
+    if #matches == 1 then
+      return matches[1]
+    end
+  end
+
+  if alert.gauge and gauges[alert.gauge] then
+    return gauges[alert.gauge]
+  end
+
+  -- alerts written before this carry only a line number
+  local legacy = alert.index and readings[alert.index]
+  if legacy and legacy.kind == "gauge" then
+    return legacy
+  end
+  return nil
+end
+
 local function checkAlerts(readingsByAddress)
   for _, alert in ipairs(config.alerts) do
     local readings = readingsByAddress[alert.address]
-    local reading = readings and readings[alert.index]
+    local reading = findReading(alert, readings)
+
+    -- Saying nothing was the worse half of the bug: an alert that could not find
+    -- its reading looked exactly like an alert that was happy.
+    if not reading and readings and not alert.warned then
+      alert.warned = true
+      notice(alert.name .. ": no reading matches, this alert is watching nothing")
+    end
+
     if reading and reading.kind == "gauge" then
       local was = alert.tripped or false
       alert.tripped = evaluate(alert, reading.value)
@@ -299,7 +378,7 @@ local function editAdd()
     return
   end
   config.watch[#config.watch + 1] = { address = chosen.address, hidden = {} }
-  core.saveConfig(config)
+  save()
 end
 
 local function editRemove()
@@ -311,7 +390,7 @@ local function editRemove()
   local answer = tonumber(io.read())
   if answer and config.watch[answer] then
     table.remove(config.watch, answer)
-    core.saveConfig(config)
+    save()
   end
 end
 
@@ -328,7 +407,7 @@ local function editNickname()
   end
   local name = prompt("nickname for " .. entry.address .. " (blank clears it)")
   config.nicknames[entry.address] = (name and name ~= "") and name or nil
-  core.saveConfig(config)
+  save()
 end
 
 local function editReadings()
@@ -363,7 +442,7 @@ local function editReadings()
     end
     entry.hidden[pick] = (not entry.hidden[pick]) or nil
   end
-  core.saveConfig(config)
+  save()
 end
 
 local function editAlert()
@@ -402,9 +481,21 @@ local function editAlert()
   local above = tonumber(prompt("clear when it rises back to (blank to skip)"))
   local name = prompt("name for this alert") or "alert"
 
+  -- the label and the unit are what survive the machine rewording itself; the
+  -- ordinal and the line number are only fallbacks
+  local ordinal = 0
+  for _, position in ipairs(gauges) do
+    if position <= index then
+      ordinal = ordinal + 1
+    end
+  end
+
   local alert = {
     name = name,
     address = chosen.address,
+    label = readings[index].label,
+    unit = readings[index].unit,
+    gauge = ordinal,
     index = index,
     below = below,
     above = above,
@@ -428,7 +519,7 @@ local function editAlert()
   end
 
   config.alerts[#config.alerts + 1] = alert
-  core.saveConfig(config)
+  save()
 end
 
 local function editAlertRemove()
@@ -445,7 +536,7 @@ local function editAlertRemove()
   local answer = tonumber(io.read())
   if answer and config.alerts[answer] then
     table.remove(config.alerts, answer)
-    core.saveConfig(config)
+    save()
   end
 end
 
