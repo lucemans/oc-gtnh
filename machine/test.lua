@@ -1319,6 +1319,34 @@ test("ocview collects every satellite, not just the quickest", function()
   end
 end)
 
+-- A relay repeats what it forwards, so a satellite hears the same question over
+-- several paths and answers each copy, and every answer comes back over several
+-- paths as well. One card is one satellite however many copies arrive.
+test("ocview shows one satellite once however often it answers", function()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  local serialize = require("serialization").serialize
+
+  local payload = serialize({ { name = "EBF1", status = "working", gauges = {} } })
+  for _ = 1, 4 do
+    oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
+      "boiler-room", payload)
+  end
+  local other = serialize({ { name = "Super Tank", status = "idle", gauges = {} } })
+  oc.push("modem_message", modem.address, "dd000000", PORT, 40, "ocstatus!",
+    "tank-farm", other)
+
+  oc.run("ocview", "--once")
+  local frame = oc.screen()
+
+  check(contains(frame, "2 satellites"), "counted the repeats as satellites")
+  check(contains(frame, "2 machines"), "counted the repeats as machines")
+  check(contains(frame, "tank-farm"), "lost the satellite that answered once")
+  if show then
+    say(frame)
+  end
+end)
+
 test("ocview says so when nothing answers", function()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }

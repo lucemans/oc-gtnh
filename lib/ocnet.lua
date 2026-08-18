@@ -13,7 +13,7 @@ local serialization = require("serialization")
 
 local net = {}
 
-net.VERSION = "0.1.0"
+net.VERSION = "0.2.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -119,6 +119,10 @@ function net.ask(modem, event, seconds, computerLib)
   local clock = (computerLib or computer).uptime
   local until_ = clock() + (seconds or 8)
   local answers, heard, unreadable = {}, 0, 0
+  -- A relay repeats what it forwards, so one question reaches a satellite over
+  -- several paths and every reply comes back over several paths. One card is
+  -- one satellite however many copies of its answer arrive.
+  local place = {}
 
   while true do
     local left = until_ - clock()
@@ -136,11 +140,18 @@ function net.ask(modem, event, seconds, computerLib)
     if port == core.PORT and kind == net.REPLY then
       local ok, cards = pcall(serialization.unserialize, payload)
       if ok and type(cards) == "table" then
-        answers[#answers + 1] = {
+        local answer = {
           host = host or tostring(remote):sub(1, 8),
           address = remote,
           cards = cards,
         }
+        if place[remote] then
+          -- the later copy is the fresher reading
+          answers[place[remote]] = answer
+        else
+          place[remote] = #answers + 1
+          answers[#answers + 1] = answer
+        end
       else
         unreadable = unreadable + 1
       end
