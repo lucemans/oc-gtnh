@@ -1840,6 +1840,128 @@ local function furnace(stopped)
   }
 end
 
+-- a blast furnace between jobs: it reports progress, so it can be idle
+local function blastFurnace(active)
+  return {
+    address = "1c646dd8-0000-0000-0000-000000000009",
+    kind = "gt_machine",
+    methods = {
+      getSensorInformation = "function():table",
+      isMachineActive = "function():boolean",
+    },
+    values = {
+      getSensorInformation = function()
+        return {
+          "Progress: \194\167a0\194\167r s / \194\167e0\194\167r s",
+          "Stored Energy: \194\167a1,536\194\167r EU / \194\167e1,536\194\167r EU",
+        }
+      end,
+      isMachineActive = function()
+        return active
+      end,
+    },
+  }
+end
+
+test("ocwatch says nothing about a machine that never works", function()
+  local tank = tankAt("100000")
+  oc.components = { tank }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = { [tank.address] = "Super Tank" },
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = {},
+  })
+
+  oc.run("ocwatch")
+  -- a tank answers isMachineActive as readily as a furnace does, and calling it
+  -- idle said nothing: it has no work to be idle from
+  check(not contains(oc.frame(), "idle"), "called a tank idle")
+end)
+
+test("ocwatch calls a furnace between jobs idle, and a busy one working", function()
+  local waiting = blastFurnace(false)
+  oc.components = { waiting }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = waiting.address, hidden = {} } },
+    alerts = {},
+  })
+  oc.run("ocwatch")
+  check(contains(oc.frame(), "idle"), "did not call a waiting furnace idle")
+
+  oc.reset()
+  local busy = blastFurnace(true)
+  oc.components = { busy }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = busy.address, hidden = {} } },
+    alerts = {},
+  })
+  oc.run("ocwatch")
+  check(contains(oc.frame(), "working"), "did not call a busy furnace working")
+end)
+
+test("ocwatch stops every machine an alert names, not just the first", function()
+  local first, second = { value = false }, { value = false }
+  local tank = tankAt("100")
+  local one = furnace(first)
+  local two = furnace(second)
+  two.address = "1c646dd8-0000-0000-0000-000000000006"
+  oc.components = { tank, one, two }
+  -- one tank feeds both blast furnaces
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { {
+      name = "diesel low",
+      address = tank.address,
+      label = "Bio Diesel",
+      below = 50000,
+      above = 200000,
+      beep = false,
+      act = {
+        { address = one.address, method = "setWorkAllowed", onTrip = false, onClear = true },
+        { address = two.address, method = "setWorkAllowed", onTrip = false, onClear = true },
+      },
+    } },
+  })
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  check(first.value == true, "the first furnace was not stopped")
+  check(second.value == true, "the second furnace was not stopped")
+end)
+
+test("ocwatch draws a bar against a local maximum and still shows the real one", function()
+  local tank = tankAt("7,500")
+  -- the size of the attached display, so the row is not cut short
+  oc.resize(160, 50)
+  oc.components = { tank }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = { [tank.address] = "Super Tank" },
+    -- the diesel only ever moves between 5,000 and 10,000 of four million
+    watch = { { address = tank.address, hidden = {}, limits = { [1] = 10000 } } },
+    alerts = {},
+  })
+
+  oc.run("ocwatch")
+  local frame = oc.frame()
+  check(contains(frame, "7,500 / 10,000 L"), "did not draw against the local maximum")
+  check(contains(frame, "75.0%"), "percentage is not of the local maximum")
+  -- a local maximum that hides the real capacity is a lie about the tank
+  check(contains(frame, "of 4,000,000"), "lost the real capacity")
+end)
+
+test("ocwatch gives the real maximum back once the value passes the local one", function()
+  local tank = tankAt("50,000")
+  oc.components = { tank }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {}, limits = { [1] = 10000 } } },
+    alerts = {},
+  })
+
+  oc.run("ocwatch")
+  -- drawing 50,000 out of 10,000 would be a bar past its own end
+  check(contains(oc.frame(), "50,000 / 4,000,000 L"), "kept a maximum below the value")
+end)
+
 test("ocwatch stops a machine when a tank runs low", function()
   local stopped = { value = false }
   local tank = tankAt("100")

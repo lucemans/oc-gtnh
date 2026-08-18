@@ -5,7 +5,7 @@ local core = require("oclib")
 
 local gt = {}
 
-gt.VERSION = "0.3.0"
+gt.VERSION = "0.4.0"
 
 local SECTION = core.SECTION
 
@@ -171,19 +171,46 @@ function gt.readings(address)
   return out
 end
 
-function gt.statusOf(address, methods)
-  methods = methods or core.methodsOf(address) or {}
-  local flags = {}
-  if core.has(methods, "isMachineActive") then
-    flags[#flags + 1] = core.call(address, "isMachineActive") and "active" or "idle"
+-- A super tank and a battery buffer answer isMachineActive as readily as a
+-- blast furnace does, so calling them "idle" said nothing: they never work.
+-- What separates the two is that a machine which processes reports how far
+-- along it is, and nothing else does.
+-- A machine with nothing running reports "Progress: 0 s / 0 s", which is no
+-- gauge at all because its maximum is zero, so the plain line has to be read
+-- too. That is exactly the machine this has to recognise.
+local function processes(readings)
+  for _, reading in ipairs(readings or {}) do
+    if reading.label == "Progress" then
+      return true
+    end
+    if reading.plain and reading.plain:match("^%s*Progress") then
+      return true
+    end
   end
-  if core.has(methods, "isWorkAllowed") and core.call(address, "isWorkAllowed") == false then
-    flags[#flags + 1] = "disabled"
+  return false
+end
+
+-- One word, chosen so a program can colour it without knowing GregTech:
+-- "stopped" when work is not allowed, which is what an alert does to a machine,
+-- "working" while it is busy, "idle" for a machine that processes but is not
+-- doing so, and nothing at all for a machine that has no work to be idle from.
+function gt.statusOf(address, readings, methods)
+  methods = methods or core.methodsOf(address) or {}
+
+  if core.has(methods, "isWorkAllowed")
+    and core.call(address, "isWorkAllowed") == false then
+    return "stopped"
+  end
+  if core.has(methods, "isMachineActive") and core.call(address, "isMachineActive") then
+    return "working"
   end
   if core.has(methods, "hasWork") and core.call(address, "hasWork") then
-    flags[#flags + 1] = "working"
+    return "working"
   end
-  return #flags > 0 and table.concat(flags, "  ") or nil
+  if processes(readings) then
+    return "idle"
+  end
+  return nil
 end
 
 return gt

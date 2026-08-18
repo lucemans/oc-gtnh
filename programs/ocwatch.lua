@@ -85,6 +85,18 @@ local function fit(text, width)
   return text .. string.rep(" ", width - length)
 end
 
+-- green only for a machine that is actually doing something, red for one an
+-- alert has stopped, and grey for one that is simply waiting
+local function statusColor(status, alarm)
+  if status == "stopped" or alarm then
+    return ALARM
+  end
+  if status == "working" then
+    return OK_COLOR
+  end
+  return DIM
+end
+
 local function colorOf(gauge)
   if gauge.colorCode and core.MC_COLORS[gauge.colorCode] then
     return core.MC_COLORS[gauge.colorCode]
@@ -327,7 +339,7 @@ local function render(cards)
     end
     write(3, y, fit(card.name, W - 22), FG, BG)
     if card.status then
-      write(W - 20, y, fit(card.status, 18), card.alarm and ALARM or OK_COLOR, BG)
+      write(W - 20, y, fit(card.status, 18), statusColor(card.status, card.alarm), BG)
     end
     y = y + 1
 

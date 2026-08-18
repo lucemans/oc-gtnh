@@ -67,13 +67,16 @@ end
 function net.machines(config)
   local cards = {}
   for _, entry in ipairs(targets(config)) do
+    -- the status depends on the readings: whether a machine can be idle at all
+    -- is decided by whether it reports progress
+    local readings = gt.readings(entry.address)
     cards[#cards + 1] = {
       entry = entry,
       name = gt.displayName(entry.address, config)
         or lp.displayName(entry.address)
         or entry.address:sub(1, 8),
-      status = gt.statusOf(entry.address),
-      readings = gt.readings(entry.address),
+      status = gt.statusOf(entry.address, readings),
+      readings = readings,
     }
   end
   return cards

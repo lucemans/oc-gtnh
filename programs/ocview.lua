@@ -86,6 +86,18 @@ local function ask(modem)
   return nil, "no answer in " .. ANSWER_TIMEOUT .. "s: is ocwatch running there, and in range?"
 end
 
+-- green only for a machine that is actually doing something, red for one an
+-- alert has stopped, and grey for one that is simply waiting
+local function statusColor(status, alarm)
+  if status == "stopped" or alarm then
+    return ALARM
+  end
+  if status == "working" then
+    return OK_COLOR
+  end
+  return DIM
+end
+
 local function drawGauge(x, y, gauge, width)
   local ratio = (gauge.percent or 0) / 100
   if ratio < 0 then
@@ -162,7 +174,7 @@ local function render(answers, problem)
       write(3, y, fit(card.name or "?", W - 14), FG, BG)
       if card.status then
         write(math.max(1, W - 12), y, fit(card.status, 11),
-          card.alarm and ALARM or OK_COLOR, BG)
+          statusColor(card.status, card.alarm), BG)
       end
       y = y + 1
 

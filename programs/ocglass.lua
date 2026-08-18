@@ -278,13 +278,14 @@ local function draw()
     local name = gt.displayName(entry.address, config)
       or lp.displayName(entry.address)
       or entry.address:sub(1, 8)
-    local status = gt.statusOf(entry.address)
+    local readings = gt.readings(entry.address)
+    local status = gt.statusOf(entry.address, readings)
 
     label(row, name .. (status and ("  " .. status) or ""), WHITE, LEFT, y)
     set(scene["text" .. row], "setVisible", true)
     row, y = row + 1, y + LINE_H
 
-    for _, reading in ipairs(gt.readings(entry.address)) do
+    for _, reading in ipairs(readings) do
       if reading.kind == "gauge" and reading.max > 0 then
         local ratio = reading.value / reading.max
         if ratio > 1 then

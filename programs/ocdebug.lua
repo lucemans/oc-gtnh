@@ -131,7 +131,7 @@ local function detailLines(entry)
 
   local methods = core.methodsOf(entry.address) or {}
 
-  add(friendlyName(entry), FG, gt.statusOf(entry.address, methods), VALUE)
+  add(friendlyName(entry), FG, gt.statusOf(entry.address, nil, methods), VALUE)
 
   local where = ""
   if core.has(methods, "getCoordinates") then
