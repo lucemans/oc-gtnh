@@ -1160,7 +1160,8 @@ test("ocview asks and draws what comes back", function()
         unit = "L", percent = 1.05 } },
     },
   })
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!", payload)
+  -- the reply now names the satellite, so several can be told apart
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!", "satellite-1", payload)
 
   local ok, reason = oc.run("ocview", "--once")
   check(ok, "ocview crashed: " .. tostring(reason))
@@ -1170,6 +1171,30 @@ test("ocview asks and draws what comes back", function()
   check(contains(frame, "42,000 / 4,000,000 L"), "did not show the reading")
   check(contains(frame, "Bio Diesel"), "did not label the gauge")
   check(modem.sent[1] and modem.sent[1].kind == "ocstatus?", "never asked")
+  if show then
+    say(frame)
+  end
+end)
+
+test("ocview collects every satellite, not just the quickest", function()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  local serialize = require("serialization").serialize
+
+  local first = serialize({ { name = "EBF1", status = "working", gauges = {} } })
+  local second = serialize({ { name = "Super Tank", status = "idle", gauges = {} } })
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!", "boiler-room", first)
+  oc.push("modem_message", modem.address, "dd000000", PORT, 40, "ocstatus!", "tank-farm", second)
+
+  oc.run("ocview", "--once")
+  local frame = oc.screen()
+
+  -- taking the first answer would have hidden the second satellite entirely
+  check(contains(frame, "EBF1"), "lost the first satellite's machines")
+  check(contains(frame, "Super Tank"), "lost the second satellite's machines")
+  check(contains(frame, "boiler-room"), "did not name the first satellite")
+  check(contains(frame, "tank-farm"), "did not name the second satellite")
+  check(contains(frame, "2 satellites"), "did not count the satellites")
   if show then
     say(frame)
   end

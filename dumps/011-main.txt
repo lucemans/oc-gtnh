@@ -1,0 +1,473 @@
+ocdump v0.7.0
+uptime      924.5s
+os          OpenOS 1.8.9  Lua 5.3
+computer    3915c554-5da1-4286-8c2f-1769c43f59eb
+memory      306866 free of 786432
+energy      3099 of 3100
+
+== devices ==
+0a8c24a2-aeb4-4c57-a088-e9b94ca31ecc  {description="Battery",vendor="MightyPirates GmbH & Co. KG",capacity="8800.0",class="power",product="CapBank3x"}
+15dc97f7-accb-4bd0-8fc9-391df2fbb68c  {description="Graphics controller",vendor="MightyPirates GmbH & Co. KG",product="MPG3000 GTZ",capacity="8000",width="8",class="display",clock="2560/2560/320/5120/1280/2560"}
+21db5083-ee1c-4170-90e8-f05692614f92  {description="CPU",vendor="MightyPirates GmbH & Co. KG",product="FlexiArch 3 Processor",class="processor",clock="1500"}
+2531e885-0472-46fc-8ebc-60179b97ca2e  {description="Filesystem",vendor="MightyPirates GmbH & Co. KG",size="4194304",capacity="4294967",product="MPFS.21.6",class="volume",clock="200/200/80"}
+2e006874-9c9a-417d-ae97-513097df52c2  {description="Adapter",vendor="MightyPirates GmbH & Co. KG",class="bus",product="Multiplug Ext.1"}
+3915c554-5da1-4286-8c2f-1769c43f59eb  {description="Computer",vendor="MightyPirates GmbH & Co. KG",capacity="10",class="system",product="Blocker"}
+3f5eda9b-93a1-44d6-8bfe-b6d892494845  {description="Keyboard",vendor="MightyPirates GmbH & Co. KG",class="input",product="Fancytyper MX-Stone"}
+4afa7c73-9a15-49a1-992b-eead188ad855  {description="Memory bank",vendor="MightyPirates GmbH & Co. KG",product="Multipurpose RAM Type",class="memory",clock="1500"}
+69038c55-e634-40c1-8d20-3f14c76a8490  {description="Filesystem",vendor="MightyPirates GmbH & Co. KG",size="524288",capacity="536870",product="MPFS.21.6",class="volume",clock="20/20/20"}
+95970b41-e4c3-484c-ae23-9fd978bd575c  {description="Floppy disk drive",vendor="MightyPirates GmbH & Co. KG",class="disk",product="Spinner 520p1"}
+96ae445f-4bc2-470c-baae-6cc878c67d87  {description="Filesystem",vendor="MightyPirates GmbH & Co. KG",size="65536",capacity="67108",product="MPFS.21.6",class="volume",clock="260/260/100"}
+a0b050c9-f4ba-4628-8ddb-5a0a3f412e46  {description="EEPROM",vendor="MightyPirates GmbH & Co. KG",size="4096",capacity="4096",class="memory",product="FlashStick2k"}
+b331cf3b-33f8-447d-a501-d9b4bfae3a08  {description="Internet modem",vendor="MightyPirates GmbH & Co. KG",class="communication",product="SuperLink X-D4NK"}
+e14da4b8-35c3-45cf-a430-d6826a35ffe5  {description="Text buffer",vendor="MightyPirates GmbH & Co. KG",capacity="8000",width="8",class="display",product="Text Screen V0"}
+
+== index ==
+computer           3915c554  
+disk_drive         95970b41  
+eeprom             a0b050c9  
+filesystem         2531e885  
+filesystem         69038c55  
+filesystem         96ae445f  
+gpu                15dc97f7  
+internet           b331cf3b  
+keyboard           3f5eda9b  
+screen             e14da4b8  
+
+== components (10) ==
+
+-- computer  3915c554-5da1-4286-8c2f-1769c43f59eb  slot -1
+  beep  [indirect]
+    doc: function([frequency:string or number[, duration:number]]) -- Plays a tone, useful to alert users via audible feedback.
+  getDeviceInfo  [indirect]
+    doc: function():table -- Collect information on all connected devices.
+    value: table
+      ["0a8c24a2-aeb4-4c57-a088-e9b94ca31ecc"] = table
+        capacity = "8800.0"
+        class = "power"
+        description = "Battery"
+        product = "CapBank3x"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["15dc97f7-accb-4bd0-8fc9-391df2fbb68c"] = table
+        capacity = "8000"
+        class = "display"
+        clock = "2560/2560/320/5120/1280/2560"
+        description = "Graphics controller"
+        product = "MPG3000 GTZ"
+        vendor = "MightyPirates GmbH & Co. KG"
+        width = "8"
+      ["21db5083-ee1c-4170-90e8-f05692614f92"] = table
+        class = "processor"
+        clock = "1500"
+        description = "CPU"
+        product = "FlexiArch 3 Processor"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["2531e885-0472-46fc-8ebc-60179b97ca2e"] = table
+        capacity = "4294967"
+        class = "volume"
+        clock = "200/200/80"
+        description = "Filesystem"
+        product = "MPFS.21.6"
+        size = "4194304"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["2e006874-9c9a-417d-ae97-513097df52c2"] = table
+        class = "bus"
+        description = "Adapter"
+        product = "Multiplug Ext.1"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["3915c554-5da1-4286-8c2f-1769c43f59eb"] = table
+        capacity = "10"
+        class = "system"
+        description = "Computer"
+        product = "Blocker"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["3f5eda9b-93a1-44d6-8bfe-b6d892494845"] = table
+        class = "input"
+        description = "Keyboard"
+        product = "Fancytyper MX-Stone"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["4afa7c73-9a15-49a1-992b-eead188ad855"] = table
+        class = "memory"
+        clock = "1500"
+        description = "Memory bank"
+        product = "Multipurpose RAM Type"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["69038c55-e634-40c1-8d20-3f14c76a8490"] = table
+        capacity = "536870"
+        class = "volume"
+        clock = "20/20/20"
+        description = "Filesystem"
+        product = "MPFS.21.6"
+        size = "524288"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["95970b41-e4c3-484c-ae23-9fd978bd575c"] = table
+        class = "disk"
+        description = "Floppy disk drive"
+        product = "Spinner 520p1"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["96ae445f-4bc2-470c-baae-6cc878c67d87"] = table
+        capacity = "67108"
+        class = "volume"
+        clock = "260/260/100"
+        description = "Filesystem"
+        product = "MPFS.21.6"
+        size = "65536"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["a0b050c9-f4ba-4628-8ddb-5a0a3f412e46"] = table
+        capacity = "4096"
+        class = "memory"
+        description = "EEPROM"
+        product = "FlashStick2k"
+        size = "4096"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["b331cf3b-33f8-447d-a501-d9b4bfae3a08"] = table
+        class = "communication"
+        description = "Internet modem"
+        product = "SuperLink X-D4NK"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["e14da4b8-35c3-45cf-a430-d6826a35ffe5"] = table
+        capacity = "8000"
+        class = "display"
+        description = "Text buffer"
+        product = "Text Screen V0"
+        vendor = "MightyPirates GmbH & Co. KG"
+        width = "8"
+  getProgramLocations  [indirect]
+    doc: function():table -- Returns a map of program name to disk label for known programs.
+    value: table
+      [1] = table
+        [1] = "dig"
+        [2] = "dig"
+      [2] = table
+        [1] = "oppm"
+        [2] = "oppm"
+      [3] = table
+        [1] = "md5sum"
+        [2] = "data"
+      [4] = table
+        [1] = "tape"
+        [2] = "tape"
+      [5] = table
+        [1] = "maze"
+        [2] = "maze"
+      [6] = table
+        [1] = "sha256sum"
+        [2] = "data"
+      [7] = table
+        [1] = "irc"
+        [2] = "irc"
+      [8] = table
+        [1] = "deflate"
+        [2] = "data"
+      [9] = table
+        [1] = "gpg"
+        [2] = "data"
+      [10] = table
+        [1] = "explode"
+        [2] = "explode"
+      [11] = table
+        [1] = "ifconfig"
+        [2] = "network"
+      [12] = table
+        [1] = "ping"
+        [2] = "network"
+      [13] = table
+        [1] = "base64"
+        [2] = "data"
+      [14] = table
+        [1] = "route"
+        [2] = "network"
+      [15] = table
+        [1] = "inflate"
+        [2] = "data"
+      [16] = table
+        [1] = "arp"
+        [2] = "network"
+      [17] = table
+        [1] = "opl-flash"
+        [2] = "openloader"
+      [18] = table
+        [1] = "build"
+        [2] = "builder"
+      [19] = table
+        [1] = "refuel"
+        [2] = "generator"
+  isRunning
+    doc: function():boolean -- Returns whether the computer is running.
+    value: true
+  start  [indirect]
+    doc: function():boolean -- Starts the computer. Returns true if the state changed.
+  stop  [indirect]
+    doc: function():boolean -- Stops the computer. Returns true if the state changed.
+
+-- disk_drive  95970b41-e4c3-484c-ae23-9fd978bd575c  slot -1
+  eject  [indirect]
+    doc: function([velocity:number]):boolean -- Eject the currently present medium from the drive.
+  isEmpty  [indirect]
+    doc: function():boolean -- Checks whether some medium is currently in the drive.
+    value: false
+  media  [indirect]
+    doc: function(): string -- Return the internal floppy disk address
+
+-- eeprom  a0b050c9-f4ba-4628-8ddb-5a0a3f412e46  slot 9
+  get
+    doc: function():string -- Get the currently stored byte array.
+    value: local init do local component_invoke = component.invoke local function boot_invoke(address, method, ...) local result = table.pack(pcall(component_invoke, address, method, ...)) if not result[1] then return nil, result[2] else return table.unpack(result, 2, result.n) end end -- backwards compatibility, may remove later local eeprom = component.list("eeprom")() computer.getBootAddress = function() return boot_invoke(eeprom, "getData") end computer.setBootAddress = function(address) return boot_invoke(eeprom, "setData", address) end do local screen = component.list("screen")() local gpu = component.list("gpu")() if gpu and screen then boot_invoke(gpu, "bind", screen) end end local function tryLoadFrom(address) local handle, reason = boot_invoke(address, "open", "/init.lua") if not handle then return nil, reason end local buffer = "" repeat local data, reason = boot_invoke(address, "read", handle, math.maxinteger or math.huge) if not data and reason then return nil, reason end buffer = buffer .. (data or "") until not data boot_invoke(address, "close", handle) return load(buffer, "=init") end local reason if computer.getBootAddress() then init, reason = tryLoadFrom(computer.getBootAddress()) end if not init then computer.setBootAddress() for address in component.list("filesystem") do init, reason = tryLoadFrom(address) if init then computer.setBootAddress(address) break end end end if not init then error("no bootable medium found" .. (reason and (": " .. tostring(reason)) or ""), 0) end computer.beep(1000, 0.2) end return init() 
+  getChecksum
+    doc: function():string -- Get the checksum of the data on this EEPROM.
+    value: 0674306c
+  getData
+    doc: function():string -- Get the currently stored byte array.
+    value: 2531e885-0472-46fc-8ebc-60179b97ca2e
+  getDataSize
+    doc: function():number -- Get the storage capacity of this EEPROM.
+    value: 256
+  getLabel
+    doc: function():string -- Get the label of the EEPROM.
+    value: EEPROM (Lua BIOS)
+  getSize
+    doc: function():number -- Get the storage capacity of this EEPROM.
+    value: 4096
+  makeReadonly
+    doc: function(checksum:string):boolean -- Make this EEPROM readonly if it isn't already. This process cannot be reversed!
+  set  [indirect]
+    doc: function(data:string) -- Overwrite the currently stored byte array.
+  setData  [indirect]
+    doc: function(data:string) -- Overwrite the currently stored byte array.
+  setLabel  [indirect]
+    doc: function(data:string):string -- Set the label of the EEPROM.
+
+-- filesystem  2531e885-0472-46fc-8ebc-60179b97ca2e  slot 5
+  close
+    doc: function(handle:userdata) -- Closes an open file descriptor with the specified handle.
+  exists
+    doc: function(path:string):boolean -- Returns whether an object exists at the specified absolute path in the file system.
+  getLabel
+    doc: function():string -- Get the current label of the drive.
+    value: OpenOS
+  isDirectory
+    doc: function(path:string):boolean -- Returns whether the object at the specified absolute path in the file system is a directory.
+    error: bad arguments #1 (string expected, got no value)
+  isReadOnly
+    doc: function():boolean -- Returns whether the file system is read-only.
+    value: false
+  lastModified
+    doc: function(path:string):number -- Returns the (real world) timestamp of when the object at the specified absolute path in the file system was modified.
+  list  [indirect]
+    doc: function(path:string):table -- Returns a list of names of objects in the directory at the specified absolute path in the file system.
+  makeDirectory  [indirect]
+    doc: function(path:string):boolean -- Creates a directory at the specified absolute path in the file system. Creates parent directories, if necessary.
+  open
+    doc: function(path:string[, mode:string='r']):userdata -- Opens a new file descriptor and returns its handle.
+  read
+    doc: function(handle:userdata, count:number):string or nil -- Reads up to the specified amount of data from an open file descriptor with the specified handle. Returns nil when EOF is reached.
+  remove  [indirect]
+    doc: function(path:string):boolean -- Removes the object at the specified absolute path in the file system.
+  rename  [indirect]
+    doc: function(from:string, to:string):boolean -- Renames/moves an object from the first specified absolute path in the file system to the second.
+  seek
+    doc: function(handle:userdata, whence:string, offset:number):number -- Seeks in an open file descriptor with the specified handle. Returns the new pointer position.
+  setLabel  [indirect]
+    doc: function(value:string):string -- Sets the label of the drive. Returns the new value, which may be truncated.
+  size
+    doc: function(path:string):number -- Returns the size of the object at the specified absolute path in the file system.
+  spaceTotal
+    doc: function():number -- The overall capacity of the file system, in bytes.
+  spaceUsed
+    doc: function():number -- The currently used capacity of the file system, in bytes.
+  write
+    doc: function(handle:userdata, value:string):boolean -- Writes the specified data to an open file descriptor with the specified handle.
+
+-- filesystem  69038c55-e634-40c1-8d20-3f14c76a8490  slot -1
+  close
+    doc: function(handle:userdata) -- Closes an open file descriptor with the specified handle.
+  exists
+    doc: function(path:string):boolean -- Returns whether an object exists at the specified absolute path in the file system.
+  getLabel
+    doc: function():string -- Get the current label of the drive.
+    value: oc-gtnh
+  isDirectory
+    doc: function(path:string):boolean -- Returns whether the object at the specified absolute path in the file system is a directory.
+    error: bad arguments #1 (string expected, got no value)
+  isReadOnly
+    doc: function():boolean -- Returns whether the file system is read-only.
+    value: false
+  lastModified
+    doc: function(path:string):number -- Returns the (real world) timestamp of when the object at the specified absolute path in the file system was modified.
+  list  [indirect]
+    doc: function(path:string):table -- Returns a list of names of objects in the directory at the specified absolute path in the file system.
+  makeDirectory  [indirect]
+    doc: function(path:string):boolean -- Creates a directory at the specified absolute path in the file system. Creates parent directories, if necessary.
+  open
+    doc: function(path:string[, mode:string='r']):userdata -- Opens a new file descriptor and returns its handle.
+  read
+    doc: function(handle:userdata, count:number):string or nil -- Reads up to the specified amount of data from an open file descriptor with the specified handle. Returns nil when EOF is reached.
+  remove  [indirect]
+    doc: function(path:string):boolean -- Removes the object at the specified absolute path in the file system.
+  rename  [indirect]
+    doc: function(from:string, to:string):boolean -- Renames/moves an object from the first specified absolute path in the file system to the second.
+  seek
+    doc: function(handle:userdata, whence:string, offset:number):number -- Seeks in an open file descriptor with the specified handle. Returns the new pointer position.
+  setLabel  [indirect]
+    doc: function(value:string):string -- Sets the label of the drive. Returns the new value, which may be truncated.
+  size
+    doc: function(path:string):number -- Returns the size of the object at the specified absolute path in the file system.
+  spaceTotal
+    doc: function():number -- The overall capacity of the file system, in bytes.
+  spaceUsed
+    doc: function():number -- The currently used capacity of the file system, in bytes.
+  write
+    doc: function(handle:userdata, value:string):boolean -- Writes the specified data to an open file descriptor with the specified handle.
+
+-- filesystem  96ae445f-4bc2-470c-baae-6cc878c67d87  slot -1
+  close
+    doc: function(handle:userdata) -- Closes an open file descriptor with the specified handle.
+  exists
+    doc: function(path:string):boolean -- Returns whether an object exists at the specified absolute path in the file system.
+  getLabel
+    doc: function():string -- Get the current label of the drive.
+    value: tmpfs
+  isDirectory
+    doc: function(path:string):boolean -- Returns whether the object at the specified absolute path in the file system is a directory.
+    error: bad arguments #1 (string expected, got no value)
+  isReadOnly
+    doc: function():boolean -- Returns whether the file system is read-only.
+    value: false
+  lastModified
+    doc: function(path:string):number -- Returns the (real world) timestamp of when the object at the specified absolute path in the file system was modified.
+  list  [indirect]
+    doc: function(path:string):table -- Returns a list of names of objects in the directory at the specified absolute path in the file system.
+  makeDirectory  [indirect]
+    doc: function(path:string):boolean -- Creates a directory at the specified absolute path in the file system. Creates parent directories, if necessary.
+  open
+    doc: function(path:string[, mode:string='r']):userdata -- Opens a new file descriptor and returns its handle.
+  read
+    doc: function(handle:userdata, count:number):string or nil -- Reads up to the specified amount of data from an open file descriptor with the specified handle. Returns nil when EOF is reached.
+  remove  [indirect]
+    doc: function(path:string):boolean -- Removes the object at the specified absolute path in the file system.
+  rename  [indirect]
+    doc: function(from:string, to:string):boolean -- Renames/moves an object from the first specified absolute path in the file system to the second.
+  seek
+    doc: function(handle:userdata, whence:string, offset:number):number -- Seeks in an open file descriptor with the specified handle. Returns the new pointer position.
+  setLabel  [indirect]
+    doc: function(value:string):string -- Sets the label of the drive. Returns the new value, which may be truncated.
+  size
+    doc: function(path:string):number -- Returns the size of the object at the specified absolute path in the file system.
+  spaceTotal
+    doc: function():number -- The overall capacity of the file system, in bytes.
+  spaceUsed
+    doc: function():number -- The currently used capacity of the file system, in bytes.
+  write
+    doc: function(handle:userdata, value:string):boolean -- Writes the specified data to an open file descriptor with the specified handle.
+
+-- gpu  15dc97f7-accb-4bd0-8fc9-391df2fbb68c  slot 0
+  allocateBuffer
+    doc: function([width: number, height: number]): number -- allocates a new buffer with dimensions width*height (defaults to max resolution) and appends it to the buffer list. Returns the index of the new buffer and returns nil with an error message on failure. A buffer can be allocated even when there is no screen bound to this gpu. Index 0 is always reserved for the screen and thus the lowest index of an allocated buffer is always 1.
+  bind  [indirect]
+    doc: function(address:string[, reset:boolean=true]):boolean -- Binds the GPU to the screen with the specified address and resets screen settings if `reset` is true.
+  bitblt
+    doc: function([dst: number, col: number, row: number, width: number, height: number, src: number, fromCol: number, fromRow: number]):boolean -- bitblt from buffer to screen. All parameters are optional. Writes to `dst` page in rectangle `x, y, width, height`, defaults to the bound screen and its viewport. Reads data from `src` page at `fx, fy`, default is the active page from position 1, 1
+  buffers
+    doc: function(): number -- Returns an array of indexes of the allocated buffers
+  copy
+    doc: function(x:number, y:number, width:number, height:number, tx:number, ty:number):boolean -- Copies a portion of the screen from the specified location with the specified size by the specified translation.
+  fill
+    doc: function(x:number, y:number, width:number, height:number, char:string):boolean -- Fills a portion of the screen at the specified position with the specified size with the specified character.
+  freeAllBuffers
+    doc: function(): number -- Closes all buffers and returns the count. If the active buffer is closed, index moves to 0
+  freeBuffer
+    doc: function(index: number): boolean -- Closes buffer at `index`. Returns true if a buffer closed. If the current buffer is closed, index moves to 0
+  freeMemory
+    doc: function(): number -- returns the total free memory not allocated to buffers. This does not include the screen.
+  get
+    doc: function(x:number, y:number):string, number, number, number or nil, number or nil -- Get the value displayed on the screen at the specified index, as well as the foreground and background color. If the foreground or background is from the palette, returns the palette indices as fourth and fifth results, else nil, respectively.
+    error: bad arguments #1 (integer expected, got no value)
+  getActiveBuffer
+    doc: function(): number -- returns the index of the currently selected buffer. 0 is reserved for the screen. Can return 0 even when there is no screen
+    value: 0
+  getBackground
+    doc: function():number, boolean -- Get the current background color and whether it's from the palette or not.
+    value: 0, false
+  getBufferSize
+    doc: function(index: number): number, number -- returns the buffer size at index. Returns the screen resolution for index 0. returns nil for invalid indexes
+    value: 160, 50
+  getDepth
+    doc: function():number -- Returns the currently set color depth.
+    value: 8
+  getForeground
+    doc: function():number, boolean -- Get the current foreground color and whether it's from the palette or not.
+    value: 16777215, false
+  getPaletteColor
+    doc: function(index:number):number -- Get the palette color at the specified palette index.
+    error: bad arguments #1 (integer expected, got no value)
+  getResolution
+    doc: function():number, number -- Get the current screen resolution.
+    value: 160, 50
+  getScreen
+    doc: function():string -- Get the address of the screen the GPU is currently bound to.
+    value: e14da4b8-35c3-45cf-a430-d6826a35ffe5
+  getViewport
+    doc: function():number, number -- Get the current viewport resolution.
+    value: 160, 50
+  maxDepth
+    doc: function():number -- Get the maximum supported color depth.
+  maxResolution
+    doc: function():number, number -- Get the maximum screen resolution.
+  set
+    doc: function(x:number, y:number, value:string[, vertical:boolean]):boolean -- Plots a string value to the screen at the specified position. Optionally writes the string vertically.
+  setActiveBuffer
+    doc: function(index: number): number -- Sets the active buffer to `index`. 1 is the first vram buffer and 0 is reserved for the screen. returns nil for invalid index (0 is always valid)
+  setBackground
+    doc: function(value:number[, palette:boolean]):number, number or nil -- Sets the background color to the specified value. Optionally takes an explicit palette index. Returns the old value and if it was from the palette its palette index.
+  setDepth  [indirect]
+    doc: function(depth:number):number -- Set the color depth. Returns the previous value.
+  setForeground
+    doc: function(value:number[, palette:boolean]):number, number or nil -- Sets the foreground color to the specified value. Optionally takes an explicit palette index. Returns the old value and if it was from the palette its palette index.
+  setPaletteColor
+    doc: function(index:number, color:number):number -- Set the palette color at the specified palette index. Returns the previous value.
+  setResolution  [indirect]
+    doc: function(width:number, height:number):boolean -- Set the screen resolution. Returns true if the resolution changed.
+  setViewport  [indirect]
+    doc: function(width:number, height:number):boolean -- Set the viewport resolution. Cannot exceed the screen resolution. Returns true if the resolution changed.
+  totalMemory
+    doc: function(): number -- returns the total memory size of the gpu vram. This does not include the screen.
+
+-- internet  b331cf3b-33f8-447d-a501-d9b4bfae3a08  slot 1
+  connect  [indirect]
+    doc: function(address:string[, port:number]):userdata -- Opens a new TCP connection. Returns the handle of the connection.
+  isHttpEnabled
+    doc: function():boolean -- Returns whether HTTP requests can be made (config setting).
+    value: true
+  isTcpEnabled
+    doc: function():boolean -- Returns whether TCP connections can be made (config setting).
+    value: true
+  request  [indirect]
+    doc: function(url:string[, postData:string[, headers:table[, method:string]]]):userdata -- Starts an HTTP request. If this returns true, further results will be pushed using `http_response` signals.
+
+-- keyboard  3f5eda9b-93a1-44d6-8bfe-b6d892494845  slot -1
+  (no callable methods)
+
+-- screen  e14da4b8-35c3-45cf-a430-d6826a35ffe5  slot -1
+  getAspectRatio
+    doc: function():number, number -- The aspect ratio of the screen. For multi-block screens this is the number of blocks, horizontal and vertical.
+    value: 6.0, 3.0
+  getKeyboards  [indirect]
+    doc: function():table -- The list of keyboards attached to the screen.
+    value: table
+      [1] = "3f5eda9b-93a1-44d6-8bfe-b6d892494845"
+  isOn
+    doc: function():boolean -- Returns whether the screen is currently on.
+    value: true
+  isPrecise
+    doc: function():boolean -- Returns whether the screen is in high precision mode (sub-pixel mouse event positions).
+    value: false
+  isTouchModeInverted
+    doc: function():boolean -- Whether touch mode is inverted (sneak-activate opens GUI, instead of normal activate).
+    value: false
+  setPrecise  [indirect]
+    doc: function(enabled:boolean):boolean -- Set whether to use high precision mode (sub-pixel mouse event positions).
+  setTouchModeInverted  [indirect]
+    doc: function(value:boolean):boolean -- Sets whether to invert touch mode (sneak-activate opens GUI, instead of normal activate).
+  turnOff  [indirect]
+    doc: function():boolean -- Turns off the screen. Returns whether the state changed, and whether it is now on.
+  turnOn  [indirect]
+    doc: function():boolean -- Turns the screen on. Returns whether the state changed, and whether it is now on.

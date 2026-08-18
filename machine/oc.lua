@@ -510,6 +510,9 @@ function oc.install()
   package.preload["oclogistics"] = function()
     return dofile("lib/oclogistics.lua")
   end
+  package.preload["ocnet"] = function()
+    return dofile("lib/ocnet.lua")
+  end
   package.preload["component"] = function()
     return component
   end

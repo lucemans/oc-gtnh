@@ -10,11 +10,12 @@ local event = require("event")
 local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
+local net = require("ocnet")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -601,14 +602,33 @@ if #config.watch == 0 then
   end
 end
 
+-- a satellite with a network card answers for what it watches; without one it
+-- is simply a local dashboard, which is still useful
+local modem = net.modem()
+
 term.clear()
 term.setCursorBlink(false)
 
 while true do
   render(sample())
-  local name, _, _, code = event.pull(REFRESH_SECONDS)
+  -- packed rather than unpacked into fixed names: a key event carries a code
+  -- in the fourth slot where a modem message carries a port, and reading one
+  -- as the other is how a dispatch quietly stops matching
+  local packed = table.pack(event.pull(REFRESH_SECONDS))
+  local name = packed[1]
+  local code = packed[4]
+
   if name == "interrupted" then
     break
+  elseif name == "modem_message" then
+    -- a satellite answers for the machines it watches while it is watching
+    -- them, so one program does both rather than fighting for the terminal
+    if modem then
+      local sent = net.answer(modem, packed[4], packed[3], packed[6], config)
+      if sent then
+        notice("served " .. sent)
+      end
+    end
   elseif name == "screen_resized" then
     layout()
     render(sample())

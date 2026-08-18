@@ -9,15 +9,13 @@
 local component = require("component")
 local core = require("oclib")
 local event = require("event")
+local net = require("ocnet")
 local keyboard = require("keyboard")
-local serialization = require("serialization")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
-local ASK = "ocstatus?"
-local REPLY = "ocstatus!"
 -- long enough for a busy base to answer, short enough not to feel stuck
 local ANSWER_TIMEOUT = 3
 local REFRESH_SECONDS = 5
@@ -58,25 +56,14 @@ local function write(x, y, text, foreground, background)
   gpu.set(x, y, text)
 end
 
+-- Every satellite in range is collected, not just the quickest: a base has more
+-- than one, and taking the first answer would hide the rest.
 local function ask(modem)
-  modem.broadcast(core.PORT, ASK)
-
-  local deadline = ANSWER_TIMEOUT
-  while deadline > 0 do
-    local name, _, _, port, _, kind, payload = event.pull(deadline, "modem_message")
-    if name == nil then
-      return nil, "no answer"
-    end
-    if port == core.PORT and kind == REPLY then
-      local ok, cards = pcall(serialization.unserialize, payload)
-      if ok and type(cards) == "table" then
-        return cards
-      end
-      return nil, "unreadable answer"
-    end
-    deadline = deadline - 1
+  local answers = net.ask(modem, event, ANSWER_TIMEOUT)
+  if #answers == 0 then
+    return nil, "no answer"
   end
-  return nil, "no answer"
+  return answers
 end
 
 local function drawGauge(x, y, gauge, width)
@@ -105,35 +92,51 @@ local function drawGauge(x, y, gauge, width)
   write(cursor + 1, y, fit(text, math.max(0, W - cursor - 1)), FG, BG)
 end
 
-local function render(cards, problem)
+local function render(answers, problem)
   gpu.setBackground(BG)
   gpu.fill(1, 1, W, H, " ")
+
+  local machines = 0
+  for _, answer in ipairs(answers or {}) do
+    machines = machines + #answer.cards
+  end
   write(1, 1, fit("  ocview v" .. VERSION .. "    "
-    .. (cards and (#cards .. " machines") or "no data"), W), FG, BAR)
+    .. (answers and (#answers .. " satellites, " .. machines .. " machines")
+      or "no data"), W), FG, BAR)
 
   if problem then
     write(3, 3, fit(problem, W - 4), ALARM, BG)
   end
 
   local y = 3
-  for _, card in ipairs(cards or {}) do
+  for _, answer in ipairs(answers or {}) do
     if y > H - 2 then
       break
     end
-    write(3, y, fit(card.name or "?", W - 14), FG, BG)
-    if card.status then
-      write(math.max(1, W - 12), y, fit(card.status, 11), OK_COLOR, BG)
-    end
+    -- naming the satellite matters once there is more than one: otherwise two
+    -- machines called EBF1 on different computers are indistinguishable
+    write(1, y, fit(" " .. answer.host, W), FG, BAR)
     y = y + 1
 
-    for _, gauge in ipairs(card.gauges or {}) do
+    for _, card in ipairs(answer.cards) do
       if y > H - 2 then
         break
       end
-      local label = (gauge.label and gauge.label ~= "") and gauge.label or "value"
-      write(5, y, fit(label, 10), DIM, BG)
-      drawGauge(16, y, gauge, GAUGE_W)
+      write(3, y, fit(card.name or "?", W - 14), FG, BG)
+      if card.status then
+        write(math.max(1, W - 12), y, fit(card.status, 11), OK_COLOR, BG)
+      end
       y = y + 1
+
+      for _, gauge in ipairs(card.gauges or {}) do
+        if y > H - 2 then
+          break
+        end
+        local label = (gauge.label and gauge.label ~= "") and gauge.label or "value"
+        write(5, y, fit(label, 10), DIM, BG)
+        drawGauge(16, y, gauge, GAUGE_W)
+        y = y + 1
+      end
     end
     y = y + 1
   end
@@ -146,15 +149,10 @@ end
 local arguments = { ... }
 local once = arguments[1] == "--once"
 
-if not component.isAvailable("modem") then
-  io.stderr:write("ocview: no network card installed\n")
+local modem, reason = net.modem()
+if not modem then
+  io.stderr:write("ocview: " .. reason .. "\n")
   return 1
-end
-
-local modem = component.getPrimary("modem")
-modem.open(core.PORT)
-if modem.isWireless() then
-  pcall(modem.setStrength, 400)
 end
 
 term.clear()
