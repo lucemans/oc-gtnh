@@ -257,6 +257,17 @@ cannot be seen even though the entry is callable. Gating a probe on a visible
 what happened on the first pass. `oclib` now simply attempts the call under
 `pcall` and labels the type `table <protected metatable>`.
 
-Argument shapes are still unknown: `setColor` and `setPosition` take something,
-but how many arguments and in what range has not been established. Reading the
-matching getters on a fresh widget answers it, which the fixed probe now does.
+Argument shapes, read off a fresh widget of each kind:
+
+| method | returns | meaning |
+| --- | --- | --- |
+| `getColor()` | `0.0, 0.0, 0.0` | RGB as three floats from 0 to 1, not bytes |
+| `getPosition()` | `0.0, 0.0` | x, y in the wearer screen space |
+| `getAlpha()` | `1.0` | float |
+| `getScale()` | `2.0` | text labels only |
+| `getSize()` | `0.0, 0.0` | rects only: width, height |
+| `getID()` | `0` | the handle removeObject takes |
+
+Sending 0 to 255 for colour would wash every widget out to white. A rect offers
+`getSize`/`setSize` where a text label offers `getScale` and `getText`; the rest
+is common to both.

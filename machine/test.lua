@@ -874,6 +874,124 @@ test("occonnect survives ntfy being down", function()
 end)
 
 -------------------------------------------------------------------------------
+-- ocglass
+
+-- a widget shaped like the real thing: methods are callable but the metatable
+-- is protected, exactly as OpenComputers userdata behaves
+local function fakeWidget(record, id)
+  local widget = {}
+  local function method(name)
+    return setmetatable({ type = "userdata" }, {
+      __call = function(_, ...)
+        record[#record + 1] = { id = id, method = name, args = table.pack(...) }
+        return 0
+      end,
+      __metatable = "userdata",
+    })
+  end
+  for _, name in ipairs({ "setText", "setPosition", "setColor", "setScale",
+    "setAlpha", "setVisible", "setSize", "getID" }) do
+    widget[name] = method(name)
+  end
+  return widget
+end
+
+local function fakeGlasses(record)
+  local made = 0
+  return {
+    address = "8c14b00c-fe87-4aee-a451-7991d34fd7e3",
+    kind = "glasses",
+    methods = {
+      addTextLabel = "function():Text2D", addRect = "function():Rect2D",
+      removeAll = "function()", getObjectCount = "function():number",
+      getBindPlayers = "function():string...",
+    },
+    values = {
+      addTextLabel = function()
+        made = made + 1
+        return fakeWidget(record, made)
+      end,
+      addRect = function()
+        made = made + 1
+        return fakeWidget(record, made)
+      end,
+      removeAll = function()
+        made = 0
+        return true
+      end,
+      getObjectCount = function()
+        return made
+      end,
+      getBindPlayers = function()
+        return "Lucemans"
+      end,
+    },
+  }
+end
+
+test("ocglass draws the watched machines", function()
+  local record = {}
+  oc.components = { fakeGlasses(record), SUPER_TANK }
+
+  local ok, reason = oc.run("ocglass", "--once")
+  check(ok, "ocglass crashed: " .. tostring(reason))
+
+  local texts, colors = {}, {}
+  for _, call in ipairs(record) do
+    if call.method == "setText" then
+      texts[#texts + 1] = tostring(call.args[1])
+    elseif call.method == "setColor" then
+      colors[#colors + 1] = call.args
+    end
+  end
+
+  local all = table.concat(texts, " | ")
+  check(contains(all, "Super Tank"), "did not draw the machine name")
+  check(contains(all, "42,000 / 4,000,000 L"), "did not draw the reading")
+
+  -- colour is three floats from 0 to 1, read off the real widget; sending
+  -- 0 to 255 would wash every bar out to white
+  check(#colors > 0, "never set a colour")
+  local first = colors[1]
+  check(first and first.n == 3, "setColor wants three arguments, sent " .. tostring(first and first.n))
+  for position = 1, (first and first.n or 0) do
+    local value = first[position]
+    check(type(value) == "number" and value >= 0 and value <= 1,
+      "colour component out of the 0 to 1 range: " .. tostring(value))
+  end
+end)
+
+test("ocglass reuses widgets instead of rebuilding the scene", function()
+  local record = {}
+  local glasses = fakeGlasses(record)
+  oc.components = { glasses, SUPER_TANK }
+  -- one refresh tick, then quit
+  oc.push()
+  oc.push("key_down", "keyboard", 0, 0x10)
+
+  oc.run("ocglass")
+
+  local ids = {}
+  for _, call in ipairs(record) do
+    ids[call.id] = true
+  end
+  local count = 0
+  for _ in pairs(ids) do
+    count = count + 1
+  end
+  -- redrawing from scratch would double this and blink the wearer's display
+  check(count <= 4, "made " .. count .. " widgets for one machine, so it rebuilt the scene")
+end)
+
+test("ocglass clears what it drew", function()
+  local record = {}
+  oc.components = { fakeGlasses(record), SUPER_TANK }
+
+  oc.run("ocglass", "--clear")
+  check(contains(table.concat(oc.invoked, " "), "removeAll"), "did not clear the display")
+end)
+
+-------------------------------------------------------------------------------
 -- ocserve and ocview
 
 local function fakeModem(address, wireless)
