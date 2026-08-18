@@ -3,8 +3,11 @@
 local component = require("component")
 local event = require("event")
 local keyboard = require("keyboard")
+local serialization = require("serialization")
 local term = require("term")
 local unicode = require("unicode")
+
+local VERSION = "0.2.0"
 
 local gpu = component.gpu
 local W, H = gpu.getResolution()
@@ -22,6 +25,8 @@ local FG = 0xFFFFFF
 local DIM = 0x999999
 local BAR = 0x333333
 local SELECTED = 0x0066CC
+local VALUE = 0x66CC66
+local FAILED = 0xCC6666
 
 local function fit(text, width)
   local length = unicode.len(text)
@@ -72,10 +77,41 @@ local function collectComponents()
   return entries
 end
 
+local function oneLine(text)
+  return (text:gsub("%s+", " "))
+end
+
+local function formatValue(value)
+  local kind = type(value)
+  if kind == "string" then
+    return oneLine(value)
+  elseif kind == "table" then
+    local ok, text = pcall(serialization.serialize, value)
+    return ok and oneLine(text) or "table"
+  end
+  return tostring(value)
+end
+
+-- only "get" methods are invoked: a setter or an action would change the world
+local function preview(address, name)
+  local results = table.pack(pcall(component.invoke, address, name))
+  if not results[1] then
+    return oneLine(tostring(results[2])), FAILED
+  end
+  if results.n < 2 then
+    return nil
+  end
+  local parts = {}
+  for i = 2, results.n do
+    parts[#parts + 1] = formatValue(results[i])
+  end
+  return table.concat(parts, ", "), VALUE
+end
+
 local function detailLines(entry)
   local lines = {}
-  local function add(text, color)
-    lines[#lines + 1] = { text = text, color = color }
+  local function add(text, color, right, rightColor)
+    lines[#lines + 1] = { text = text, color = color, right = right, rightColor = rightColor }
   end
 
   add(entry.kind, FG)
@@ -99,7 +135,11 @@ local function detailLines(entry)
   end
 
   for _, name in ipairs(names) do
-    add(name, FG)
+    if name:sub(1, 3) == "get" then
+      add(name, FG, preview(entry.address, name))
+    else
+      add(name, FG)
+    end
     local okDoc, doc = pcall(component.doc, entry.address, name)
     if okDoc and doc then
       for _, line in ipairs(wrap(doc, DETAIL_W - 2)) do
@@ -151,7 +191,7 @@ local function render()
   gpu.setBackground(BG)
   gpu.fill(1, 1, W, H, " ")
 
-  write(1, 1, fit("  ocdebug    " .. #entries .. " components attached", W), FG, BAR)
+  write(1, 1, fit("  ocdebug v" .. VERSION .. "    " .. #entries .. " components attached", W), FG, BAR)
   write(1, H, fit("  [click/up/down] select    [wheel/pgup/pgdn] scroll    [q] quit", W), FG, BAR)
 
   gpu.setBackground(BG)
@@ -172,7 +212,15 @@ local function render()
   for row = 1, CONTENT_ROWS do
     local line = lines[detailScroll + row]
     if line then
-      write(DETAIL_X, CONTENT_TOP + row - 1, fit(line.text, DETAIL_W), line.color, BG)
+      local y = CONTENT_TOP + row - 1
+      write(DETAIL_X, y, fit(line.text, DETAIL_W), line.color, BG)
+      if line.right then
+        local space = DETAIL_W - unicode.len(line.text) - 2
+        if space >= 4 then
+          local text = unicode.sub(line.right, 1, space)
+          write(DETAIL_X + DETAIL_W - unicode.len(text), y, text, line.rightColor, BG)
+        end
+      end
     end
   end
 end

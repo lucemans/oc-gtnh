@@ -1,0 +1,3 @@
+-- writes a system dump with information about peripherals (components)
+-- uploads as private unlisted pastebin
+-- includes values for `get` functions on components
