@@ -14,10 +14,11 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 
--- long enough for a busy base to answer, short enough not to feel stuck
-local ANSWER_TIMEOUT = 3
+-- a satellite answers between refreshes, and reading six GregTech machines
+-- costs a second or more of server ticks; three seconds was too impatient
+local ANSWER_TIMEOUT = 8
 local REFRESH_SECONDS = 5
 
 local BG = 0x000000
@@ -59,11 +60,21 @@ end
 -- Every satellite in range is collected, not just the quickest: a base has more
 -- than one, and taking the first answer would hide the rest.
 local function ask(modem)
-  local answers = net.ask(modem, event, ANSWER_TIMEOUT)
-  if #answers == 0 then
-    return nil, "no answer"
+  local answers, seen = net.ask(modem, event, ANSWER_TIMEOUT)
+  if #answers > 0 then
+    return answers
   end
-  return answers
+
+  -- Saying only "no answer" hides which half is broken. Whether anything at all
+  -- arrived separates a satellite that never heard the question from one that
+  -- answered with something unreadable.
+  if seen.unreadable > 0 then
+    return nil, "heard " .. seen.unreadable .. " unreadable answers: version mismatch?"
+  end
+  if seen.heard > 0 then
+    return nil, "heard " .. seen.heard .. " messages, none of them answers"
+  end
+  return nil, "no answer in " .. ANSWER_TIMEOUT .. "s: is ocwatch running there, and in range?"
 end
 
 local function drawGauge(x, y, gauge, width)
@@ -177,10 +188,13 @@ while true do
   elseif name == "key_down" and code == keyboard.keys.q then
     break
   elseif name == "key_down" and code == keyboard.keys.r then
-    cards, problem = ask(modem)
+    local fresh, trouble = ask(modem)
+    -- a missed round keeps the last good picture rather than blanking it
+    cards, problem = fresh or cards, trouble
     render(cards, problem)
   elseif name == nil then
-    cards, problem = ask(modem)
+    local fresh, trouble = ask(modem)
+    cards, problem = fresh or cards, trouble
     render(cards, problem)
   end
 end

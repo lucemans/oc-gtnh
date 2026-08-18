@@ -107,17 +107,32 @@ end
 
 -- Asks everyone in range and collects every answer within the window, rather
 -- than taking the first: a base has more than one satellite.
-function net.ask(modem, event, seconds)
+--
+-- The window is real time, not a count of messages. A satellite answers between
+-- refreshes, and reading six GregTech machines takes a second or more of server
+-- ticks, so an impatient window gives up before a busy machine gets a word in.
+-- Also returns what was heard, which is the difference between "nobody
+-- answered" and "somebody answered something I could not read".
+function net.ask(modem, event, seconds, computerLib)
   modem.broadcast(core.PORT, net.ASK)
 
-  local answers = {}
-  local deadline = seconds or 3
-  while deadline > 0 do
+  local clock = (computerLib or computer).uptime
+  local until_ = clock() + (seconds or 8)
+  local answers, heard, unreadable = {}, 0, 0
+
+  while true do
+    local left = until_ - clock()
+    if left <= 0 then
+      break
+    end
+
     local name, _, remote, port, _, kind, host, payload =
-      event.pull(deadline, "modem_message")
+      event.pull(left, "modem_message")
     if name == nil then
       break
     end
+    heard = heard + 1
+
     if port == core.PORT and kind == net.REPLY then
       local ok, cards = pcall(serialization.unserialize, payload)
       if ok and type(cards) == "table" then
@@ -126,12 +141,13 @@ function net.ask(modem, event, seconds)
           address = remote,
           cards = cards,
         }
+      else
+        unreadable = unreadable + 1
       end
     end
-    -- keep listening: a second satellite may still be about to answer
-    deadline = deadline - 1
   end
-  return answers
+
+  return answers, { heard = heard, unreadable = unreadable }
 end
 
 return net

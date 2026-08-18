@@ -23,6 +23,7 @@ function oc.reset()
   oc.executed = {}
   oc.colors = {}
   oc.reads = {}
+  oc.elapsed = 0
   oc.directories = {}
   oc.deviceInfo = {}
   oc.output = {""}
@@ -282,8 +283,12 @@ end
 -- remaining libraries
 
 local computer = {}
+
+-- Time advances, as it must: a program waiting on a real-time deadline would
+-- otherwise spin forever against a frozen clock. It only moves inside
+-- event.pull, so seeding at startup stays reproducible.
 function computer.uptime()
-  return 2363.7
+  return 2363.7 + oc.elapsed
 end
 function computer.address()
   return "755c25ca-ccec-4262-bd4a-038440718514"
@@ -308,17 +313,32 @@ function computer.getDeviceInfo()
 end
 
 local event = {}
-function event.pull()
+function event.pull(timeout, filter)
   for y = 1, oc.height do
     frame[y] = table.concat(screen[y])
   end
   -- every frame is kept, so a test can assert that a redraw changed something
   oc.frames[#oc.frames + 1] = table.concat(frame, "\n")
-  local queued = table.remove(oc.events, 1)
-  if not queued then
-    return "key_down", "keyboard", 113, 0x10 -- q, so no test can hang
+
+  -- A name filter is honoured, as the real event.pull does. Handing a filtered
+  -- wait some other event makes a program believe it heard traffic it could
+  -- never have seen.
+  for index = 1, #oc.events do
+    local queued = oc.events[index]
+    if not filter or queued[1] == filter then
+      table.remove(oc.events, index)
+      -- a queued event arrives promptly, but not instantly
+      oc.elapsed = oc.elapsed + 0.05
+      return table.unpack(queued, 1, queued.n)
+    end
   end
-  return table.unpack(queued, 1, queued.n)
+
+  -- nothing matching, so the caller's timeout elapses in full
+  oc.elapsed = oc.elapsed + (tonumber(timeout) or 1)
+  if filter then
+    return nil
+  end
+  return "key_down", "keyboard", 113, 0x10 -- q, so no test can hang
 end
 
 local keyboard = {
