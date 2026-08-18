@@ -280,3 +280,24 @@ which is the opposite, so trust the calibration. `ocglass` wraps this in a
 check asserts a bar goes out wider than it is tall.
 
 Whether `setPosition` is reversed the same way is not yet established.
+
+## Screens change size under a running program
+
+`gpu.getResolution()` is not the drawable area. A viewport can be set smaller
+than the buffer, and OpenOS's own terminal measures itself with
+`gpu.getViewport()`, so that is what a full-screen program should use. On this
+machine both report 160x50, but an attached display need not match the screen a
+program started on, and `gpu.bind` can point the card at a different screen
+entirely.
+
+A change raises **`screen_resized`**, which OpenOS's `tty` already listens for.
+Any program that computes a layout once at startup will keep drawing to the old
+size until it is restarted.
+
+So every full-screen program here keeps its positional constants inside a
+`layout()` function, calls it at startup, and calls it again on
+`screen_resized`. `ocsweeper` additionally starts a new game when the board no
+longer fits, since its board size is derived from the screen.
+
+`core.viewport(gpu)` wraps the call and falls back to `getResolution` if a card
+does not offer a viewport.

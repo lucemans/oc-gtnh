@@ -9,11 +9,12 @@
 
 local component = require("component")
 local computer = require("computer")
+local core = require("oclib")
 local event = require("event")
 local keyboard = require("keyboard")
 local term = require("term")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 
 -- the board never exceeds this, whatever the screen or the arguments allow
 local MAX_SIZE = 21
@@ -28,7 +29,7 @@ local CELL_H = 2
 local ATTEMPTS = 40
 
 local gpu = component.gpu
-local W, H = gpu.getResolution()
+local W, H = core.viewport(gpu)
 
 local BG = 0x000000
 local FG = 0xFFFFFF
@@ -72,22 +73,37 @@ end
 
 local arguments = { ... }
 
--- The box costs a column for the right edge, and a row for every separator plus
--- the bottom edge. Above and below the board sit the header, the message row and
--- the controls bar.
-local maxWidth = math.max(2, math.min(MAX_SIZE, math.floor((W - 1) / CELL_W)))
-local maxHeight = math.max(2, math.min(MAX_SIZE, math.floor((H - 4) / CELL_H)))
-local width = clamp(tonumber(arguments[1]) or maxWidth, 2, maxWidth)
-local height = clamp(tonumber(arguments[2]) or maxHeight, 2, maxHeight)
+local width, height, boardCols, boardRows
+local ORIGIN_X, ORIGIN_Y, MESSAGE_Y
 
-local boardCols = width * CELL_W + 1
-local boardRows = height * CELL_H + 1
+-- Recomputed rather than fixed at startup: a screen can be resized under a
+-- running program, and an attached display is often not the size the program
+-- began with. Everything positional lives here so one call re-lays it all out.
+local function layout()
+  W, H = core.viewport(gpu)
 
--- centred: horizontally in the screen, vertically in the rows the header and
--- the controls bar leave behind
-local ORIGIN_X = math.max(1, math.floor((W - boardCols) / 2) + 1)
-local ORIGIN_Y = 2 + math.max(0, math.floor(((H - 2) - (boardRows + 1)) / 2))
-local MESSAGE_Y = ORIGIN_Y + boardRows
+  -- The box costs a column for the right edge, and a row for every separator
+  -- plus the bottom edge. Above and below the board sit the header, the message
+  -- row and the controls bar.
+  local maxWidth = math.max(2, math.min(MAX_SIZE, math.floor((W - 1) / CELL_W)))
+  local maxHeight = math.max(2, math.min(MAX_SIZE, math.floor((H - 4) / CELL_H)))
+
+  width = clamp(tonumber(arguments[1]) or maxWidth, 2, maxWidth)
+  height = clamp(tonumber(arguments[2]) or maxHeight, 2, maxHeight)
+
+  boardCols = width * CELL_W + 1
+  boardRows = height * CELL_H + 1
+
+  -- centred: horizontally in the screen, vertically in the rows the header and
+  -- the controls bar leave behind
+  ORIGIN_X = math.max(1, math.floor((W - boardCols) / 2) + 1)
+  ORIGIN_Y = 2 + math.max(0, math.floor(((H - 2) - (boardRows + 1)) / 2))
+  MESSAGE_Y = ORIGIN_Y + boardRows
+
+  return width, height
+end
+
+layout()
 
 local mine, revealed, flagged, count, dirty
 local mineCount, flagCount, openCount, placed, lost, won, startedAt, finishedAt
@@ -615,6 +631,15 @@ while true do
 
   if name == "interrupted" then
     break
+  elseif name == "screen_resized" then
+    -- The board is sized to the screen, so a resize can leave it too big to
+    -- fit. Re-lay out, and start over only when the size actually changed.
+    local wasWidth, wasHeight = width, height
+    layout()
+    drawnFrame, drawnHeader, drawnMessage = nil, nil, nil
+    if width ~= wasWidth or height ~= wasHeight then
+      newGame()
+    end
   elseif name == "key_down" then
     if arg2 == keyboard.keys.q then
       break

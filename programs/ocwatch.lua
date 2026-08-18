@@ -14,12 +14,21 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
-local W, H = gpu.getResolution()
-local GAUGE_W = math.max(16, math.min(40, math.floor((W - 34) / 2)))
+
+local W, H, GAUGE_W
+
+-- recomputed on a resize: an attached display is often not the size the program
+-- started on
+local function layout()
+  W, H = core.viewport(gpu)
+  GAUGE_W = math.max(16, math.min(40, math.floor((W - 34) / 2)))
+end
+
+layout()
 
 local BG = 0x000000
 local FG = 0xFFFFFF
@@ -600,6 +609,9 @@ while true do
   local name, _, _, code = event.pull(REFRESH_SECONDS)
   if name == "interrupted" then
     break
+  elseif name == "screen_resized" then
+    layout()
+    render(sample())
   elseif name == "key_down" then
     if code == keyboard.keys.q then
       break

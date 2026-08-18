@@ -96,6 +96,17 @@ function core.segments(text, default)
   end
 end
 
+-- The drawable area, which is not always the resolution. A viewport can be set
+-- smaller than the buffer, and OpenOS's own terminal measures itself this way.
+-- A screen_resized signal means this has changed and a layout must be redone.
+function core.viewport(gpu)
+  local ok, width, height = pcall(gpu.getViewport)
+  if ok and type(width) == "number" and type(height) == "number" then
+    return width, height
+  end
+  return gpu.getResolution()
+end
+
 function core.comma(number)
   local text = string.format("%d", number)
   local sign, digits = text:match("^(%-?)(%d+)$")

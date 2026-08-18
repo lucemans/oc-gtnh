@@ -554,6 +554,48 @@ test("ocdebug reads is/has methods", function()
   check(contains(invoked, "isMachineActive"), "did not invoke an is method")
 end)
 
+test("ocdebug re-lays out when the screen changes size", function()
+  oc.width, oc.height = 80, 20
+  oc.reset()
+  oc.components = { SUPER_TANK }
+  oc.resize(160, 50)
+
+  local ok, reason = oc.run("ocdebug")
+  check(ok, "ocdebug crashed on resize: " .. tostring(reason))
+  -- rows are as wide as the screen, so a stale layout shows up as a short row
+  local first = (oc.frame() .. "\n"):match("([^\n]*)\n")
+  check(first and #first == 160, "row is " .. tostring(first and #first) .. " wide, expected 160")
+  -- and the list divider must sit at the wider screen's quarter, not the old one
+  check(contains(oc.frame(), string.rep(" ", 8) .. "\226\148\130")
+    or oc.frame():find("\226\148\130") ~= nil, "no divider drawn after the resize")
+
+  oc.width, oc.height = 80, 20
+  oc.reset()
+end)
+
+test("ocdebug and ocwatch fit a small display", function()
+  oc.width, oc.height = 42, 12
+  oc.reset()
+  oc.components = { SUPER_TANK }
+
+  -- gpu.set asserts on an out-of-bounds row, so a crash here means it drew off
+  -- the edge of a display smaller than the one it was written against
+  local ok, reason = oc.run("ocdebug")
+  check(ok, "ocdebug drew outside a small screen: " .. tostring(reason))
+
+  oc.reset()
+  oc.components = { SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = {}, alerts = {},
+    watch = { { address = SUPER_TANK.address, hidden = {} } },
+  })
+  local watchOk, watchReason = oc.run("ocwatch")
+  check(watchOk, "ocwatch drew outside a small screen: " .. tostring(watchReason))
+
+  oc.width, oc.height = 80, 20
+  oc.reset()
+end)
+
 test("ocdebug never invokes a setter", function()
   oc.components = { GT_MACHINE, REDSTONE }
   oc.push("key_down", "keyboard", 0, 0xD0) -- down, selects redstone
@@ -2083,6 +2125,46 @@ test("ocsweeper refuses to open around a number without the flags", function()
   local frame = oc.frame()
   check(not contains(frame, "boom"), "clicking a number detonated")
   check(not contains(frame, "cleared in"), "opened cells the flags did not account for")
+end)
+
+test("ocsweeper re-lays out when the screen changes size", function()
+  -- an attached display is often not the size the program started on
+  oc.width, oc.height = 80, 20
+  oc.reset()
+  oc.resize(160, 50)
+
+  local ok, reason = oc.run("ocsweeper")
+  check(ok, "ocsweeper crashed on resize: " .. tostring(reason))
+
+  local frame = oc.frame()
+  check(contains(frame, "21 x 21"), "did not grow into the larger screen")
+  -- and it must still be centred in the new width, not stuck at the old origin
+  local row = nil
+  for line in (frame .. "\n"):gmatch("([^\n]*)\n") do
+    if line:find("\226\148\140", 1, true) then
+      row = line
+      break
+    end
+  end
+  check(row ~= nil, "no board drawn after the resize")
+  local before = row and (row:find("\226\148\140", 1, true) or 1) - 1
+  check(before > 20, "board was not re-centred, only " .. tostring(before) .. " columns to its left")
+
+  oc.width, oc.height = 80, 20
+  oc.reset()
+end)
+
+test("ocsweeper never draws outside a small screen", function()
+  oc.width, oc.height = 44, 14
+  oc.reset()
+
+  local ok, reason = oc.run("ocsweeper")
+  -- gpu.set asserts on an out-of-bounds row, so crashing here means it drew off
+  -- the edge of a display smaller than the default board
+  check(ok, "ocsweeper drew outside a small screen: " .. tostring(reason))
+
+  oc.width, oc.height = 80, 20
+  oc.reset()
 end)
 
 test("ocsweeper starts over on r", function()

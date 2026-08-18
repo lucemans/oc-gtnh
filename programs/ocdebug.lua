@@ -9,7 +9,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.7.0"
+local VERSION = "0.8.0"
 
 -- indirect component calls block until the next server tick, so re-reading a
 -- machine costs real time; two seconds keeps the readings live without
@@ -17,16 +17,25 @@ local VERSION = "0.7.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
-local W, H = gpu.getResolution()
 
-local LIST_W = math.max(24, math.min(40, math.floor(W / 4)))
-local CONTENT_TOP = 3
-local CONTENT_BOTTOM = H - 1
-local CONTENT_ROWS = CONTENT_BOTTOM - CONTENT_TOP + 1
-local DETAIL_X = LIST_W + 3
-local DETAIL_W = W - DETAIL_X + 1
-local NAME_W = LIST_W - 8
-local GAUGE_W = math.max(16, math.min(40, math.floor(DETAIL_W / 3)))
+local W, H, LIST_W, CONTENT_TOP, CONTENT_BOTTOM, CONTENT_ROWS
+local DETAIL_X, DETAIL_W, NAME_W, GAUGE_W
+
+-- Recomputed rather than fixed at startup: a screen can be resized under a
+-- running program, and an attached display is often not the size it began with.
+local function layout()
+  W, H = core.viewport(gpu)
+  LIST_W = math.max(24, math.min(40, math.floor(W / 4)))
+  CONTENT_TOP = 3
+  CONTENT_BOTTOM = H - 1
+  CONTENT_ROWS = CONTENT_BOTTOM - CONTENT_TOP + 1
+  DETAIL_X = LIST_W + 3
+  DETAIL_W = W - DETAIL_X + 1
+  NAME_W = LIST_W - 8
+  GAUGE_W = math.max(16, math.min(40, math.floor(DETAIL_W / 3)))
+end
+
+layout()
 
 local BG = 0x000000
 local FG = 0xFFFFFF
@@ -367,6 +376,9 @@ while true do
 
   if name == nil then
     rescan()
+  elseif name == "screen_resized" then
+    layout()
+    refresh()
   elseif name == "interrupted" then
     break
   elseif name == "key_down" then

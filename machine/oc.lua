@@ -41,6 +41,19 @@ function oc.reset()
   end
 end
 
+-- change the screen size mid-run and raise the signal a real screen would
+function oc.resize(width, height)
+  oc.width, oc.height = width, height
+  screen = {}
+  for y = 1, oc.height do
+    screen[y] = {}
+    for x = 1, oc.width do
+      screen[y][x] = " "
+    end
+  end
+  oc.push("screen_resized", "screen", width, height)
+end
+
 function oc.push(...)
   oc.events[#oc.events + 1] = table.pack(...)
 end
@@ -97,6 +110,11 @@ end
 
 local gpu = {}
 function gpu.getResolution()
+  return oc.width, oc.height
+end
+
+-- the drawable area; tests resize through oc.resize so both agree
+function gpu.getViewport()
   return oc.width, oc.height
 end
 -- Colour is recorded per cell, not discarded. Without it a closed cell and an

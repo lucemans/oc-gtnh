@@ -14,7 +14,7 @@ local serialization = require("serialization")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.1.0"
+local VERSION = "0.2.0"
 
 local ASK = "ocstatus?"
 local REPLY = "ocstatus!"
@@ -33,8 +33,16 @@ local FULL_BLOCK = "\226\150\136"
 local LIGHT_BLOCK = "\226\150\145"
 
 local gpu = component.gpu
-local W, H = gpu.getResolution()
-local GAUGE_W = math.max(8, math.min(20, math.floor(W / 3)))
+
+local W, H, GAUGE_W
+
+-- recomputed on a resize: a tablet docked to a screen changes size under us
+local function layout()
+  W, H = core.viewport(gpu)
+  GAUGE_W = math.max(8, math.min(20, math.floor(W / 3)))
+end
+
+layout()
 
 local function fit(text, width)
   local length = unicode.len(text)
@@ -165,6 +173,9 @@ while true do
 
   if name == "interrupted" then
     break
+  elseif name == "screen_resized" then
+    layout()
+    render(cards, problem)
   elseif name == "key_down" and code == keyboard.keys.q then
     break
   elseif name == "key_down" and code == keyboard.keys.r then
