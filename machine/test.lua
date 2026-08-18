@@ -1676,6 +1676,33 @@ test("ocmkfs copies every program and library, not just ocup", function()
   check(floppy.written["/bin/edit.lua"] == nil, "copied a file that is not ours")
 end)
 
+test("ocmkfs copies only the programs picked for the floppy", function()
+  local floppy = fakeDisk(FLOPPY, nil, 524288, false)
+  oc.components = {
+    floppy,
+    fakeDrive("372997ab-4a0c-46ee-a425-e13a3b7b18a4", FLOPPY),
+  }
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocdebug.lua"] = "-- ocdebug"
+  oc.files["/bin/ocdump.lua"] = "-- ocdump"
+  oc.files["/lib/oclib.lua"] = "-- oclib"
+
+  -- pick the disk by number, then turn ocdump off and flash
+  oc.reads = { "1" }
+  oc.push("key_down", "keyboard", 0, 0xD0) -- down, onto ocdump
+  oc.push("key_down", "keyboard", 32, 0x39) -- space
+  oc.push("key_down", "keyboard", 13, 0x1C) -- enter
+
+  local ok, reason = oc.run("ocmkfs")
+  check(ok, "ocmkfs crashed: " .. tostring(reason))
+
+  check(floppy.written["/bin/ocdebug.lua"] == "-- ocdebug", "dropped a chosen program")
+  check(floppy.written["/bin/ocdump.lua"] == nil, "copied a program that was turned off")
+  -- the floppy exists to carry the updater, and the libraries are not a choice
+  check(floppy.written["/bin/ocup.lua"] == "-- ocup", "left the updater off")
+  check(floppy.written["/lib/oclib.lua"] == "-- oclib", "left a library off")
+end)
+
 test("ocmkfs refuses a disk too small to hold the payload", function()
   local tiny = fakeDisk(FLOPPY, nil, 64, false)
   oc.components = {
@@ -2030,8 +2057,12 @@ test("ocwatch draws a bar against a local maximum and still shows the real one",
   check(contains(frame, "of 4,000,000"), "lost the real capacity")
 end)
 
-test("ocwatch gives the real maximum back once the value passes the local one", function()
-  local tank = tankAt("50,000")
+test("ocwatch keeps the local maximum when the value climbs past it", function()
+  -- the tank sits just above the range worth watching, which is exactly when
+  -- handing the real maximum back drew an empty bar again
+  local tank = tankAt("11,000")
+  oc.width, oc.height = 160, 50
+  oc.reset()
   oc.components = { tank }
   oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
     watch = { { address = tank.address, hidden = {}, limits = { [1] = 10000 } } },
@@ -2039,8 +2070,11 @@ test("ocwatch gives the real maximum back once the value passes the local one", 
   })
 
   oc.run("ocwatch")
-  -- drawing 50,000 out of 10,000 would be a bar past its own end
-  check(contains(oc.frame(), "50,000 / 4,000,000 L"), "kept a maximum below the value")
+  local frame = oc.frame()
+  check(contains(frame, "11,000 / 10,000 L"), "went back to the real maximum")
+  check(contains(frame, "110.0%"), "rounded the percentage down to full")
+  -- the bar itself cannot go past its own end
+  check(not contains(frame, "\226\150\145"), "left part of the bar unfilled")
 end)
 
 test("ocwatch stops a machine when a tank runs low", function()

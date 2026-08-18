@@ -7,7 +7,7 @@ local serialization = require("serialization")
 
 local core = {}
 
-core.VERSION = "0.5.0"
+core.VERSION = "0.6.0"
 
 -- the Minecraft section sign, two bytes in UTF-8
 core.SECTION = "\194\167"
@@ -109,13 +109,17 @@ end
 
 -- A super tank holds four million litres and its diesel only ever moves between
 -- 5,000 and 10,000, so a bar against the real maximum is empty forever. A local
--- maximum rescales the bar to the part actually in use. The real maximum takes
--- over again once the value climbs past the local one, so a reading is never
--- drawn as more than full.
+-- maximum rescales the bar to the part actually in use.
+--
+-- Once set it is the scale, whatever the value does. Handing the real maximum
+-- back as soon as the value went over meant a tank sitting just above the
+-- interesting range drew an empty bar again, which is the one moment the bar
+-- had to be readable. Above the local maximum the bar simply reads full, and
+-- the real capacity is shown beside it so nothing is hidden.
 --
 -- Returns the maximum to draw against, and whether that is the local one.
 function core.scale(gauge, limit)
-  if not limit or limit <= 0 or gauge.value > limit then
+  if not limit or limit <= 0 then
     return gauge.max, false
   end
   return limit, true

@@ -15,7 +15,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.7.0"
+local VERSION = "0.8.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -298,13 +298,19 @@ local function render(cards)
   end
 
   local function drawGauge(x, y, gauge, width, max, isLocal)
-    local ratio = max > 0 and gauge.value / max or 0
-    if ratio < 0 then
-      ratio = 0
-    elseif ratio > 1 then
-      ratio = 1
+    local ratio = 0
+    if max > 0 then
+      ratio = gauge.value / max
     end
-    local filled = math.floor(width * ratio + 0.5)
+    -- the bar cannot go past its own end, but the percentage still says how far
+    -- over a local maximum the reading has climbed
+    local drawn = ratio
+    if drawn < 0 then
+      drawn = 0
+    elseif drawn > 1 then
+      drawn = 1
+    end
+    local filled = math.floor(width * drawn + 0.5)
 
     write(x, y, "[", DIM, BG)
     local cursor = x + 1

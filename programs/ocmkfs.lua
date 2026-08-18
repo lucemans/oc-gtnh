@@ -1,11 +1,11 @@
 -- ocmkfs: flash a floppy so a brand new computer can install ocup from it.
 --
---   ocmkfs                 pick a disk and write the installer onto it
---   ocmkfs --disk 3de61ebf name the disk instead of being asked
+--   ocmkfs                 pick a disk, pick what to copy, write it
+--   ocmkfs --disk 3de61ebf name the disk and copy everything, without asking
 --
--- The prompt reads the keyboard, so anything driving this from off the machine
--- has to use --disk. Naming the disk is also the safer way to script it: a
--- position in a list can move, an address cannot.
+-- Both prompts read the keyboard, so anything driving this from off the machine
+-- has to use --disk, which skips them and takes the lot. Naming the disk is also
+-- the safer way to script it: a position in a list can move, an address cannot.
 --
 -- OpenOS's own `install` looks for a .prop file at the root of a candidate
 -- filesystem, reads it as a Lua table, and then copies the disk's contents onto
@@ -19,14 +19,19 @@
 local component = require("component")
 local computer = require("computer")
 local core = require("oclib")
+local event = require("event")
 local filesystem = require("filesystem")
+local keyboard = require("keyboard")
+local term = require("term")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 
 local LABEL = "oc-gtnh"
 -- where the installed set lives, and what belongs to this project
 local FOLDERS = { "/lib", "/bin" }
 local BELONGS = "^oc.*%.lua$"
+-- the reason the floppy exists, so it is never left off one
+local SELF = "/bin/ocup.lua"
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999
@@ -93,7 +98,7 @@ end
 
 -- everything this project installed, read off the machine doing the flashing
 local function payload()
-  local files, bytes = {}, 0
+  local files = {}
   for _, folder in ipairs(FOLDERS) do
     if filesystem.exists(folder) then
       for name in filesystem.list(folder) do
@@ -104,13 +109,20 @@ local function payload()
             local contents = file:read("*a") or ""
             file:close()
             files[#files + 1] = { path = path, contents = contents }
-            bytes = bytes + #contents
           end
         end
       end
     end
   end
-  return files, bytes
+  return files
+end
+
+local function bytesOf(files)
+  local bytes = 0
+  for _, file in ipairs(files) do
+    bytes = bytes + #file.contents
+  end
+  return bytes
 end
 
 local function writeTo(address, path, contents)
@@ -131,6 +143,68 @@ local function writeTo(address, path, contents)
   disk.write(handle, contents)
   disk.close(handle)
   return true
+end
+
+-- Only the programs are offered. Libraries go on regardless, since whichever
+-- programs are kept need whichever of them they require, and ocup goes on
+-- regardless because it is the reason the floppy exists.
+local function choose(files)
+  local programs = {}
+  for _, file in ipairs(files) do
+    if file.path:match("^/bin/") and file.path ~= SELF then
+      programs[#programs + 1] = file
+    end
+  end
+  if #programs == 0 then
+    return files
+  end
+
+  local taking = {}
+  for _, file in ipairs(programs) do
+    taking[file.path] = true
+  end
+
+  local cursor = 1
+  while true do
+    term.clear()
+    say("ocmkfs v" .. VERSION .. "   what goes on the floppy", WHITE)
+    say("")
+    for index, file in ipairs(programs) do
+      local on = taking[file.path]
+      say((index == cursor and "  > " or "    ") .. (on and "[x] " or "[ ] ")
+        .. file.path:match("/([^/]+)$"), on and WHITE or DIM)
+    end
+    say("")
+    say("  ocup and the libraries are always copied", DIM)
+    say("  up and down to move, space to toggle, enter to flash", DIM)
+
+    local name, _, _, code = event.pull(nil, "key_down")
+    if name == nil or code == keyboard.keys.enter then
+      break
+    elseif code == keyboard.keys.up then
+      if cursor > 1 then
+        cursor = cursor - 1
+      else
+        cursor = #programs
+      end
+    elseif code == keyboard.keys.down then
+      if cursor < #programs then
+        cursor = cursor + 1
+      else
+        cursor = 1
+      end
+    elseif code == keyboard.keys.space and programs[cursor] then
+      taking[programs[cursor].path] = not taking[programs[cursor].path]
+    end
+  end
+
+  local kept = {}
+  for _, file in ipairs(files) do
+    if not file.path:match("^/bin/") or file.path == SELF or taking[file.path] then
+      kept[#kept + 1] = file
+    end
+  end
+  return kept
 end
 
 local function size(bytes)
@@ -176,7 +250,7 @@ if #writable == 0 then
   return 1
 end
 
-local files, bytes = payload()
+local files = payload()
 if #files == 0 then
   say("")
   io.stderr:write("ocmkfs: nothing to copy from /bin or /lib, run ocup first\n")
@@ -219,6 +293,13 @@ if chosen.readOnly then
   return 1
 end
 
+-- naming the disk is how this gets driven from off the machine, and nothing
+-- there can work a menu
+if not wanted then
+  files = choose(files)
+end
+
+local bytes = bytesOf(files)
 local free = (chosen.total or 0) - (chosen.used or 0)
 if bytes > free then
   say("")
