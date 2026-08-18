@@ -1,6 +1,11 @@
 -- ocmkfs: flash a floppy so a brand new computer can install ocup from it.
 --
---   ocmkfs        pick a disk and write the installer onto it
+--   ocmkfs                 pick a disk and write the installer onto it
+--   ocmkfs --disk 3de61ebf name the disk instead of being asked
+--
+-- The prompt reads the keyboard, so anything driving this from off the machine
+-- has to use --disk. Naming the disk is also the safer way to script it: a
+-- position in a list can move, an address cannot.
 --
 -- OpenOS's own `install` looks for a .prop file at the root of a candidate
 -- filesystem, reads it as a Lua table, and then copies the disk's contents onto
@@ -11,7 +16,7 @@ local component = require("component")
 local computer = require("computer")
 local core = require("oclib")
 
-local VERSION = "0.1.0"
+local VERSION = "0.2.0"
 
 local LABEL = "oc-gtnh"
 local SOURCE = "/bin/ocup.lua"
@@ -159,10 +164,32 @@ if not contents then
   return 1
 end
 
-say("")
-io.write("  number to flash (blank to cancel) > ")
-local answer = tonumber(io.read())
-local chosen = answer and found[answer]
+local arguments = { ... }
+local wanted = nil
+for index = 1, #arguments do
+  if arguments[index] == "--disk" and arguments[index + 1] then
+    wanted = arguments[index + 1]
+  end
+end
+
+local chosen = nil
+if wanted then
+  for _, disk in ipairs(found) do
+    if disk.address:sub(1, #wanted) == wanted then
+      chosen = disk
+    end
+  end
+  if not chosen then
+    say("")
+    io.stderr:write("ocmkfs: no disk matches " .. wanted .. "\n")
+    return 1
+  end
+else
+  say("")
+  io.write("  number to flash (blank to cancel) > ")
+  local answer = tonumber(io.read())
+  chosen = answer and found[answer]
+end
 
 if not chosen then
   say("  cancelled", DIM)

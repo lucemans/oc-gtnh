@@ -959,6 +959,31 @@ test("ocmkfs needs ocup on the machine before it can copy it", function()
   check(contains(oc.printed(), "run ocup first"), "did not say what was missing")
 end)
 
+test("ocmkfs flashes a named disk without asking", function()
+  local floppy = fakeDisk(FLOPPY, nil, 524288, false)
+  oc.components = {
+    fakeDisk(HDD, "openos", 4194304, false),
+    floppy,
+    fakeDrive("372997ab-4a0c-46ee-a425-e13a3b7b18a4", FLOPPY),
+  }
+  oc.files["/bin/ocup.lua"] = "-- the real ocup"
+  -- nothing queued for io.read: the prompt would block a remote caller, so
+  -- naming the disk has to avoid it entirely
+  oc.reads = {}
+
+  oc.run("ocmkfs", "--disk", FLOPPY:sub(1, 8))
+  check(floppy.written["/bin/ocup.lua"] == "-- the real ocup", "did not flash the named disk")
+  check(floppy.written["/.prop"] ~= nil, "no .prop on the named disk")
+end)
+
+test("ocmkfs refuses a name that matches nothing", function()
+  oc.components = { fakeDisk(HDD, "openos", 4194304, false) }
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+
+  oc.run("ocmkfs", "--disk", "deadbeef")
+  check(not contains(oc.printed(), "done"), "claimed to flash a disk that is not there")
+end)
+
 test("ocmkfs writes the installer and labels the disk", function()
   local floppy = fakeDisk(FLOPPY, nil, 524288, false)
   oc.components = {
