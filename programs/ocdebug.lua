@@ -7,7 +7,12 @@ local serialization = require("serialization")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
+
+-- indirect component calls block until the next server tick, so re-reading a
+-- machine costs real time; two seconds keeps the readings live without
+-- occupying the computer
+local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
 local W, H = gpu.getResolution()
@@ -195,6 +200,23 @@ local function sensorOf(address)
   return lines
 end
 
+-- a tank and a battery buffer open their sensor text with a coloured display
+-- name, but a multiblock such as a blast furnace opens straight into readings
+local function looksLikeName(raw)
+  if raw:find(SECTION .. "a", 1, true) and raw:find(SECTION .. "e", 1, true) then
+    return false
+  end
+  local plain = strip(raw)
+  return plain:match("%S") ~= nil and plain:match("%d") == nil
+end
+
+local function prettyName(name)
+  local spaced = name:gsub("%.", " ")
+  return (spaced:gsub("(%a)(%w*)", function(first, rest)
+    return first:upper() .. rest
+  end))
+end
+
 local function friendlyName(entry)
   if entry.friendly ~= nil then
     return entry.friendly or entry.kind
@@ -202,14 +224,14 @@ local function friendlyName(entry)
   entry.friendly = false
 
   local sensor = sensorOf(entry.address)
-  if sensor then
+  if sensor and looksLikeName(sensor[1]) then
     entry.friendly = strip(sensor[1])
   else
     local methods = try(component.methods, entry.address)
     if has(methods, "getName") then
       local name = call(entry.address, "getName")
       if type(name) == "string" and name ~= "" then
-        entry.friendly = (name:gsub("%.", " "))
+        entry.friendly = prettyName(name)
       end
     end
   end
@@ -260,8 +282,8 @@ local function summaryLines(entry, methods, add)
   local lastColor = nil
 
   if sensor then
-    -- the first line is the machine's display name, already used as the header
-    for index = 2, #sensor do
+    -- skip the first line only when it is the display name shown in the header
+    for index = looksLikeName(sensor[1]) and 2 or 1, #sensor do
       local raw = tostring(sensor[index])
       local gauge, label = gaugeFromSensor(raw, lastColor or VALUE)
       if gauge then
@@ -283,8 +305,9 @@ local function summaryLines(entry, methods, add)
     end
   end
 
-  -- progress is not in the sensor text but matters while a machine runs
-  if has(methods, "getWorkMaxProgress") and has(methods, "getWorkProgress") then
+  -- a machine with sensor text already reports its own progress there, in the
+  -- units it thinks in; only fall back to the raw counters without one
+  if not sensor and has(methods, "getWorkMaxProgress") and has(methods, "getWorkProgress") then
     local maximum = call(entry.address, "getWorkMaxProgress")
     local value = call(entry.address, "getWorkProgress")
     if type(maximum) == "number" and type(value) == "number" and maximum > 0 then
@@ -382,21 +405,42 @@ end
 
 -------------------------------------------------------------------------------
 
-local entries = {}
-for address, kind in component.list() do
-  entries[#entries + 1] = { address = address, kind = kind }
-end
-table.sort(entries, function(a, b)
-  if a.kind ~= b.kind then
-    return a.kind < b.kind
+local function collect()
+  local list = {}
+  for address, kind in component.list() do
+    list[#list + 1] = { address = address, kind = kind }
   end
-  return a.address < b.address
-end)
+  table.sort(list, function(a, b)
+    if a.kind ~= b.kind then
+      return a.kind < b.kind
+    end
+    return a.address < b.address
+  end)
+  return list
+end
 
+local function signature(list)
+  local parts = {}
+  for _, entry in ipairs(list) do
+    parts[#parts + 1] = entry.address
+  end
+  return table.concat(parts, ",")
+end
+
+local entries = collect()
 local selected = 1
 local listScroll = 0
 local detailScroll = 0
 local lines = {}
+
+local function refresh()
+  local entry = entries[selected]
+  lines = entry and detailLines(entry) or {}
+  local maximum = math.max(0, #lines - CONTENT_ROWS)
+  if detailScroll > maximum then
+    detailScroll = maximum
+  end
+end
 
 local function select(index)
   if index < 1 then
@@ -407,7 +451,7 @@ local function select(index)
   end
   selected = index
   detailScroll = 0
-  lines = entries[index] and detailLines(entries[index]) or {}
+  refresh()
 
   if selected - listScroll > CONTENT_ROWS then
     listScroll = selected - CONTENT_ROWS
@@ -415,6 +459,33 @@ local function select(index)
   if selected - listScroll < 1 then
     listScroll = selected - 1
   end
+end
+
+-- re-read the selected machine, and notice components attached since startup
+local function rescan()
+  local fresh = collect()
+  if signature(fresh) == signature(entries) then
+    refresh()
+    return
+  end
+
+  local address = entries[selected] and entries[selected].address
+  local names = {}
+  for _, entry in ipairs(entries) do
+    names[entry.address] = entry.friendly
+  end
+  entries = fresh
+  for _, entry in ipairs(entries) do
+    entry.friendly = names[entry.address]
+  end
+
+  local index = 1
+  for position, entry in ipairs(entries) do
+    if entry.address == address then
+      index = position
+    end
+  end
+  select(index)
 end
 
 local function scrollDetail(delta)
@@ -464,7 +535,8 @@ local function render()
   gpu.fill(1, 1, W, H, " ")
 
   write(1, 1, fit("  ocdebug v" .. VERSION .. "    " .. #entries .. " components attached", W), FG, BAR)
-  write(1, H, fit("  [click/up/down] select    [wheel/pgup/pgdn] scroll    [q] quit", W), FG, BAR)
+  write(1, H, fit("  [click/up/down] select   [wheel/pgup/pgdn] scroll   [r] refresh   [q] quit"
+    .. "      live every " .. REFRESH_SECONDS .. "s", W), FG, BAR)
 
   gpu.setBackground(BG)
   gpu.setForeground(DIM)
@@ -523,13 +595,17 @@ select(1)
 
 while true do
   render()
-  local name, _, arg1, arg2, arg3 = event.pull()
+  local name, _, arg1, arg2, arg3 = event.pull(REFRESH_SECONDS)
 
-  if name == "interrupted" then
+  if name == nil then
+    rescan()
+  elseif name == "interrupted" then
     break
   elseif name == "key_down" then
     if arg2 == keyboard.keys.q then
       break
+    elseif arg2 == keyboard.keys.r then
+      rescan()
     elseif arg2 == keyboard.keys.up then
       select(selected - 1)
     elseif arg2 == keyboard.keys.down then

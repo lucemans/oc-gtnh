@@ -1,8 +1,9 @@
 # Notes on the GregTech component API
 
 Everything here was read off real dumps, not documentation. Sources:
-[dump 1](https://dpaste.com/DQ76EXBK4.txt), [dump 2](https://dpaste.com/32FW2BMJ6.txt).
-Both pastes expire; re-dump rather than trust these if something looks wrong.
+[dump 1](https://dpaste.com/DQ76EXBK4.txt), [dump 2](https://dpaste.com/32FW2BMJ6.txt),
+[dump 3](https://dpaste.com/998BEJ3MS.txt). The pastes expire; re-dump rather
+than trust these if something looks wrong.
 
 ## `component.methods` returns false for indirect methods
 
@@ -24,28 +25,48 @@ Every GT block worth inspecting has it. It returns the same lines the in-game
 scanner shows, and it is machine-specific in a way the generic getters are
 not — a super tank still answers `getEUStored`, it just means nothing.
 
-Two conventions hold across every machine seen so far:
+One convention holds everywhere:
 
-- **The first line is the display name.** `"§9Super Tank§r"`,
-  `"§9Medium Voltage Battery Buffer§r"`. Far better than `getName`, which
-  returns internal ids like `super.tank.tier.01` or
-  `basicgenerator.diesel.tier.02`.
-- **Current value is `§a`, maximum is `§e`.** True for a tank's fluid and a
-  buffer's charge alike, so one rule builds a gauge for any machine that
-  reports one. Numbers are comma-grouped and followed by a unit.
-
-Observed shapes:
-
-```
-tank:    {"§9Super Tank§r", "Stored Fluid:", "§6Bio Diesel§r",
-          "§a42,000 L§r §e4,000,000 L§r"}
-buffer:  {"§9Medium Voltage Battery Buffer§r",
-          "Stored Items: §a832,768§r EU / §e832,768§r EU",
-          "Average input: 0 EU/t", "Average output: 0 EU/t"}
-```
+- **Current value is `§a`, maximum is `§e`.** True for a tank's fluid, a
+  buffer's charge and a furnace's progress alike, so one rule builds a gauge
+  for any machine that reports one. Numbers are comma-grouped, followed by a
+  unit. A line with `§a` but no `§e` is a single reading, not a gauge —
+  `"Heat capacity: §a1,901§r K"`.
 
 The text before the first number labels the reading (`Stored Items:`), or is
 empty when the line opens with the number, as a tank's does.
+
+### The first line is only sometimes the display name
+
+Single blocks open with a `§9`-coloured name. Multiblocks open straight into
+readings, so taking line one as the name labels a blast furnace
+`Progress: 29 s / 37 s`. Treat line one as a name only when it has no `§a`/`§e`
+pair **and** contains no digits; otherwise fall back to `getName` and tidy it.
+
+```
+tank:     {"§9Super Tank§r", "Stored Fluid:", "§6Bio Diesel§r",
+           "§a42,000 L§r §e4,000,000 L§r"}
+buffer:   {"§9Medium Voltage Battery Buffer§r",
+           "Stored Items: §a832,768§r EU / §e832,768§r EU",
+           "Average input: 0 EU/t", "Average output: 0 EU/t"}
+furnace:  {"Progress: §a31§r s / §e37§r s",
+           "Stored Energy: §a1,789§r EU / §e3,072§r EU",
+           "Currently uses: §c480§r EU/t",
+           "Max Energy Income: §e256§r EU/t(*2A) Tier: §eHV§r",
+           "Problems: §c0§r Efficiency: §e100.0§r %",
+           "Heat capacity: §a1,901§r K", "Pollution reduced to: §a100§r %"}
+```
+
+A machine may report several gauges; the furnace reports two.
+
+### Sensor readings beat the generic getters
+
+The furnace's `getWorkProgress` / `getWorkMaxProgress` say `644 / 750` in
+internal ticks while its sensor says `31 s / 37 s` — the same fact, in units a
+person wants. Its `getEUStored` and every steam getter return `0`, because a
+multiblock's energy lives in the sensor text as `Stored Energy`. So when a
+machine has sensor output, build the summary from it alone and use the numeric
+getters only for machines without one, such as the diesel generator.
 
 ## Minecraft colour codes
 
@@ -68,11 +89,27 @@ rather than hiding; it tells you the method takes an argument.
 
 ## Machines seen so far
 
-| component          | notes                                                     |
-| ------------------ | --------------------------------------------------------- |
-| `gt_machine`       | covers generators *and* super tanks; distinguish by sensor |
-| `gt_batterybuffer` | adds `getBatteryCharge(slot)`, `getMaxBatteryCharge`       |
+| component          | notes                                                          |
+| ------------------ | -------------------------------------------------------------- |
+| `gt_machine`       | covers generators, super tanks *and* multiblocks alike          |
+| `gt_batterybuffer` | adds `getBatteryCharge(slot)`, `getMaxBatteryCharge`            |
+
+`gt_machine` says nothing about what the block is. Everything seen so far —
+a diesel generator, a super tank, a blast furnace — reports that one type, and
+they are told apart only by their sensor text and `getName`:
+
+| `getName`                       | what it is       | sensor text?          |
+| ------------------------------- | ---------------- | --------------------- |
+| `basicgenerator.diesel.tier.02` | diesel generator | none                  |
+| `super.tank.tier.01`            | super tank       | name line, one gauge  |
+| `multimachine.blastfurnace`     | blast furnace    | no name line, 2 gauges |
 
 A super tank reports `getSteamStored`, `getEUStored` and friends as zero. Do
-not build a summary from those; prefer the sensor lines and fall back to the
-numeric getters only when a machine has no sensor output.
+not build a summary from those.
+
+## Colour meanings
+
+`§9` names a block, `§a` marks a current value, `§e` a maximum or a rating,
+`§6` a fluid, and `§c` something to watch — the furnace uses it for both
+`Currently uses: §c480§r EU/t` and `Problems: §c0§r`, so red does not by itself
+mean a fault.

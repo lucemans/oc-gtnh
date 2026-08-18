@@ -297,6 +297,134 @@ test("ocdebug gauges carry no stray label", function()
   check(not contains(oc.frame(), "42,000 L\n"), "left a stray label line above the gauge")
 end)
 
+-- verbatim from a real dump: dpaste.com/998BEJ3MS
+local BLAST_FURNACE = {
+  address = "1c646dd8-0000-0000-0000-000000000005",
+  kind = "gt_machine",
+  methods = {
+    getName = "function():string; Returns the machine's name",
+    getSensorInformation = "function():table -- sensor info",
+    getWorkProgress = "function():number; Returns the current progress",
+    getWorkMaxProgress = "function():number; Returns the max progress",
+    isMachineActive = "function():boolean; whether the machine is active",
+  },
+  values = {
+    getName = function()
+      return "multimachine.blastfurnace"
+    end,
+    getSensorInformation = function()
+      return {
+        "Progress: \194\167a31\194\167r s / \194\167e37\194\167r s",
+        "Stored Energy: \194\167a1,789\194\167r EU / \194\167e3,072\194\167r EU",
+        "Currently uses: \194\167c480\194\167r EU/t",
+        "Problems: \194\167c0\194\167r Efficiency: \194\167e100.0\194\167r %",
+        "Heat capacity: \194\167a1,901\194\167r K",
+      }
+    end,
+    getWorkProgress = function()
+      return 644
+    end,
+    getWorkMaxProgress = function()
+      return 750
+    end,
+    isMachineActive = function()
+      return true
+    end,
+  },
+}
+
+test("ocdebug handles a multiblock with no name line", function()
+  oc.components = { BLAST_FURNACE }
+
+  local ok, reason = oc.run("ocdebug")
+  check(ok, "ocdebug crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  local summary = frame:sub(1, frame:find("methods", 1, true) or #frame)
+  -- its first sensor line is a reading, so it must not become the title
+  check(not contains(summary, "Progress: 31 s / 37 s\n"), "used a reading as the title")
+  check(contains(summary, "Multimachine Blastfurnace"), "did not fall back to a tidied getName")
+  -- and that first line must still appear as a gauge rather than being skipped
+  check(contains(summary, "31 / 37 s"), "dropped the first sensor line")
+  check(contains(summary, "1,789 / 3,072 EU"), "dropped the second gauge")
+  check(contains(summary, "Currently uses: 480 EU/t"), "dropped a plain reading")
+  check(contains(summary, "Heat capacity: 1,901 K"), "dropped a single-value reading")
+  -- getWorkProgress duplicates the sensor's own progress, in worse units
+  check(not contains(summary, "644"), "raw work counter duplicated the sensor progress")
+  if show then
+    say(frame)
+  end
+end)
+
+test("ocdebug still lists the raw counters below the summary", function()
+  oc.components = { BLAST_FURNACE }
+  oc.push("key_down", "keyboard", 0, 0xD1) -- pageDown, past the summary
+
+  oc.run("ocdebug")
+  local seen = table.concat(oc.frames, "\n")
+  check(contains(seen, "getWorkProgress"), "getWorkProgress missing from the method list")
+  check(contains(seen, "644"), "raw work counter value not shown anywhere")
+end)
+
+test("ocdebug re-reads values on a refresh tick", function()
+  local reads = 0
+  oc.components = { {
+    address = "dd44ee55-0000-0000-0000-000000000006",
+    kind = "gt_machine",
+    methods = { getEUStored = "function():number", getEUMaxStored = "function():number" },
+    values = {
+      getEUStored = function()
+        reads = reads + 1
+        return reads * 100
+      end,
+      getEUMaxStored = function()
+        return 1000
+      end,
+    },
+  } }
+  oc.push() -- an empty event is what event.pull returns on timeout
+
+  local ok = oc.run("ocdebug")
+  check(ok, "ocdebug crashed")
+  check(reads >= 2, "value was read only once, so nothing refreshes")
+  check(#oc.frames >= 2, "only one frame was drawn")
+  check(oc.frames[1] ~= oc.frames[2], "screen did not change after the refresh tick")
+end)
+
+test("ocdebug notices a component attached while running", function()
+  local attached = false
+  oc.components = { {
+    address = "11112222-0000-0000-0000-000000000008",
+    kind = "redstone",
+    methods = { getInput = "function():number" },
+    values = {
+      getInput = function()
+        -- fires during the first draw, standing in for plugging a machine in
+        if not attached then
+          attached = true
+          oc.components[#oc.components + 1] = {
+            address = "ff66aa77-0000-0000-0000-000000000007",
+            kind = "gt_machine",
+            methods = { getName = "function():string" },
+            values = {
+              getName = function()
+                return "late.arrival"
+              end,
+            },
+          }
+        end
+        return 0
+      end,
+    },
+  } }
+  oc.push() -- refresh tick: the rescan should pick the new component up
+
+  local ok = oc.run("ocdebug")
+  check(ok, "ocdebug crashed")
+  check(attached, "fixture never fired")
+  check(contains(oc.frame(), "Late Arrival"), "did not list the newly attached component")
+end)
+
 test("ocdebug reads is/has methods", function()
   oc.components = { GT_MACHINE }
 

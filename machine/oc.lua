@@ -18,6 +18,7 @@ function oc.reset()
   oc.requests = {}
   oc.components = {}
   oc.invoked = {}
+  oc.frames = {}
   oc.deviceInfo = {}
   oc.output = {""}
   oc.osversion = "OpenOS 1.8.9"
@@ -225,6 +226,8 @@ function event.pull()
   for y = 1, oc.height do
     frame[y] = table.concat(screen[y])
   end
+  -- every frame is kept, so a test can assert that a redraw changed something
+  oc.frames[#oc.frames + 1] = table.concat(frame, "\n")
   local queued = table.remove(oc.events, 1)
   if not queued then
     return "key_down", "keyboard", 113, 0x10 -- q, so no test can hang
