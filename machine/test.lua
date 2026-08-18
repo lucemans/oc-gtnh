@@ -29,6 +29,9 @@ end
 
 local function test(name, fn)
   current = name
+  -- a test that wants a bigger screen sets it before reset builds the buffer;
+  -- it must not decide the size for every test that runs after it
+  oc.width, oc.height = 80, 20
   oc.reset()
   local before = failures
   local ok, reason = pcall(fn)
@@ -1478,6 +1481,35 @@ test("ocview shows one satellite once however often it answers", function()
   end
 end)
 
+-- Sitting out the whole window on every round is what made a tablet feel
+-- seconds behind what the satellite was reading.
+test("asking stops as soon as every known satellite has answered", function()
+  oc.components = {}
+  local net = require("ocnet")
+  local payload = require("serialization").serialize({ cards = {}, alerts = {} })
+
+  local queue = {
+    { "modem_message", "me", "bb000000", PORT, 12, "ocstatus!", "boiler-room", payload },
+  }
+  local pulls = 0
+  local fakeEvent = {
+    pull = function()
+      pulls = pulls + 1
+      local item = table.remove(queue, 1)
+      if not item then
+        return nil
+      end
+      return table.unpack(item)
+    end,
+  }
+  local fakeComputer = { uptime = function() return 0 end }
+  local modem = { broadcast = function() return true end }
+
+  local answers = net.ask(modem, fakeEvent, 8, 1, fakeComputer)
+  check(#answers == 1, "did not collect the answer")
+  check(pulls == 1, "kept listening after everyone had answered, " .. pulls .. " pulls")
+end)
+
 test("ocview says so when nothing answers", function()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
@@ -1863,6 +1895,54 @@ local function blastFurnace(active)
   }
 end
 
+-- shaped from dumps/013-satellite.txt: no progress line, and it answers
+-- isMachineActive yes whether or not any power is moving
+local function batteryBuffer(output)
+  return {
+    address = "6ecc24a5-0000-0000-0000-000000000001",
+    kind = "gt_batterybuffer",
+    methods = {
+      getSensorInformation = "function():table",
+      isMachineActive = "function():boolean",
+    },
+    values = {
+      getSensorInformation = function()
+        return {
+          "\194\1679Medium Voltage Battery Buffer\194\167r",
+          "Stored Items: \194\167a1,673,728\194\167r EU / \194\167e1,673,728\194\167r EU",
+          "Average input: 0 EU/t",
+          "Average output: " .. output .. " EU/t",
+        }
+      end,
+      isMachineActive = function()
+        return true
+      end,
+    },
+  }
+end
+
+test("ocwatch calls a battery buffer idle while nothing leaves it", function()
+  local buffer = batteryBuffer("0")
+  oc.components = { buffer }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = buffer.address, hidden = {} } },
+    alerts = {},
+  })
+  oc.run("ocwatch")
+  check(contains(oc.frame(), "idle"), "called a buffer passing nothing working")
+
+  oc.width, oc.height = 80, 20
+  oc.reset()
+  local busy = batteryBuffer("128")
+  oc.components = { busy }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = busy.address, hidden = {} } },
+    alerts = {},
+  })
+  oc.run("ocwatch")
+  check(contains(oc.frame(), "working"), "did not notice power leaving the buffer")
+end)
+
 test("ocwatch says nothing about a machine that never works", function()
   local tank = tankAt("100000")
   oc.components = { tank }
@@ -1932,7 +2012,8 @@ end)
 test("ocwatch draws a bar against a local maximum and still shows the real one", function()
   local tank = tankAt("7,500")
   -- the size of the attached display, so the row is not cut short
-  oc.resize(160, 50)
+  oc.width, oc.height = 160, 50
+  oc.reset()
   oc.components = { tank }
   oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
     nicknames = { [tank.address] = "Super Tank" },

@@ -5,7 +5,7 @@ local core = require("oclib")
 
 local gt = {}
 
-gt.VERSION = "0.4.0"
+gt.VERSION = "0.5.0"
 
 local SECTION = core.SECTION
 
@@ -171,10 +171,10 @@ function gt.readings(address)
   return out
 end
 
--- A super tank and a battery buffer answer isMachineActive as readily as a
--- blast furnace does, so calling them "idle" said nothing: they never work.
--- What separates the two is that a machine which processes reports how far
--- along it is, and nothing else does.
+-- A super tank answers isMachineActive as readily as a blast furnace does, so
+-- calling it "idle" said nothing: it never works. What separates the two is
+-- that a machine which processes reports how far along it is.
+--
 -- A machine with nothing running reports "Progress: 0 s / 0 s", which is no
 -- gauge at all because its maximum is zero, so the plain line has to be read
 -- too. That is exactly the machine this has to recognise.
@@ -190,10 +190,31 @@ local function processes(readings)
   return false
 end
 
+-- A battery buffer is not working because it is switched on, it is working when
+-- power is leaving it. It says so itself, as an average over the last ticks,
+-- which is the only honest answer for a block that runs no recipe. Returns the
+-- amount leaving, or nil when the machine reports no such thing.
+local function outflow(readings)
+  for _, reading in ipairs(readings or {}) do
+    local text = reading.plain
+    if not text and reading.raw then
+      text = core.strip(reading.raw)
+    end
+    local amount = text and text:match("^%s*[Aa]v[eg].-[Oo]utput[^:]*:%s*([%d,]+)")
+    if amount then
+      return toNumber(amount) or 0
+    end
+  end
+  return nil
+end
+
 -- One word, chosen so a program can colour it without knowing GregTech:
 -- "stopped" when work is not allowed, which is what an alert does to a machine,
--- "working" while it is busy, "idle" for a machine that processes but is not
--- doing so, and nothing at all for a machine that has no work to be idle from.
+-- "working" while it is busy, "idle" for a machine that has work to do and is
+-- not doing it, and nothing at all for one that has no work to be idle from.
+--
+-- What counts as busy depends on the machine: power leaving a buffer, a recipe
+-- running in a furnace.
 function gt.statusOf(address, readings, methods)
   methods = methods or core.methodsOf(address) or {}
 
@@ -201,6 +222,17 @@ function gt.statusOf(address, readings, methods)
     and core.call(address, "isWorkAllowed") == false then
     return "stopped"
   end
+
+  -- asked before isMachineActive, which a battery buffer answers yes to while
+  -- it sits there passing nothing along
+  local leaving = outflow(readings)
+  if leaving then
+    if leaving > 0 then
+      return "working"
+    end
+    return "idle"
+  end
+
   if core.has(methods, "isMachineActive") and core.call(address, "isMachineActive") then
     return "working"
   end
