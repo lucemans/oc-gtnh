@@ -1911,6 +1911,34 @@ local function tankAt(amount)
   }
 end
 
+-- Shaped from the boiler dump: three methods and no fluid of its own. The
+-- temperature arrives with a fraction on it, which is what a Railcraft firebox
+-- really answers.
+-- The address is the caller's, because how hot a boiler can get is read once and
+-- kept for good, and a cache outlives the test that filled it.
+local function firebox(address, temperature, burning)
+  return {
+    address = address,
+    kind = "boiler_firebox",
+    methods = {
+      getMaxHeat = "function():number",
+      getTemperature = "function():number",
+      isBurning = "function():boolean",
+    },
+    values = {
+      getMaxHeat = function()
+        return 500.0
+      end,
+      getTemperature = function()
+        return temperature
+      end,
+      isBurning = function()
+        return burning
+      end,
+    },
+  }
+end
+
 -- The steam side of the boiler house, which is the other way round from the
 -- diesel: the tank filling up is the signal to stop, not to worry. Each read
 -- takes the next level, so one run can watch it fill and drain.
@@ -2663,6 +2691,113 @@ test("a tank that fills up stops a machine, and starts it as the tank drains",
   check(switched[1] == false, "the full tank did not stop the fuel")
   check(switched[2] == true, "the drained tank did not start the fuel again")
   check(stopped.value == false, "left the fuel off after the steam ran down")
+end)
+
+-------------------------------------------------------------------------------
+-- Railcraft boilers
+
+test("ocwatch draws a boiler by how hot it is", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local boiler = firebox("20bfbc1d-98ef-4903-9fb4-8bf3273932b8", 376.13531494141, true)
+  oc.components = { boiler }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = boiler.address, hidden = {} } },
+    alerts = {},
+  })
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  local frame = oc.frame()
+  check(contains(frame, "Boiler Firebox"), "did not name the boiler")
+  check(contains(frame, "Temperature"), "did not label the reading")
+  -- the temperature arrives with a fraction on it, and a degree is plenty
+  check(contains(frame, "376 / 500 C"), "did not show the heat: " .. frame)
+  check(contains(frame, "75.2%"), "did not show how far up its range it is")
+  check(contains(frame, "working"), "a burning boiler is not working")
+end)
+
+test("a boiler that is not burning is idle", function()
+  local boiler = firebox("b2353c84-3e41-4028-80ef-763f29af083b", 225.80444335938, false)
+  oc.components = { boiler }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = boiler.address, hidden = {} } },
+    alerts = {},
+  })
+
+  oc.run("ocwatch")
+  check(contains(oc.frame(), "idle"), "a boiler burning nothing is not idle")
+end)
+
+-- Every call into a firebox blocks until the next server tick, and how hot one
+-- can get does not change while the world runs.
+test("how hot a boiler can get is asked once, not every refresh", function()
+  local boiler = firebox("dc09058f-19ce-4c96-ab28-45001cc5bc76", 300.5, true)
+  oc.components = { boiler }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = boiler.address, hidden = {} } },
+    alerts = {},
+  })
+
+  oc.push("key_down", "keyboard", 114, 0x13) -- r, a second read of the machines
+  oc.run("ocwatch")
+
+  local heats, temperatures = 0, 0
+  for _, method in ipairs(oc.invoked) do
+    if method == "getMaxHeat" then
+      heats = heats + 1
+    elseif method == "getTemperature" then
+      temperatures = temperatures + 1
+    end
+  end
+  check(temperatures == 2, "read the temperature " .. temperatures .. " times, not twice")
+  check(heats == 1, "asked the maximum " .. heats .. " times across two refreshes")
+end)
+
+-- A boiler that has gone cold makes no steam, which is worth being told about.
+test("an alert can watch a boiler temperature", function()
+  local stopped = { value = false }
+  local boiler = firebox("ee94fabd-1ec8-472d-8915-3f1018a22b3d", 42.5, false)
+  oc.components = { boiler, furnace(stopped) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = boiler.address, hidden = {} } },
+    alerts = { {
+      name = "boiler cold",
+      address = boiler.address,
+      label = "Temperature",
+      unit = "C",
+      below = 100,
+      above = 150,
+      trouble = false,
+      act = { { address = "1c646dd8-0000-0000-0000-000000000005",
+        method = "setWorkAllowed", onTrip = false, onClear = true } },
+    } },
+  })
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  check(stopped.value == true, "a cold boiler did not act")
+  check(contains(oc.frame(), "boiler cold"), "no notice that the alert tripped")
+end)
+
+test("a boiler travels to the tablet with its heat", function()
+  oc.components = { firebox("20bfbc1d-98ef-4903-9fb4-8bf3273932b8", 376.13531494141, true) }
+  local net = require("ocnet")
+  local config = { watch = { { address = "20bfbc1d-98ef-4903-9fb4-8bf3273932b8" } },
+    alerts = {} }
+  local report = net.report(config, net.machines(config))
+
+  local card = report.cards[1]
+  check(card and card.name == "Boiler Firebox", "the tablet was sent no boiler")
+  check(card.status == "working", "lost whether it is burning")
+  local gauge = card.gauges[1]
+  check(gauge and gauge.label == "Temperature", "sent no temperature")
+  check(gauge.current == "376" and gauge.maximum == "500", "sent "
+    .. tostring(gauge.current) .. " / " .. tostring(gauge.maximum))
+  check(gauge.unit == "C", "lost the unit")
+  -- the colour travels, or a bar means one thing on the dashboard and another
+  -- on the tablet watching it
+  check(gauge.colorCode == "c", "the heat lost its colour")
 end)
 
 test("ocwatch repaints without clearing the screen every frame", function()

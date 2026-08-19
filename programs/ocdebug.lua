@@ -5,12 +5,13 @@ local event = require("event")
 local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
+local rc = require("ocrailcraft")
 local tank = require("octank")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.10.0"
+local VERSION = "0.11.0"
 
 -- indirect component calls block until the next server tick, so re-reading a
 -- machine costs real time; two seconds keeps the readings live without
@@ -92,7 +93,10 @@ local config = core.loadConfig()
 
 local function friendlyName(entry)
   if entry.friendly == nil then
-    entry.friendly = gt.displayName(entry.address, config) or lp.displayName(entry.address) or false
+    entry.friendly = gt.displayName(entry.address, config)
+      or rc.displayName(entry.address, config)
+      or lp.displayName(entry.address)
+      or false
   end
   return entry.friendly or entry.kind
 end
@@ -132,11 +136,17 @@ local function detailLines(entry)
   local methods = core.methodsOf(entry.address) or {}
   -- one read of the sensor for the name, the readings and the status alike:
   -- each of these blocks until the next server tick
-  local sensor = gt.sensorOf(entry.address, methods)
-  local readings = gt.readings(entry.address, sensor, methods)
+  local readings, status
+  local look = rc.inspect(entry.address, config)
+  if look then
+    readings, status = look.readings, look.status
+  else
+    local sensor = gt.sensorOf(entry.address, methods)
+    readings = gt.readings(entry.address, sensor, methods)
+    status = gt.statusOf(entry.address, readings, methods, sensor ~= nil)
+  end
 
-  add(friendlyName(entry), FG,
-    gt.statusOf(entry.address, readings, methods, sensor ~= nil), VALUE)
+  add(friendlyName(entry), FG, status, VALUE)
 
   local where = ""
   if core.has(methods, "getCoordinates") then

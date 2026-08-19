@@ -11,6 +11,7 @@ local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
 local net = require("ocnet")
+local rc = require("ocrailcraft")
 local tank = require("octank")
 local ct = require("occomputronics")
 local sec = require("ocsecurity")
@@ -133,6 +134,7 @@ local function entryName(entry)
     return tank.name(entry.address, entry.side, config)
   end
   return gt.displayName(entry.address, config)
+    or rc.displayName(entry.address, config)
     or lp.displayName(entry.address)
     or entry.address
 end
@@ -793,7 +795,9 @@ local function chooseComponent(only)
           }
         end
       else
-        local name = gt.displayName(address, config) or lp.displayName(address)
+        local name = gt.displayName(address, config)
+          or rc.displayName(address, config)
+          or lp.displayName(address)
         rows[#rows + 1] = {
           address = address, kind = kind, named = name ~= nil,
           text = string.format("%-24s %-14s %s", name or "", kind,

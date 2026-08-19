@@ -1,6 +1,7 @@
 lib/oclib.lua
 lib/ocgt.lua
 lib/oclogistics.lua
+lib/ocrailcraft.lua
 lib/octank.lua
 lib/occomputronics.lua
 lib/ocsecurity.lua

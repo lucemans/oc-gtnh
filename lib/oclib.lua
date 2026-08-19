@@ -7,7 +7,7 @@ local serialization = require("serialization")
 
 local core = {}
 
-core.VERSION = "0.9.0"
+core.VERSION = "0.10.0"
 
 -- the Minecraft section sign, two bytes in UTF-8
 core.SECTION = "\194\167"
@@ -192,7 +192,9 @@ function core.painter(gpu)
 end
 
 function core.comma(number)
-  local text = string.format("%d", number)
+  -- %d in Lua 5.3 refuses a number that has a fraction, and not every reading is
+  -- a whole one: a Railcraft boiler answers its temperature as 376.13531494141.
+  local text = string.format("%d", math.floor(number))
   local sign, digits = text:match("^(%-?)(%d+)$")
   if not digits then
     return text

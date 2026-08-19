@@ -559,6 +559,9 @@ function oc.install()
   package.preload["oclogistics"] = function()
     return dofile("lib/oclogistics.lua")
   end
+  package.preload["ocrailcraft"] = function()
+    return dofile("lib/ocrailcraft.lua")
+  end
   package.preload["octank"] = function()
     return dofile("lib/octank.lua")
   end

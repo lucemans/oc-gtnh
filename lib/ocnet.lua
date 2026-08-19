@@ -9,12 +9,13 @@ local computer = require("computer")
 local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
+local rc = require("ocrailcraft")
 local serialization = require("serialization")
 local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.9.0"
+net.VERSION = "0.10.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -74,7 +75,7 @@ function net.machines(config)
     if entry.side then
       look = tank.inspect(entry.address, entry.side, config)
     else
-      look = gt.inspect(entry.address, config)
+      look = rc.inspect(entry.address, config) or gt.inspect(entry.address, config)
     end
     cards[#cards + 1] = {
       entry = entry,
