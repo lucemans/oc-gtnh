@@ -14,7 +14,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.5.0"
+net.VERSION = "0.6.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -102,6 +102,8 @@ function net.report(config, cards)
       name = card.name,
       status = card.status,
       alarm = card.alarm,
+      -- how it is drawn belongs to the machine, not to whoever is looking
+      compact = card.entry and card.entry.compact or nil,
       gauges = {},
     }
     local ordinal = 0

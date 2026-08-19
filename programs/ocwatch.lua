@@ -14,11 +14,12 @@ local net = require("ocnet")
 local tank = require("octank")
 local ct = require("occomputronics")
 local sec = require("ocsecurity")
+local notify = require("ocnotify")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.14.0"
+local VERSION = "0.16.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -184,25 +185,18 @@ local function act(alert, tripped)
   return table.concat(done, ", ")
 end
 
--- A tripped alert is worth hearing from another room, so each thing that can
--- say something is asked in turn: words where words are possible, a noise
--- otherwise, and the computer's own beep when the machine has none of them.
+-- A tripped alert is worth hearing from another room. Which ways of saying so
+-- this base wants is its own choice, kept per channel, so the library is asked
+-- rather than each device in turn.
 local function announce(alert, text, urgent)
   if alert.beep == false then
     return nil
   end
-
-  local said = ct.speak(text)
-  local played = ct.play(urgent)
-  if said and played then
-    return said .. " and " .. played
+  local used = notify.event(config, text, urgent)
+  if #used == 0 then
+    return nil
   end
-  if said or played then
-    return said or played
-  end
-
-  pcall(computer.beep, urgent and 880 or 440, 0.2)
-  return nil
+  return table.concat(used, ", ")
 end
 
 -- whether the lamps and sirens are showing trouble, so they are only set on a
@@ -358,6 +352,22 @@ end
 local function render(cards)
   local write = paint.write
 
+  -- one indented line, the machine's own name in the fluid's colour, and no bar
+  local function compactGauge(y, card, gauge, max)
+    local share = 0
+    if max > 0 then
+      share = gauge.value / max * 100
+    end
+    local color = ALARM
+    if not card.alarm then
+      color = core.gaugeColor(gauge, FG)
+    end
+    write(5, y, fit(card.name, 14), color, BG)
+    write(19, y, fit(string.format("%s / %s %s   %.0f%%   %s",
+      gauge.current, gauge.maximum, gauge.unit, share,
+      rateText(gauge.rate, gauge.unit) or ""), math.max(0, W - 20)), DIM, BG)
+  end
+
   local function drawGauge(x, y, gauge, width, max, isLocal)
     local ratio = 0
     if max > 0 then
@@ -408,11 +418,18 @@ local function render(cards)
     if y > H - 2 then
       break
     end
-    write(3, y, fit(card.name, W - 22), FG, BG)
-    if card.status then
-      write(W - 20, y, fit(card.status, 18), statusColor(card.status, card.alarm), BG)
+
+    -- A compact machine is one line a gauge, indented, with no bar and no name
+    -- row of its own, so a handful of them sit under the card above them as a
+    -- group. Ordering the watch list is what puts them there.
+    if not card.entry.compact then
+      write(3, y, fit(card.name, W - 22), FG, BG)
+      if card.status then
+        write(W - 20, y, fit(card.status, 18),
+          statusColor(card.status, card.alarm), BG)
+      end
+      y = y + 1
     end
-    y = y + 1
 
     local ordinal = 0
     for index, reading in ipairs(card.readings) do
@@ -424,11 +441,16 @@ local function render(cards)
       end
       if wanted(card.entry, reading, index) then
         if reading.kind == "gauge" then
-          local label = reading.label ~= "" and reading.label or "value"
-          write(5, y, fit(label, 12), DIM, BG)
           local max, isLocal = core.scale(reading, net.limitOf(card.entry, ordinal))
-          drawGauge(18, y, reading, GAUGE_W, max, isLocal)
-        else
+          if card.entry.compact then
+            compactGauge(y, card, reading, max)
+          else
+            local label = reading.label ~= "" and reading.label or "value"
+            write(5, y, fit(label, 12), DIM, BG)
+            drawGauge(18, y, reading, GAUGE_W, max, isLocal)
+          end
+          y = y + 1
+        elseif not card.entry.compact then
           local x = 5
           for _, part in ipairs(core.segments(reading.raw, DIM)) do
             local space = W - x - 1
@@ -439,11 +461,15 @@ local function render(cards)
             write(x, y, text, part.color, BG)
             x = x + unicode.len(text)
           end
+          y = y + 1
         end
-        y = y + 1
       end
     end
-    y = y + 1
+
+    -- a compact machine belongs to the card above it, so it gets no gap
+    if not card.entry.compact then
+      y = y + 1
+    end
   end
 
   for index = 1, #notices do
@@ -493,12 +519,7 @@ local function sample()
   -- call into the world, and both stay set while anything is wrong rather than
   -- sounding once and stopping.
   if alarmed ~= alarmShown then
-    if alarmed then
-      ct.lamps(ct.rgb(255, 0, 0))
-    else
-      ct.lamps(ct.rgb(0, 255, 0))
-    end
-    sec.alarm(alarmed)
+    notify.state(config, alarmed)
     alarmShown = alarmed
   end
 
@@ -806,8 +827,14 @@ end
 
 local function editMachine(entry)
   while true do
+    local shown = "a card of its own, with a bar for each reading"
+    if entry.compact then
+      shown = "one line, no bar, tucked under the card above it"
+    end
+
     local rows = {
       { what = "nickname", text = "nickname          " .. entryName(entry) },
+      { what = "shown", text = "shown as          " .. shown },
       { what = "readings", text = "readings          choose which to show" },
       { what = "limits", text = "bar maximum       what each gauge is drawn against" },
     }
@@ -824,6 +851,13 @@ local function editMachine(entry)
         core.nickname(config, keyOf(entry.address, entry.side)))
       config.nicknames[keyOf(entry.address, entry.side)] =
         (name and name ~= "") and name or nil
+      save()
+    elseif row.what == "shown" then
+      if entry.compact then
+        entry.compact = nil
+      else
+        entry.compact = true
+      end
       save()
     elseif row.what == "readings" then
       editReadings(entry)
@@ -971,6 +1005,86 @@ local function addAlert()
   editAlert(alert)
 end
 
+-- Every way this base can say something, each on and off on its own, because a
+-- lamp and a siren and a line in chat are not alternatives: they do different
+-- jobs, in different rooms, at the same time.
+local function editNotify()
+  while true do
+    local rows = {}
+    for _, channel in ipairs(notify.CHANNELS) do
+      local kept = notify.settings(config, channel.name)
+      local state = "[ ] "
+      if kept.on then
+        state = "[x] "
+      end
+
+      local extra = ""
+      if not notify.present(channel) then
+        extra = "   nothing here to do it with"
+      elseif channel.name == "note" then
+        extra = "   " .. (kept.instrument or "harp")
+      elseif channel.name == "lamp" then
+        extra = "   " .. (kept.tripped or "ff0000")
+          .. " when tripped, " .. (kept.clear or "00ff00") .. " when clear"
+      elseif channel.name == "siren" then
+        extra = "   " .. (kept.sound or "klaxon1")
+      end
+
+      rows[#rows + 1] = {
+        channel = channel,
+        text = string.format("%s%-8s %-40s %s", state, channel.name,
+          channel.what, extra),
+      }
+    end
+
+    local row, code = menu("how this base says something happened", rows,
+      { { label = "on or off", code = keyboard.keys.space },
+        { label = "settings", code = keyboard.keys.enter },
+        { label = "test it", code = keyboard.keys.t },
+        { label = "back", code = keyboard.keys.q } })
+    if not row or code == keyboard.keys.q then
+      save()
+      return
+    end
+
+    local name = row.channel.name
+    if code == keyboard.keys.space then
+      notify.set(config, name, "on", not notify.settings(config, name).on)
+      save()
+    elseif code == keyboard.keys.t then
+      -- a channel nobody can hear is worth finding out about here rather than
+      -- when something is actually wrong
+      if row.channel.kind == "state" then
+        notify.state(config, true)
+        os.sleep(2)
+        notify.state(config, false)
+      else
+        notify.event(config, "ocwatch test of the " .. name .. " channel", true)
+      end
+      alarmShown = nil
+    elseif code == keyboard.keys.enter then
+      if name == "note" then
+        notify.set(config, name, "instrument",
+          prompt("instrument, one of " .. table.concat(ct.INSTRUMENTS, ", "),
+            notify.settings(config, name).instrument or "harp"))
+      elseif name == "lamp" then
+        notify.set(config, name, "tripped",
+          prompt("lamp colour while an alert is tripped, as rrggbb",
+            notify.settings(config, name).tripped or "ff0000"))
+        notify.set(config, name, "clear",
+          prompt("lamp colour while all is well, as rrggbb",
+            notify.settings(config, name).clear or "00ff00"))
+      elseif name == "siren" then
+        local sounds = sec.sounds()
+        notify.set(config, name, "sound",
+          prompt("alarm sound, one of " .. table.concat(sounds, ", "),
+            notify.settings(config, name).sound or "klaxon1"))
+      end
+      save()
+    end
+  end
+end
+
 local function addMachine()
   local chosen = chooseComponent()
   if not chosen then
@@ -1027,9 +1141,12 @@ local function editor()
 
     local row, code = menu("ocwatch v" .. VERSION .. "   configuration", rows,
       { { label = "open", code = keyboard.keys.enter },
+        { label = "move up", code = keyboard.keys.pageUp },
+        { label = "move down", code = keyboard.keys.pageDown },
         { label = "watch a machine", code = keyboard.keys.m },
         { label = "new alert", code = keyboard.keys.n },
         { label = "remove", code = keyboard.keys.d },
+        { label = "notifications", code = keyboard.keys.t },
         { label = "done", code = keyboard.keys.q } })
 
     -- The action is read before the row, because on a computer with nothing
@@ -1042,6 +1159,21 @@ local function editor()
       addMachine()
     elseif code == keyboard.keys.n then
       addAlert()
+    elseif code == keyboard.keys.t then
+      editNotify()
+    elseif row and row.what == "machine"
+      and (code == keyboard.keys.pageUp or code == keyboard.keys.pageDown) then
+      -- the order of the list is the order on the dashboard, which is how a
+      -- compact machine ends up under the card it belongs to
+      local to = row.index - 1
+      if code == keyboard.keys.pageDown then
+        to = row.index + 1
+      end
+      if config.watch[to] then
+        config.watch[row.index], config.watch[to] =
+          config.watch[to], config.watch[row.index]
+        save()
+      end
     elseif row and code == keyboard.keys.d and row.what == "machine" then
       table.remove(config.watch, row.index)
       save()

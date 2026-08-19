@@ -352,7 +352,7 @@ local keyboard = {
     q = 0x10, e = 0x12, r = 0x13,
     up = 0xC8, down = 0xD0, pageUp = 0xC9, pageDown = 0xD1,
     space = 0x39, enter = 0x1C,
-    d = 0x20, m = 0x32, n = 0x31,
+    d = 0x20, m = 0x32, n = 0x31, v = 0x2F, t = 0x14,
   },
 }
 
@@ -554,6 +554,9 @@ function oc.install()
   end
   package.preload["ocsecurity"] = function()
     return dofile("lib/ocsecurity.lua")
+  end
+  package.preload["ocnotify"] = function()
+    return dofile("lib/ocnotify.lua")
   end
   package.preload["ocnet"] = function()
     return dofile("lib/ocnet.lua")

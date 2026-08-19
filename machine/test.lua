@@ -1394,6 +1394,9 @@ test("ocping says plainly when nothing answers", function()
 end)
 
 test("ocview asks and draws what comes back", function()
+  -- wide enough for the name of the reading as well as its numbers
+  oc.width, oc.height = 120, 30
+  oc.reset()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
   local payload = require("serialization").serialize({
@@ -3351,4 +3354,254 @@ test("a machine named with a number keeps its name", function()
   check(not gtlib.looksLikeName("Average input: 0 EU/t"),
     "an uncoloured reading was taken as a name")
   check(not gtlib.looksLikeName("  "), "blank text was taken as a name")
+end)
+
+-- Three steam pipes belong under the steam tank, not as three cards of their
+-- own. A compact machine draws as one line with no bar, and the order of the
+-- watch list is what puts it under the card it belongs to.
+local function steamPipe(address, amount)
+  return {
+    address = address,
+    kind = "transposer",
+    methods = { getTankCount = "f", getFluidInTank = "f" },
+    values = {
+      getTankCount = function(side)
+        if side == 3 then
+          return 1
+        end
+        return 0
+      end,
+      getFluidInTank = function(side)
+        if side ~= 3 then
+          return {}
+        end
+        return { { name = "steam", label = "Steam",
+          amount = amount, capacity = 19200 } }
+      end,
+    },
+  }
+end
+
+test("a compact machine draws as one line under the card above it", function()
+  oc.width, oc.height = 140, 30
+  oc.reset()
+  local tank = tankAt("2,400,000")
+  local one = steamPipe("11110000-0000-0000-0000-000000000001", 17920)
+  local two = steamPipe("22220000-0000-0000-0000-000000000002", 12800)
+  oc.components = { tank, one, two }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = {
+      [tank.address] = "Steam Tank",
+      [one.address .. "/3"] = "S1",
+      [two.address .. "/3"] = "S2",
+    },
+    watch = {
+      { address = tank.address, hidden = {} },
+      { address = one.address, side = 3, hidden = {}, compact = true },
+      { address = two.address, side = 3, hidden = {}, compact = true },
+    },
+    alerts = {},
+  })
+
+  oc.run("ocwatch")
+  local frame = oc.frame()
+  check(contains(frame, "Steam Tank"), "lost the machine it groups under")
+  check(contains(frame, "S1"), "lost the first pipe")
+  check(contains(frame, "S2"), "lost the second pipe")
+  check(contains(frame, "17,920 / 19,200 L"), "a compact line lost its numbers")
+  -- one bar for the tank, and none for the pipes under it
+  local bars = select(2, frame:gsub("\226\150\136", ""))
+  local tankRow = frame:match("[^\n]*2,400,000[^\n]*") or ""
+  check(bars > 0 and select(2, tankRow:gsub("\226\150\136", "")) == bars,
+    "a compact machine drew a bar")
+end)
+
+test("the watch list can be reordered", function()
+  oc.width, oc.height = 140, 30
+  oc.reset()
+  local tank = tankAt("100000")
+  local pipe = steamPipe("11110000-0000-0000-0000-000000000001", 17920)
+  oc.components = { tank, pipe }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = {
+      { address = pipe.address, side = 3, hidden = {} },
+      { address = tank.address, hidden = {} },
+    },
+    alerts = {},
+  })
+
+  local function press(code)
+    oc.push("key_down", "keyboard", 0, code)
+  end
+  press(0xD0)   -- down, onto the second machine
+  press(0xC9)   -- page up, move it above the first
+  press(0x10)   -- q, done
+
+  oc.run("ocwatch", "--edit")
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  local first = saved and saved.watch and saved.watch[1]
+  check(first and first.address == tank.address,
+    "the order on the dashboard cannot be changed, so nothing can be grouped")
+end)
+
+test("ocview keeps the numbers when the name of a reading will not fit", function()
+  oc.width, oc.height = 80, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  local payload = require("serialization").serialize({
+    cards = { { name = "Super Tank", status = "idle", gauges = {
+      { label = "Bio Diesel", current = "42,000", maximum = "4,000,000",
+        unit = "L", percent = 1.05 } } } },
+    alerts = {},
+  })
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
+    "satellite-1", payload)
+
+  oc.run("ocview", "--once")
+  local frame = oc.screen()
+  -- a truncated number is worse than no label at all
+  check(contains(frame, "42,000 / 4,000,000 L"), "cut the numbers short")
+end)
+
+test("ocview groups a satellite into its own column", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  local serialize = require("serialization").serialize
+  local function payload(name)
+    return serialize({
+      cards = { { name = name, gauges = { { label = "Steam", current = "1",
+        maximum = "2", unit = "L", percent = 50 } } } },
+      alerts = {},
+    })
+  end
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
+    "boiler-room", payload("EBF1"))
+  oc.push("modem_message", modem.address, "dd000000", PORT, 40, "ocstatus!",
+    "tank-farm", payload("Super Tank"))
+
+  oc.run("ocview", "--once")
+  local frame = oc.screen()
+  -- side by side, not one under the other, or a wide screen shows a narrow strip
+  local row = frame:match("[^\n]*boiler%-room[^\n]*") or ""
+  check(row:find("tank%-farm") ~= nil, "the second satellite is not beside the first")
+end)
+
+-------------------------------------------------------------------------------
+-- notification channels
+
+local function alarmBlock(calls)
+  return {
+    address = "a1a70000-0000-0000-0000-000000000002",
+    kind = "os_alarm",
+    methods = { activate = "f", deactivate = "f", setAlarm = "f", listSounds = "f" },
+    values = {
+      activate = function()
+        calls[#calls + 1] = "activate"
+        return "Ok"
+      end,
+      deactivate = function()
+        calls[#calls + 1] = "deactivate"
+        return "Ok"
+      end,
+      setAlarm = function(sound)
+        calls[#calls + 1] = "sound:" .. tostring(sound)
+        return sound
+      end,
+    },
+  }
+end
+
+local function lampBlock(colors)
+  return {
+    address = "1a300000-0000-0000-0000-000000000002",
+    kind = "colorful_lamp",
+    methods = { setLampColor = "f", getLampColor = "f" },
+    values = {
+      setLampColor = function(color)
+        colors[#colors + 1] = color
+        return true
+      end,
+    },
+  }
+end
+
+local function chatBlock(said)
+  return {
+    address = "c8a70000-0000-0000-0000-000000000002",
+    kind = "chat_box",
+    methods = { say = "f" },
+    values = {
+      say = function(text)
+        said[#said + 1] = text
+        return true
+      end,
+    },
+  }
+end
+
+-- A lamp, a siren and a line in chat are not alternatives to each other: they
+-- do different jobs, in different rooms, at the same time.
+test("every channel that is on carries the alert", function()
+  local said, colors, calls = {}, {}, {}
+  local tank = tankAt("100")
+  oc.components = { tank, chatBlock(said), lampBlock(colors), alarmBlock(calls) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { { name = "diesel low", address = tank.address,
+      label = "Bio Diesel", below = 50000, above = 200000 } },
+  })
+
+  oc.run("ocwatch")
+  check(#said == 1, "the chat box said " .. #said .. " things")
+  check(#colors == 1 and colors[1] == 31 * 1024, "the lamp is not red")
+  check(#calls >= 1 and calls[#calls] == "activate", "the siren did not sound")
+end)
+
+test("a channel that is switched off stays out of it", function()
+  local said, colors, calls = {}, {}, {}
+  local tank = tankAt("100")
+  oc.components = { tank, chatBlock(said), lampBlock(colors), alarmBlock(calls) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    -- the lamp is what this base likes; the siren is not
+    notify = { siren = { on = false }, chat = { on = false } },
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { { name = "diesel low", address = tank.address,
+      label = "Bio Diesel", below = 50000, above = 200000 } },
+  })
+
+  oc.run("ocwatch")
+  check(#said == 0, "spoke on a channel that was switched off")
+  check(#calls == 0, "sounded a siren that was switched off")
+  check(#colors == 1, "switching one channel off silenced another")
+end)
+
+test("a lamp colour can be chosen", function()
+  local colors = {}
+  local tank = tankAt("100")
+  oc.components = { tank, lampBlock(colors) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    notify = { lamp = { on = true, tripped = "ff00ff" } },
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { { name = "diesel low", address = tank.address,
+      label = "Bio Diesel", below = 50000, above = 200000, beep = false } },
+  })
+
+  oc.run("ocwatch")
+  -- ff00ff packed into the five bits a channel the lamp takes
+  check(colors[1] == 31 * 1024 + 31, "lit " .. tostring(colors[1]) .. ", not magenta")
+end)
+
+test("a siren is told it is over as well as that it started", function()
+  oc.components = {}
+  local notify = require("ocnotify")
+  local calls = {}
+  oc.components = { alarmBlock(calls) }
+
+  notify.state({}, true)
+  notify.state({}, false)
+  -- an alarm never told the trouble ended goes on sounding
+  check(calls[#calls] == "deactivate", "the siren was never stopped")
 end)

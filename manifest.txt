@@ -4,6 +4,7 @@ lib/oclogistics.lua
 lib/octank.lua
 lib/occomputronics.lua
 lib/ocsecurity.lua
+lib/ocnotify.lua
 lib/ocnet.lua
 programs/ocup.lua
 programs/ocdebug.lua

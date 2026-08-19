@@ -28,7 +28,7 @@ local core = require("oclib")
 
 local ct = {}
 
-ct.VERSION = "0.2.0"
+ct.VERSION = "0.3.0"
 
 -- what each component is, for a program that lists what it can see
 ct.KINDS = {
@@ -114,10 +114,23 @@ end
 
 -- A note block cannot say words, so it says which of two things happened:
 -- falling for trouble, rising for it being over.
-function ct.play(urgent)
+function ct.play(urgent, instrument)
   local note = ct.first("iron_noteblock")
   if not note then
     return nil
+  end
+
+  local voice = instrument or "harp"
+  local known = false
+  for _, name in ipairs(ct.INSTRUMENTS) do
+    if name == voice then
+      known = true
+    end
+  end
+  -- the mod refuses an instrument it does not know, so a bad one in the
+  -- configuration would silence the note block rather than change its sound
+  if not known then
+    voice = "harp"
   end
 
   local figure = { 12, 7, 3 }
@@ -127,7 +140,7 @@ function ct.play(urgent)
 
   local played = false
   for _, pitch in ipairs(figure) do
-    if core.setValue(note, "playNote", "harp", pitch, 1) then
+    if core.setValue(note, "playNote", voice, pitch, 1) then
       played = true
     end
   end

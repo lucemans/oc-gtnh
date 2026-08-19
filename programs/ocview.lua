@@ -15,7 +15,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.7.0"
+local VERSION = "0.8.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -37,14 +37,17 @@ local LIGHT_BLOCK = "\226\150\145"
 
 local gpu = component.gpu
 
-local W, H, GAUGE_W
+local W, H
 
 local paint = core.painter(gpu)
+
+-- the same file ocwatch keeps its machines in, so the view a tablet is left in
+-- is the view it comes back to
+local config = core.loadConfig()
 
 -- recomputed on a resize: a tablet docked to a screen changes size under us
 local function layout()
   W, H = core.viewport(gpu)
-  GAUGE_W = math.max(8, math.min(20, math.floor(W / 3)))
   paint.forget()
 end
 
@@ -115,7 +118,160 @@ local function statusColor(status, alarm)
   return DIM
 end
 
-local function drawGauge(x, y, gauge, width)
+local function rateText(gauge)
+  if not gauge.rate or math.abs(gauge.rate) < 1 then
+    return ""
+  end
+  local sign = "+"
+  if gauge.rate < 0 then
+    sign = "-"
+  end
+  return sign .. core.comma(math.floor(math.abs(gauge.rate) + 0.5))
+    .. " " .. tostring(gauge.unit or "") .. "/s"
+end
+
+-- What a gauge says in words, beside whatever bar is drawn for it. The reading
+-- is named only when the machine is not already named after it: "Steam Tank"
+-- followed by "Steam" says nothing twice, but a battery buffer has several
+-- readings and they have to be told apart.
+local function gaugeText(gauge, machine, room)
+  local label = ""
+  if gauge.label and gauge.label ~= "" and machine then
+    if not machine:lower():find(gauge.label:lower(), 1, true) then
+      label = gauge.label .. "  "
+    end
+  end
+  local unit = ""
+  if gauge.unit and gauge.unit ~= "" then
+    unit = " " .. gauge.unit
+  end
+  local text = label .. string.format("%s / %s%s", tostring(gauge.current),
+    tostring(gauge.maximum), unit)
+  -- the satellite sends this only when its bar is drawn against a local
+  -- maximum, so the real capacity is never lost
+  if gauge.capacity then
+    text = text .. "  of " .. tostring(gauge.capacity)
+  end
+  local moving = rateText(gauge)
+  if moving ~= "" then
+    text = text .. "   " .. moving
+  end
+  -- the numbers matter more than the name of the reading, so on a narrow screen
+  -- the name is what gives way
+  if room and label ~= "" and unicode.len(text) > room then
+    return (text:sub(#label + 1))
+  end
+  return text
+end
+
+-------------------------------------------------------------------------------
+-- how the base is laid out on screen
+--
+-- A base with a dozen machines on a wide screen was using a quarter of it: one
+-- narrow column of blocks down the left and nothing anywhere else. These are
+-- three answers to that, because which one is right depends on how much there
+-- is to show and what you are looking for.
+
+local MODES = { "columns", "cards", "alerts" }
+
+local MODE_HELP = {
+  columns = "every machine, one line each, across as many columns as fit",
+  cards = "one machine at a time, roomy, with a wide bar",
+  alerts = "what is wrong, and nothing that is not",
+}
+
+local mode = config.view
+if not MODE_HELP[mode] then
+  mode = "columns"
+end
+
+local function nextMode()
+  for index, name in ipairs(MODES) do
+    if name == mode then
+      mode = MODES[index % #MODES + 1]
+      config.view = mode
+      core.saveConfig(config)
+      paint.forget()
+      return
+    end
+  end
+end
+
+-- A machine is worth showing in the alerts view when something about it is
+-- wrong: an alert has it, it has been stopped, or a gauge has run dry.
+local function troubled(card)
+  if card.alarm or card.status == "stopped" then
+    return true
+  end
+  for _, gauge in ipairs(card.gauges or {}) do
+    if (gauge.percent or 0) <= 5 then
+      return true
+    end
+  end
+  return false
+end
+
+-- One block of rows a satellite, built before anything knows where it lands.
+-- A satellite is the natural column: its machines belong together and its name
+-- goes at the top of them.
+local function planBlocks()
+  local blocks = {}
+  for _, address in ipairs(order) do
+    local rows = {}
+    local answer = satellites[address]
+    local stale = computer.uptime() - answer.at > QUIET_SECONDS
+
+    local shown = {}
+    for _, card in ipairs(answer.cards) do
+      if mode ~= "alerts" or troubled(card) then
+        shown[#shown + 1] = card
+      end
+    end
+
+    local alerts = {}
+    for _, alert in ipairs(answer.alerts or {}) do
+      if mode ~= "alerts" or alert.tripped then
+        alerts[#alerts + 1] = alert
+      end
+    end
+
+    if #shown > 0 or #alerts > 0 or mode ~= "alerts" then
+      rows[#rows + 1] = { kind = "host", host = answer.host, stale = stale,
+        machines = #answer.cards }
+      for _, alert in ipairs(alerts) do
+        rows[#rows + 1] = { kind = "alert", alert = alert }
+      end
+      for _, card in ipairs(shown) do
+        if mode == "columns" and not card.compact then
+          -- in this view a machine is its gauges, with its own name on each,
+          -- because a name on a line of its own is a line not showing a number
+          for _, gauge in ipairs(card.gauges or {}) do
+            rows[#rows + 1] = { kind = "line", card = card, gauge = gauge }
+          end
+          if #(card.gauges or {}) == 0 then
+            rows[#rows + 1] = { kind = "line", card = card }
+          end
+        elseif card.compact then
+          for _, gauge in ipairs(card.gauges or {}) do
+            rows[#rows + 1] = { kind = "line", card = card, gauge = gauge,
+              indent = true }
+          end
+        else
+          rows[#rows + 1] = { kind = "name", card = card }
+          for _, gauge in ipairs(card.gauges or {}) do
+            rows[#rows + 1] = { kind = "gauge", card = card, gauge = gauge }
+          end
+        end
+      end
+    end
+    if #rows > 0 then
+      blocks[#blocks + 1] = rows
+    end
+  end
+  return blocks
+end
+
+local function bar(x, y, width, gauge)
   local ratio = (gauge.percent or 0) / 100
   if ratio < 0 then
     ratio = 0
@@ -123,101 +279,146 @@ local function drawGauge(x, y, gauge, width)
     ratio = 1
   end
   local filled = math.floor(width * ratio + 0.5)
-
   write(x, y, "[", DIM, BG)
-  local cursor = x + 1
   if filled > 0 then
-    write(cursor, y, string.rep(FULL_BLOCK, filled), core.gaugeColor(gauge, OK_COLOR), BG)
-    cursor = cursor + filled
+    write(x + 1, y, string.rep(FULL_BLOCK, filled),
+      core.gaugeColor(gauge, OK_COLOR), BG)
   end
   if width - filled > 0 then
-    write(cursor, y, string.rep(LIGHT_BLOCK, width - filled), DIM, BG)
-    cursor = cursor + width - filled
+    write(x + 1 + filled, y, string.rep(LIGHT_BLOCK, width - filled), DIM, BG)
   end
-  write(cursor, y, "]", DIM, BG)
+  write(x + 1 + width, y, "]", DIM, BG)
+  return x + width + 3
+end
 
-  local unit = (gauge.unit and gauge.unit ~= "") and (" " .. gauge.unit) or ""
-  local text = string.format("  %s / %s%s", tostring(gauge.current), tostring(gauge.maximum), unit)
-  -- the satellite sends this only when its bar is drawn against a local
-  -- maximum, so the real capacity is never lost
-  if gauge.capacity then
-    text = text .. "  of " .. tostring(gauge.capacity)
-  end
-  if gauge.rate and math.abs(gauge.rate) >= 1 then
-    local sign = "+"
-    if gauge.rate < 0 then
-      sign = "-"
+local function drawRow(row, x, y, width)
+  if row.kind == "blank" then
+    write(x, y, fit("", width), FG, BG)
+  elseif row.kind == "host" then
+    write(x, y, fit(" " .. row.host .. "   " .. row.machines .. " machines"
+      .. (row.stale and "   not answering" or ""), width), FG, BAR)
+  elseif row.kind == "alert" then
+    local mark = "ok"
+    local color = DIM
+    if row.alert.tripped then
+      mark = "!!"
+      color = ALARM
     end
-    text = text .. "  " .. sign
-      .. core.comma(math.floor(math.abs(gauge.rate) + 0.5)) .. " " .. unit:gsub("^ ", "") .. "/s"
+    write(x + 1, y, fit(mark .. "  " .. tostring(row.alert.name), width - 1), color, BG)
+  elseif row.kind == "name" then
+    write(x + 1, y, fit(row.card.name or "?", width - 13), FG, BG)
+    if row.card.status then
+      write(x + width - 11, y, fit(row.card.status, 11),
+        statusColor(row.card.status, row.card.alarm), BG)
+    end
+  elseif row.kind == "gauge" then
+    local at = bar(x + 3, y, math.max(8, math.min(40, width - 34)), row.gauge)
+    write(at, y, fit(gaugeText(row.gauge), math.max(0, width - (at - x))), FG, BG)
+  else
+    -- One line: the machine's name, a bar, the numbers, and how it is doing.
+    -- Every part grows with the column it is in, since a wide screen showing
+    -- narrow bars against empty space was the whole reason for these views.
+    local color = ALARM
+    if not row.card.alarm then
+      color = core.gaugeColor(row.gauge, FG)
+    end
+    local nameWidth = math.max(12, math.min(20, math.floor(width / 4)))
+    local barWidth = math.max(6, math.min(32, math.floor(width / 6)))
+
+    local left = x + (row.indent and 3 or 1)
+    write(left, y, fit(row.card.name or "?", nameWidth), color, BG)
+
+    local at = left + nameWidth + 1
+    if row.gauge then
+      at = bar(at, y, barWidth, row.gauge)
+      -- the status column is only worth reserving when there is a status
+      local reserved = 1
+      if row.card.status then
+        reserved = 12
+      end
+      local room = math.max(0, width - (at - x) - reserved)
+      write(at, y, fit(gaugeText(row.gauge, row.card.name, room), room), DIM, BG)
+    end
+    if row.card.status then
+      write(x + width - 11, y, fit(row.card.status, 11),
+        statusColor(row.card.status, row.card.alarm), BG)
+    end
   end
-  write(cursor + 1, y, fit(text, math.max(0, W - cursor - 1)), FG, BG)
 end
 
 local function render()
   local trouble = problem()
-  local machines = 0
+  local machines, tripped = 0, 0
   for _, address in ipairs(order) do
     machines = machines + #satellites[address].cards
+    for _, alert in ipairs(satellites[address].alerts or {}) do
+      if alert.tripped then
+        tripped = tripped + 1
+      end
+    end
   end
-  write(1, 1, fit("  ocview v" .. VERSION .. "    "
-    .. (#order > 0 and (#order .. " satellites, " .. machines .. " machines")
-      or "no data"), W), FG, BAR)
 
+  local heading = "  ocview v" .. VERSION .. "    " .. #order .. " satellites, "
+    .. machines .. " machines"
+  if #order == 0 then
+    heading = "  ocview v" .. VERSION .. "    no data"
+  end
+  write(1, 1, fit(heading, W - 20), FG, BAR)
+  if tripped > 0 then
+    write(math.max(1, W - 19), 1, fit(tripped .. " ALERTS TRIPPED", 20), ALARM, BAR)
+  else
+    write(math.max(1, W - 19), 1, fit("all clear", 20), OK_COLOR, BAR)
+  end
+
+  local blocks = planBlocks()
+  local body = H - 3
+
+  -- A satellite to a column, as many as the width takes. Splitting one
+  -- satellite's machines across two columns would put half a base in each,
+  -- so a block stays whole and the shortest column takes the next one.
+  local columns = 1
+  if mode == "columns" then
+    columns = math.max(1, math.min(#blocks, math.floor(W / 58)))
+  end
+  local width = math.floor((W - 2) / columns)
+
+  local placed = {}
+  for index = 1, columns do
+    placed[index] = {}
+  end
+  for _, rows in ipairs(blocks) do
+    local shortest = 1
+    for index = 2, columns do
+      if #placed[index] < #placed[shortest] then
+        shortest = index
+      end
+    end
+    for _, row in ipairs(rows) do
+      placed[shortest][#placed[shortest] + 1] = row
+    end
+    placed[shortest][#placed[shortest] + 1] = { kind = "blank" }
+  end
+
+  for column = 1, columns do
+    local x = 2 + (column - 1) * width
+    for line = 0, body - 1 do
+      local row = placed[column][line + 1]
+      local y = 3 + line
+      if row then
+        drawRow(row, x, y, width - 1)
+      else
+        write(x, y, fit("", width - 1), FG, BG)
+      end
+    end
+  end
+
+  -- after the columns, which blank every row they do not fill
   if trouble then
     write(3, 3, fit(trouble, W - 4), ALARM, BG)
   end
 
-  local y = 3
-  for _, address in ipairs(order) do
-    local answer = satellites[address]
-    if y > H - 2 then
-      break
-    end
-    -- naming the satellite matters once there is more than one: otherwise two
-    -- machines called EBF1 on different computers are indistinguishable
-    local quiet = computer.uptime() - answer.at > QUIET_SECONDS
-    write(1, y, fit(" " .. answer.host
-      .. (quiet and "   not answering" or ""), W), FG, BAR)
-    y = y + 1
-
-    -- An alert that has tripped is the reason to be looking at this screen at
-    -- all, so it goes above the machines rather than being deduced from them.
-    for _, alert in ipairs(answer.alerts or {}) do
-      if y > H - 2 then
-        break
-      end
-      local mark = alert.tripped and "!" or "ok"
-      write(3, y, fit(mark .. "  " .. tostring(alert.name), W - 4),
-        alert.tripped and ALARM or DIM, BG)
-      y = y + 1
-    end
-
-    for _, card in ipairs(answer.cards) do
-      if y > H - 2 then
-        break
-      end
-      write(3, y, fit(card.name or "?", W - 14), FG, BG)
-      if card.status then
-        write(math.max(1, W - 12), y, fit(card.status, 11),
-          statusColor(card.status, card.alarm), BG)
-      end
-      y = y + 1
-
-      for _, gauge in ipairs(card.gauges or {}) do
-        if y > H - 2 then
-          break
-        end
-        local label = (gauge.label and gauge.label ~= "") and gauge.label or "value"
-        write(5, y, fit(label, 10), DIM, BG)
-        drawGauge(16, y, gauge, GAUGE_W)
-        y = y + 1
-      end
-    end
-    y = y + 1
-  end
-
-  write(1, H, fit("  [r] refresh   [q] quit      every " .. REFRESH_SECONDS .. "s", W), FG, BAR)
+  write(1, H, fit("  [v] view: " .. mode .. "   [r] refresh   [q] quit      "
+    .. MODE_HELP[mode], W), FG, BAR)
   paint.flush(W, H, BG, FG)
 end
 
@@ -272,6 +473,8 @@ while true do
       break
     elseif code == keyboard.keys.r then
       asked = 0
+    elseif code == keyboard.keys.v then
+      nextMode()
     end
   end
 end
