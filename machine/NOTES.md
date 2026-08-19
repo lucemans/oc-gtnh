@@ -631,12 +631,28 @@ room it has. Measured on the same network from two machines:
 | computer, 1.4 MB | 458 KB after the list | 250 | ~1.4 KB |
 | server, 3.8 MB | 2.6 MB after the list | 1,163 | ~370 bytes |
 
-So the number is worked out rather than chosen: what is free once the list has
-arrived, less what the screen needs, divided by the dearer of the two figures.
-It is asked **after** the list is in memory, which is the only moment that says
-what there is to work with. The small machine lands on about 220, the server on
-1,163 of 1,592, and neither is tuned by hand. The server's worst moment left
-1,748 KB free, which came back to 3,302 KB as soon as it did any work.
+Dividing by the dearer figure was wrong. It left a server naming 1,177 of 1,592
+items when it had the memory for all of them, because the sum charged it 1.4 KB
+a name where a name really cost 370 bytes. A single constant cannot describe a
+cost that depends on whether the collector is keeping up.
+
+So the sum errs low and is only used to decide how much of the list is worth
+holding on to. **How many are really named is decided by asking**: every 32
+names the loop looks at `computer.freeMemory()` and stops when the room is gone.
+The machine answers with what it has rather than with what a constant guessed,
+and a bigger machine simply names more.
+
+### What is not worth naming at all
+
+The network answers with one entry per *identifier*, and an identifier carries
+damage and NBT. So a worn pair of golden boots is a dozen entries, an enchanted
+book is dozens more, and they crowd out the stocks somebody actually watches.
+
+An identifier says which it is: `isDamageable()` for a tool that wears, and
+`hasTagCompound()` for anything carrying a tag. Both are dropped. A meta variant
+that is a genuinely different item — wool by colour, a dust by grade — is
+neither, and stays. That is also the honest rule for counting, since a tagged
+item cannot be counted one at a time anyway.
 
 ## Which way round to refresh
 

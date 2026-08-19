@@ -27,7 +27,7 @@ local net = require("ocnet")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.9.0"
+local VERSION = "0.10.0"
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -35,7 +35,9 @@ local CACHE = "/etc/ocitems.cache"
 -- so this is also how long a keypress can be left waiting.
 local PER_DRAW = 4
 -- how long the loop listens before it goes back to counting
-local REST = 0.05
+local REST = 0.2
+-- how often the screen is drawn anyway, for the memory figure in the bar
+local HEARTBEAT = 2
 -- What has to be free before the network is read at all. The read itself is
 -- about 950 KB in a single go, and a computer that goes into it with less than
 -- that does not fail the call, it dies. The margin over 950 is not spare: three
@@ -129,13 +131,12 @@ local function readCache()
 
   local kept = {}
   for line in text:gmatch("[^\n]+") do
-    local itemId, itemData, tagged, amount, name =
-      line:match("^(%d+) (%d+) ([01]) (%d+) (.*)$")
+    local itemId, itemData, amount, name =
+      line:match("^(%d+) (%d+) (%d+) (.*)$")
     if itemId then
       kept[#kept + 1] = {
         itemId = tonumber(itemId),
         itemData = tonumber(itemData),
-        tagged = tagged == "1",
         amount = tonumber(amount),
         name = name,
       }
@@ -155,8 +156,8 @@ local function writeCache()
   end
   file:write("ocitems " .. total .. "\n")
   for _, item in ipairs(items) do
-    file:write(string.format("%d %d %d %d %s\n", item.itemId, item.itemData,
-      item.tagged and 1 or 0, item.amount, item.name))
+    file:write(string.format("%d %d %d %s\n", item.itemId, item.itemData,
+      item.amount, item.name))
   end
   file:close()
 end
@@ -192,7 +193,7 @@ end
 -- going on.
 local function count()
   if not builder or not items[1] then
-    return
+    return false
   end
   local finished
   cursor, finished = lp.sweep(proxy, builder, items, cursor, PER_DRAW)
@@ -201,6 +202,7 @@ local function count()
     movers = lp.movers(items, MOVERS)
     writeCache()
   end
+  return true
 end
 
 -- Three ways to bring the counts up to date, in order of what they cost.
@@ -216,26 +218,44 @@ end
 -- nobody has ever had, and it settles where everything sits in the answer,
 -- which is what the counted read leans on.
 --
--- Counting an item at a time is the slowest by far, a server tick each. It is
--- what a machine without the memory for a read is left with, and it is not idle
--- work in between either: memory comes back only under the pressure of asking
--- for more, so the counting is what makes the next read affordable.
+-- Counting an item at a time is the slowest by far, a server tick each, and it
+-- is only what a machine without the memory for a read is left with. It used to
+-- run between reads as well, which was worse than useless: it spent a tick an
+-- item to learn what the next read would say in a tenth of a second, for every
+-- item at once.
+--
+-- It is also the way out of running short. Memory comes back only under the
+-- pressure of asking for more, so a machine whose last read has not been
+-- cleared up counts instead, and the counting is what makes the next read
+-- affordable again.
 local function refresh()
   local now = computer.uptime()
+
+  -- Where a read is out of reach there is nothing else to do, so the counting
+  -- runs on. Where a read is affordable the counting is worse than useless: a
+  -- read brings every count in the network for a tenth of a second, and the
+  -- counting would spend a server tick an item to learn what a read has just
+  -- said.
   if computer.freeMemory() < ROOM then
-    count()
-  elseif now - lastRead >= NAMED then
+    return count()
+  end
+
+  if now - lastRead >= NAMED then
     scan()
-  elseif now - lastCount >= COUNTED then
+    return true
+  end
+
+  if now - lastCount >= COUNTED then
     lastCount = now
     if lp.recount(proxy, items, total, now) then
       movers = lp.movers(items, MOVERS)
     else
       scan()
     end
-  else
-    count()
+    return true
   end
+
+  return false
 end
 
 local function render()
@@ -277,9 +297,8 @@ local function render()
 
   paint.write(1, H, fit("  [up/down] scroll   [r] read the network again"
     .. "   [q] quit", W - 24), FG, BAR)
-  paint.write(math.max(1, W - 23), H, fit(builder
-    and ("counting " .. cursor .. " of " .. #items)
-    or (core.comma(#items) .. " shown"), 24), DIM, BAR)
+  paint.write(math.max(1, W - 23), H,
+    fit(core.comma(#items) .. " tracked", 24), DIM, BAR)
   paint.flush(W, H, BG, FG)
 end
 
@@ -316,13 +335,25 @@ else
   end
 end
 
+-- Drawing is not free: every cell on the screen is built again to find out
+-- whether it changed, and doing that twenty times a second to show a list that
+-- moves every ten was most of what this program spent its time on. So it draws
+-- when something has happened, and once in a while regardless for the clock and
+-- the memory in the bar.
+local shown = 0
+local changed = true
+
 while true do
-  render()
+  if changed or computer.uptime() - shown >= HEARTBEAT then
+    render()
+    shown, changed = computer.uptime(), false
+  end
+
   local packed = table.pack(event.pull(REST))
   local name = packed[1]
 
   if name == nil then
-    refresh()
+    changed = refresh()
   elseif name == "modem_message" and modem then
     net.answer(modem, packed[4], packed[3], packed[6], config,
       net.report(config, net.machines(config), movers))
@@ -331,7 +362,9 @@ while true do
   elseif name == "screen_resized" then
     layout()
     move(0)
+    changed = true
   elseif name == "key_down" then
+    changed = true
     local code = packed[4]
     if code == keyboard.keys.q then
       break
@@ -354,6 +387,7 @@ while true do
     end
   elseif name == "scroll" then
     move(packed[5] > 0 and -1 or 1)
+    changed = true
   end
 end
 

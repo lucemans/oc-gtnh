@@ -3265,6 +3265,9 @@ local function requestPipe(stock, tally)
       hasTagCompound = proxyCall("hasTagCompound", function()
         return entry.tagged == true
       end),
+      isDamageable = proxyCall("isDamageable", function()
+        return entry.damaged == true
+      end),
     }
     stacks[index] = {
       type = "userdata",
@@ -3372,13 +3375,13 @@ test("ocitems names as many items as the memory allows, and no more", function()
     local ok, reason = oc.run("ocitems")
     check(ok, "ocitems crashed: " .. tostring(reason))
     named[#named + 1] = tally.names
-    check(tally.names < 4000, "named the whole network: " .. tally.names)
 
     local frame = oc.frame()
     check(contains(frame, "4,000 items in the network"), "lost the count")
     check(contains(frame, "thing 4000"), "did not name the one there is most of")
   end
 
+  check(named[1] < 4000, "a machine short of memory named the whole network")
   check(named[2] > named[1] * 2, "a machine with room for more named "
     .. named[2] .. " against " .. named[1])
 end)
@@ -3470,6 +3473,33 @@ test("only what is moving is worth a place, gains first", function()
     check(item.name ~= "still" and item.name ~= "never counted",
       "made room for " .. item.name .. ", which is not moving")
   end
+end)
+
+-- A tool wears out and an enchantment is a tag, so one pair of golden boots
+-- arrives as a dozen entries and an enchanted book as dozens more. None of them
+-- is a stock anybody keeps tabs on, and they crowd out the ones that are.
+test("a worn tool and an enchanted book are not stocks", function()
+  oc.reset()
+  local lplib = require("oclogistics")
+  oc.components = { requestPipe({
+    { name = "Cobblestone", amount = 22742 },
+    { name = "Golden Boots", amount = 3, damaged = true },
+    { name = "Enchanted Book", amount = 12, tagged = true },
+    { name = "Red Wool", amount = 64, itemData = 14 },
+  }) }
+
+  local proxy = lplib.requestPipe()
+  local items = lplib.available(proxy)
+  local kept = {}
+  for _, item in ipairs(items) do
+    kept[item.name] = true
+  end
+
+  check(kept["Cobblestone"], "dropped a stock worth watching")
+  -- a meta variant that is a real item is neither damageable nor tagged
+  check(kept["Red Wool"], "dropped a colour, which is a different item")
+  check(not kept["Golden Boots"], "kept a tool, which is one thing somebody has")
+  check(not kept["Enchanted Book"], "kept an enchantment")
 end)
 
 test("a fresh read keeps the windows a rate is being measured over", function()

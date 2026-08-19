@@ -11,7 +11,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.10.0"
+lp.VERSION = "0.11.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -85,17 +85,22 @@ function lp.requestPipe()
   return nil
 end
 
--- What a name costs while a scan is running: about 1.4 KB, of which 600 bytes
--- is the identifier that is kept and the rest is the pairs the collector has
--- not got to yet.
-local NAME = 1400
+-- What a name costs while a scan is running. There is no one answer: 1.4 KB on
+-- a machine where the collector cannot keep up, and 370 bytes on one where it
+-- can, because most of the cost is pairs waiting to be collected rather than
+-- anything kept. A sum against the dearer figure stopped a server naming a
+-- third of its network for no reason, so this errs low and the naming stops
+-- when the memory actually runs out instead.
+local NAME = 600
 -- what is left alone for the program to draw with afterwards
-local SPARE = 150 * 1024
+local SPARE = 250 * 1024
+-- how often the naming looks at what is left rather than trusting the sum
+local WATCH = 32
 
--- How many items can be named, asked after the list has arrived so the answer
--- is what is left rather than what there was. A computer with 1.4 MB names
--- about 220 of them; a server with 3.8 MB names the whole network. Nothing is
--- tuned per machine, because the machine already knows.
+-- Roughly how many can be named, asked after the list has arrived so it answers
+-- from what is left rather than from what there was. It only decides how much
+-- of the list is worth holding on to; how many are really named is decided by
+-- the memory as it goes.
 local function most()
   return math.max(50, math.floor((computer.freeMemory() - SPARE) / NAME))
 end
@@ -142,19 +147,33 @@ function lp.available(proxy, howMany)
       end
     end
 
+    local kept = 0
     for rank = 1, wanted do
+      -- the sum above only chose what to hold on to; what can really be named
+      -- is whatever the memory turns out to allow, asked as it goes
+      if rank % WATCH == 0 and computer.freeMemory() < SPARE then
+        break
+      end
+
       local index = order[rank]
       local id = list[index].getValue1()
-      items[rank] = {
-        name = id.getName(),
-        amount = amounts[index],
-        itemId = id.getId(),
-        itemData = id.getData(),
-        tagged = id.hasTagCompound() == true,
-        -- where in the answer it came, which is what lets a later read be taken
-        -- as counts alone
-        slot = index,
-      }
+      -- A tool wears out and an enchantment is a tag, so one pair of golden
+      -- boots arrives as a dozen entries and an enchanted book as dozens more.
+      -- None of them is a stock: they are single things somebody is carrying.
+      -- A meta variant that is a real item -- wool by colour, a dust by grade --
+      -- is neither damageable nor tagged, and stays.
+      if id.hasTagCompound() ~= true and id.isDamageable() ~= true then
+        kept = kept + 1
+        items[kept] = {
+          name = id.getName(),
+          amount = amounts[index],
+          itemId = id.getId(),
+          itemData = id.getData(),
+          -- where in the answer it came, which is what lets a later read be
+          -- taken as counts alone
+          slot = index,
+        }
+      end
       list[index] = false
     end
   end)
@@ -321,12 +340,9 @@ function lp.sweep(proxy, builder, items, from, many)
     if not item then
       return 1, true
     end
-    -- a tagged item cannot be counted this way; only a full read counts it
-    if not item.tagged then
-      local amount = lp.count(proxy, builder, item.itemId, item.itemData)
-      if amount then
-        lp.mark(item, amount, now)
-      end
+    local amount = lp.count(proxy, builder, item.itemId, item.itemData)
+    if amount then
+      lp.mark(item, amount, now)
     end
     cursor = cursor + 1
     if cursor > #items then
