@@ -11,7 +11,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.11.0"
+lp.VERSION = "0.15.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -85,24 +85,70 @@ function lp.requestPipe()
   return nil
 end
 
--- What a name costs while a scan is running. There is no one answer: 1.4 KB on
--- a machine where the collector cannot keep up, and 370 bytes on one where it
--- can, because most of the cost is pairs waiting to be collected rather than
--- anything kept. A sum against the dearer figure stopped a server naming a
--- third of its network for no reason, so this errs low and the naming stops
--- when the memory actually runs out instead.
-local NAME = 600
--- what is left alone for the program to draw with afterwards
-local SPARE = 250 * 1024
+-- What a named item keeps for good, measured rather than guessed: a server with
+-- 3,166 KB free named 1,286 of them and was left with 1,292 KB, which is 1.45 KB
+-- apiece. Everything else a scan touches is given back when it ends.
+local KEPT = 1450
+
+-- what has to be left at any moment during a scan, which is not the same
+-- question: the list is held for the length of one and handed back at the end
+local FLOOR = 300 * 1024
+
+-- The most worth naming, whatever the memory says.
+--
+-- Past a few hundred the list is things there are three of, and every name is
+-- memory a read cannot use. A server naming 1,136 items keeps 1.7 MB and can
+-- just about read the network once more; naming 500 it keeps 2.4 MB and can
+-- read whenever it likes. What makes this worth running is the counts moving,
+-- not the length of the tail.
+local CEILING = 500
+
+-- What a read of the whole network needs free before it is safe to make, and
+-- therefore what a scan has to leave behind it.
+--
+-- These are the same number for a reason. A scan that names everything it can
+-- reach leaves too little to ever read again, so the counts stop moving and the
+-- program falls back to a server tick an item: it traded the thing it wanted for
+-- a longer list. Measured, a server that named 1,286 of 1,596 items refused
+-- every read afterwards.
+lp.ROOM = 1600 * 1024
 -- how often the naming looks at what is left rather than trusting the sum
 local WATCH = 32
+-- how much nothing has to be asked for before the collector runs
+local RECLAIM = 10000
 
--- Roughly how many can be named, asked after the list has arrived so it answers
--- from what is left rather than from what there was. It only decides how much
--- of the list is worth holding on to; how many are really named is decided by
--- the memory as it goes.
+-- Asks for the memory back, and says how much there is.
+--
+-- There is no collectgarbage in this sandbox, and `computer.freeMemory()` is
+-- not what is free: it is what has not been collected yet. A scan can read 76 KB
+-- free while holding nearly three megabytes of rubbish. Allocating is the only
+-- thing that makes the collector run, so asking for a lot of nothing is how you
+-- ask for the memory back, and it is quick — ten thousand empty tables brought
+-- 1.3 MB back in under a twentieth of a second.
+--
+-- Believing the lagging figure instead is what left a server naming 158 items
+-- out of 1,596 and calling it full.
+function lp.reclaim()
+  -- the rubbish is the whole point of the loop, so nothing reads it
+  -- luacheck: ignore bin
+  local bin = {}
+  for index = 1, RECLAIM do
+    bin[1] = { index }
+  end
+  return computer.freeMemory()
+end
+
+-- How many can be named, asked **before** the list is fetched and after the
+-- collector has been made to run.
+--
+-- Before, because the list is 950 KB that the scan hands back the moment it
+-- ends, so counting it against the budget charges twice for the same memory:
+-- doing that left a server naming 31 items out of 1,596. What is really being
+-- decided here is what the machine will still have free when the scan is over,
+-- and that has to be enough to read the network again.
 local function most()
-  return math.max(50, math.floor((computer.freeMemory() - SPARE) / NAME))
+  return math.max(50,
+    math.min(CEILING, math.floor((lp.reclaim() - lp.ROOM) / KEPT)))
 end
 
 -- Everything the network holds, the most plentiful first.
@@ -117,13 +163,15 @@ end
 -- this machine, so memory comes back only under the pressure of asking for
 -- more, and asking for the whole list twice in one run ends the computer.
 function lp.available(proxy, howMany)
+  local budget = howMany or most()
+
   local list = lp.invoke(proxy, "getAvailableItems")
   if type(list) ~= "table" then
     return nil, "getAvailableItems answered nothing"
   end
 
   local total = #list
-  local wanted = math.min(howMany or most(), total)
+  local wanted = math.min(budget, total)
   local items = {}
 
   -- one pcall around the whole scan rather than one a call: three thousand of
@@ -149,9 +197,13 @@ function lp.available(proxy, howMany)
 
     local kept = 0
     for rank = 1, wanted do
-      -- the sum above only chose what to hold on to; what can really be named
-      -- is whatever the memory turns out to allow, asked as it goes
-      if rank % WATCH == 0 and computer.freeMemory() < SPARE then
+      -- The sum above only chose what to hold on to; what can really be named is
+      -- whatever the memory turns out to allow. A low reading is not an answer
+      -- on its own, though, since most of what it is counting is rubbish nobody
+      -- has collected: the collector is made to run first, and only a reading
+      -- that stays low after that means stop.
+      if rank % WATCH == 0 and computer.freeMemory() < FLOOR
+        and lp.reclaim() < FLOOR then
         break
       end
 

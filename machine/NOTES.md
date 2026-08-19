@@ -695,6 +695,64 @@ has to match, and eight positions spread through the list are named and
 compared, for about 20 ms. It says whether it was believed, and a caller told no
 reads the list properly instead.
 
+### freeMemory is not what is free
+
+It is what has not been collected yet, and **there is no `collectgarbage`** in
+this sandbox — not as a global, not through `_G`. A scan can report 76 KB free
+while holding nearly three megabytes of rubbish nobody has swept.
+
+Allocating is the only thing that makes the collector run, so asking for a lot
+of nothing is how you ask for the memory back. Measured:
+
+| asked for | free before | free after | time |
+| --- | --- | --- | --- |
+| 2,000 tables | 98 KB | 20 KB | 0 s |
+| **10,000 tables** | 113 KB | **1,392 KB** | under 0.05 s |
+| 40,000 tables | 100 KB | 929 KB | 0.1 s |
+
+Two thousand is not enough to start a cycle and simply costs what it allocates.
+Ten thousand is the useful figure. It is not free either: where there is nothing
+to collect it burns about 400 KB, so it is worth asking only where rubbish is
+likely — after a read, or before deciding a machine is full.
+
+Believing the lagging figure is what left a server naming 158 items out of
+1,596 and calling itself full.
+
+### The budget is taken before the list, not after
+
+A read is 950 KB that is handed back the moment the scan ends, so charging it
+against the naming budget charges twice for the same memory — that left a server
+naming **31** items. What is really being decided is what will be free when the
+scan is over, so it is asked before the list is fetched.
+
+A named item keeps about **1.45 KB** for good: a server with 3,166 KB free named
+1,286 and was left with 1,292 KB.
+
+### Naming and reading compete
+
+Every name is memory a read cannot use, and the read is what makes the counts
+move. Measured on the same server:
+
+| named | free afterwards | can it read again |
+| --- | --- | --- |
+| 1,286 | 1,292 KB | no |
+| 1,136 | 1,747 KB | once |
+| **486** | **2,212 KB** | yes, in 0.05–0.25 s |
+
+So there is a ceiling on naming that has nothing to do with what fits. Past a
+few hundred the list is things there are three of, and paying for them in
+refresh rate is the wrong trade: what makes the program worth running is the
+counts moving, not the length of the tail.
+
+### The data card does not help
+
+A tier 3 data card offers `md5 sha256 crc32 deflate inflate encode64 encrypt
+ecdsa random`, and every one of them works on a **string**. What costs here is
+not bytes: it is 950 KB of proxy objects that never exist as a string, and
+server ticks. Hashing a read to compare it against the last one would mean
+reading all of it first, which is the work itself. Deflating the cache would
+save disk nobody is short of.
+
 ### Cheap in time is not cheap in memory
 
 A counted read still costs the same **950 KB** as a named one. The call is the

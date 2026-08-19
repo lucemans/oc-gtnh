@@ -27,7 +27,7 @@ local net = require("ocnet")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.10.0"
+local VERSION = "0.12.0"
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -38,18 +38,14 @@ local PER_DRAW = 4
 local REST = 0.2
 -- how often the screen is drawn anyway, for the memory figure in the bar
 local HEARTBEAT = 2
--- What has to be free before the network is read at all. The read itself is
--- about 950 KB in a single go, and a computer that goes into it with less than
--- that does not fail the call, it dies. The margin over 950 is not spare: three
--- reads in a row killed a server with 3.3 MB free, because the collector had
--- not given the first two back yet, so what this really asks is whether the
--- last read has been cleared up.
-local ROOM = 1600 * 1024
+-- What has to be free before the network is read at all, which the library
+-- settles because it is also what a scan has to leave behind.
+local ROOM = lp.ROOM
 -- How long between reads, on a machine with room for them. A counted read is
 -- quick — a tenth of a second against three — but it costs the same memory as
 -- any other, so how often one can really happen is settled by the guard above
 -- rather than by this.
-local COUNTED = 10
+local COUNTED = 5
 local NAMED = 120
 
 local gpu = component.gpu
@@ -236,7 +232,11 @@ local function refresh()
   -- read brings every count in the network for a tenth of a second, and the
   -- counting would spend a server tick an item to learn what a read has just
   -- said.
-  if computer.freeMemory() < ROOM then
+  -- A low reading is usually the last read waiting to be collected rather than
+  -- memory that has gone, and nothing here makes the collector run on its own.
+  -- Taking the figure at its word is what made a read wait for the one after
+  -- it, and a change take twenty seconds to appear instead of five.
+  if computer.freeMemory() < ROOM and lp.reclaim() < ROOM then
     return count()
   end
 
@@ -369,7 +369,7 @@ while true do
     if code == keyboard.keys.q then
       break
     elseif code == keyboard.keys.r then
-      if computer.freeMemory() < ROOM then
+      if computer.freeMemory() < ROOM and lp.reclaim() < ROOM then
         note = "not enough memory to read the whole network again yet"
       else
         note = nil

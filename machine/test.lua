@@ -3502,6 +3502,23 @@ test("a worn tool and an enchanted book are not stocks", function()
   check(not kept["Enchanted Book"], "kept an enchantment")
 end)
 
+-- computer.freeMemory() reports what has not been collected, not what is gone,
+-- and nothing in this sandbox makes the collector run. Believing the low figure
+-- is what left a server naming 158 items of 1,596 and calling itself full.
+test("memory that has only not been collected yet is asked for back", function()
+  oc.reset()
+  local lplib = require("oclogistics")
+  -- the fake answers what it is told to; what matters is that asking happens at
+  -- all, and that the answer is the figure taken afterwards
+  oc.freeMemory = 90 * 1024
+  local before = require("computer").freeMemory()
+  oc.freeMemory = 1800 * 1024
+  local after = lplib.reclaim()
+
+  check(before < after, "took the first figure for the last word")
+  check(after == 1800 * 1024, "did not answer with what there was after asking")
+end)
+
 test("a fresh read keeps the windows a rate is being measured over", function()
   local lplib = require("oclogistics")
   local items = { { itemId = 4, itemData = 0, name = "Cobblestone",
