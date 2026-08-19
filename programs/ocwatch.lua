@@ -19,7 +19,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.17.0"
+local VERSION = "0.18.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -32,7 +32,7 @@ local paint = core.painter(gpu)
 -- started on
 local function layout()
   W, H = core.viewport(gpu)
-  GAUGE_W = math.max(16, math.min(40, math.floor((W - 34) / 2)))
+  GAUGE_W = math.max(16, math.min(64, math.floor((W - 34) * 2 / 3)))
   paint.forget()
 end
 
@@ -54,6 +54,8 @@ local SELECTED = 0x0066CC
 
 local FULL_BLOCK = "\226\150\136"
 local LIGHT_BLOCK = "\226\150\145"
+-- a thin vertical line, drawn over the bar where an alert sits
+local MARK = "\226\148\130"
 
 local config = core.loadConfig()
 
@@ -219,7 +221,7 @@ local RATE_LEAST = 10
 
 local history = {}
 
-local function rateOf(key, value, at)
+local function rateOf(key, value, at, leaving)
   local samples = history[key]
   if not samples then
     samples = {}
@@ -239,6 +241,23 @@ local function rateOf(key, value, at)
   if seconds < RATE_LEAST then
     return nil
   end
+
+  -- A pipe holds fluid in transit: it is drained by whatever is downstream and
+  -- refilled from the tank, so what is in it barely moves however much is going
+  -- through. Adding up only the falls, and ignoring the refills, measures what
+  -- left, which is the usage of that one pipe. Three pipes counted this way add
+  -- up to what the tank feeding them is losing.
+  if leaving then
+    local gone = 0
+    for index = 2, #samples do
+      local step = samples[index].value - samples[index - 1].value
+      if step < 0 then
+        gone = gone - step
+      end
+    end
+    return -gone / seconds
+  end
+
   return (value - oldest.value) / seconds
 end
 
@@ -252,6 +271,30 @@ local function rateText(rate, unit)
   end
   return sign .. core.comma(math.floor(math.abs(rate) + 0.5))
     .. " " .. (unit ~= "" and unit or "") .. "/s"
+end
+
+-- Where the alerts watching a reading sit along its bar. A bar says how full
+-- something is; this says how full it has to get before anything happens.
+local function marksOn(gauge, max, width)
+  local marks = {}
+  if not max or max <= 0 then
+    return marks
+  end
+
+  for _, alert in ipairs(config.alerts) do
+    if alert.label == gauge.label or (alert.unit or "") == (gauge.unit or "") then
+      for _, at in ipairs({ alert.below, alert.above, alert.over, alert.under }) do
+        local share = at / max
+        if share > 0 and share <= 1 then
+          marks[#marks + 1] = {
+            at = math.max(1, math.min(width, math.floor(width * share + 0.5))),
+            color = alert.tripped and ALARM or FG,
+          }
+        end
+      end
+    end
+  end
+  return marks
 end
 
 local notices = {}
@@ -409,6 +452,13 @@ local function render(cards)
       write(cursor, y, string.rep(LIGHT_BLOCK, width - filled), DIM, BG)
       cursor = cursor + width - filled
     end
+
+    -- Where an alert on this reading trips, marked on the bar itself. Knowing a
+    -- tank is at sixty percent says nothing without knowing where the floor is.
+    for _, mark in ipairs(marksOn(gauge, max, width)) do
+      write(x + mark.at, y, MARK, mark.color, BG)
+    end
+
     write(cursor, y, "]", DIM, BG)
     cursor = cursor + 1
 
@@ -513,7 +563,7 @@ local function sample()
         ordinal = ordinal + 1
         reading.rate = rateOf(
           keyOf(card.entry.address, card.entry.side) .. "#" .. ordinal,
-          reading.value, now)
+          reading.value, now, card.entry.usage)
       end
     end
   end
@@ -859,9 +909,15 @@ local function editMachine(entry)
       shown = "one line, no bar, tucked under the card above it"
     end
 
+    local counting = "how much it is gaining or losing overall"
+    if entry.usage then
+      counting = "only what leaves it, which is what a pipe carries"
+    end
+
     local rows = {
       { what = "nickname", text = "nickname          " .. entryName(entry) },
       { what = "shown", text = "shown as          " .. shown },
+      { what = "usage", text = "rate counts       " .. counting },
       { what = "readings", text = "readings          choose which to show" },
       { what = "limits", text = "bar maximum       what each gauge is drawn against" },
     }
@@ -885,6 +941,13 @@ local function editMachine(entry)
         entry.compact = nil
       else
         entry.compact = true
+      end
+      save()
+    elseif row.what == "usage" then
+      if entry.usage then
+        entry.usage = nil
+      else
+        entry.usage = true
       end
       save()
     elseif row.what == "readings" then

@@ -14,7 +14,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.6.0"
+net.VERSION = "0.7.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -86,6 +86,29 @@ function net.machines(config)
   return cards
 end
 
+-- Where the alerts watching a reading sit along its bar, as shares of the
+-- maximum. A bar says how full something is; these say how full it has to get
+-- before anything happens, which is the other half of the same question.
+function net.marksOn(config, reading, max)
+  if not max or max <= 0 then
+    return nil
+  end
+  local marks = nil
+  for _, alert in ipairs(config and config.alerts or {}) do
+    if alert.label == reading.label
+      or (alert.unit or "") == (reading.unit or "") then
+      for _, at in ipairs({ alert.below, alert.above, alert.over, alert.under }) do
+        local share = at / max
+        if share > 0 and share <= 1 then
+          marks = marks or {}
+          marks[#marks + 1] = share
+        end
+      end
+    end
+  end
+  return marks
+end
+
 -- the local maximum chosen for the nth gauge of a machine, kept by position
 -- rather than by label because a tank drops its fluid name when it runs dry
 function net.limitOf(entry, ordinal)
@@ -124,6 +147,9 @@ function net.report(config, cards)
           colorCode = reading.colorCode,
           -- which way the reading is going, and how fast
           rate = reading.rate,
+          -- where along the bar an alert on this reading sits, as a share of
+          -- the maximum it is drawn against
+          marks = net.marksOn(config, reading, max),
           percent = max > 0 and (reading.value / max * 100) or 0,
         }
       end

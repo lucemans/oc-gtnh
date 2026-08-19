@@ -22,7 +22,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
 local gpu = component.gpu
 local paint = core.painter(gpu)
@@ -78,7 +78,12 @@ local scroll = 0
 local note = nil
 
 local function here()
-  return path[#path] and path[#path].proxy or nil
+  for index = #path, 1, -1 do
+    if path[index].proxy then
+      return path[index].proxy
+    end
+  end
+  return nil
 end
 
 local function look()
@@ -128,16 +133,36 @@ local function ask()
     return
   end
 
-  local text, deeper, reason = lp.read(proxy, row.name)
-  if deeper then
-    path[#path + 1] = { name = row.name, proxy = deeper }
+  local answer = lp.read(proxy, row.name)
+
+  if answer.kind == "proxy" then
+    path[#path + 1] = { name = row.name, proxy = answer.proxy }
     note = nil
     look()
     return
   end
 
-  row.text = text or ("- " .. tostring(reason))
-  row.failed = text == nil
+  -- a list is the thing worth looking at: it is what everything the base owns
+  -- comes back as
+  if answer.kind == "list" then
+    rows = {}
+    cursor = 1
+    scroll = 0
+    for index, text in ipairs(answer.rows) do
+      rows[index] = { name = tostring(index), text = text, entry = true }
+    end
+    if answer.total > #answer.rows then
+      rows[#rows + 1] = { name = "",
+        text = "and " .. (answer.total - #answer.rows) .. " more, not read",
+        entry = true }
+    end
+    path[#path + 1] = { name = row.name .. "  " .. answer.text, listing = true }
+    note = nil
+    return
+  end
+
+  row.text = answer.text
+  row.failed = answer.failed
 end
 
 local function back()
@@ -146,6 +171,7 @@ local function back()
     look()
   end
 end
+
 
 local function trail()
   local parts = {}

@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.9.0"
+local VERSION = "0.10.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -36,6 +36,8 @@ local ALARM = 0xCC6666
 
 local FULL_BLOCK = "\226\150\136"
 local LIGHT_BLOCK = "\226\150\145"
+-- a thin vertical line, drawn over the bar where an alert sits
+local MARK = "\226\148\130"
 
 local gpu = component.gpu
 
@@ -292,6 +294,13 @@ local function bar(x, y, width, gauge)
   if width - filled > 0 then
     write(x + 1 + filled, y, string.rep(LIGHT_BLOCK, width - filled), DIM, BG)
   end
+
+  -- where an alert on this reading trips, sent along with it by the satellite
+  for _, share in ipairs(gauge.marks or {}) do
+    local at = math.max(1, math.min(width, math.floor(width * share + 0.5)))
+    write(x + at, y, MARK, FG, BG)
+  end
+
   write(x + 1 + width, y, "]", DIM, BG)
   return x + width + 3
 end
@@ -317,7 +326,7 @@ local function drawRow(row, x, y, width)
         statusColor(row.card.status, row.card.alarm), BG)
     end
   elseif row.kind == "gauge" then
-    local at = bar(x + 3, y, math.max(8, math.min(40, width - 34)), row.gauge)
+    local at = bar(x + 3, y, math.max(8, math.min(64, width - 34)), row.gauge)
     write(at, y, fit(gaugeText(row.gauge), math.max(0, width - (at - x))), FG, BG)
   else
     -- One line: the machine's name, a bar, the numbers, and how it is doing.
@@ -327,8 +336,8 @@ local function drawRow(row, x, y, width)
     if not row.card.alarm then
       color = core.gaugeColor(row.gauge, FG)
     end
-    local nameWidth = math.max(12, math.min(20, math.floor(width / 4)))
-    local barWidth = math.max(6, math.min(32, math.floor(width / 6)))
+    local nameWidth = math.max(12, math.min(20, math.floor(width / 5)))
+    local barWidth = math.max(6, math.min(40, math.floor(width / 4)))
 
     local left = x + (row.indent and 3 or 1)
     write(left, y, fit(row.card.name or "?", nameWidth), color, BG)

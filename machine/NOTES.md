@@ -474,3 +474,26 @@ the computer.
 Nothing is called on its own now. The program lists what a proxy offers and
 calls one method when asked, describing the answer and dropping it rather than
 keeping it. Free memory is on screen while you do it.
+
+## A manifest line has to stay readable by what is already installed
+
+This has now gone wrong twice, the same way both times. A new column went into
+the manifest, the ocup already on the computers could not parse the line, it
+reported an empty manifest and stopped, and an ocup that cannot read the
+manifest cannot update itself out of the problem.
+
+Two rules keep it from happening again.
+
+**A line never gains a word.** `versions.txt` is a path and exactly one word
+beside it, `version:size`. An ocup that knows nothing of the size reads the
+whole word as a version, finds it does not match, and fetches the file: slow,
+correct, and it ends with a newer ocup installed. Anything that needs saying in
+future goes inside that word, not after it.
+
+**The parser ignores what it does not know.** `ocup` takes the first word as the
+path and the second as the stamp, and does not care what follows. A stricter
+parser is what caused both incidents.
+
+Both are checked: one that every line in `versions.txt` has exactly two words,
+and one that ocup installs normally from a manifest carrying columns it has
+never heard of.

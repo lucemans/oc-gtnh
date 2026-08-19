@@ -10,7 +10,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.3.0"
+lp.VERSION = "0.4.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -72,15 +72,16 @@ function lp.pipes()
   return found
 end
 
--- The names a proxy offers, sorted. Every field of a proxy is one method, so
--- this is its whole vocabulary.
+-- Only the named fields. A proxy's methods have names; what a request pipe
+-- answers with is a list, and its keys are numbers. Taking those for methods is
+-- what made a number arrive where a method name was expected.
 function lp.methods(proxy)
   local names = {}
   if type(proxy) ~= "table" then
     return names
   end
   for name, entry in pairs(proxy) do
-    if type(entry) == "table" and name ~= "proxy" then
+    if type(name) == "string" and type(entry) == "table" and name ~= "proxy" then
       names[#names + 1] = name
     end
   end
@@ -104,25 +105,45 @@ function lp.offers(proxy)
   return out
 end
 
--- Calls one readable method and describes what came back, without keeping it.
+-- how many entries of a long answer are kept, so a list of everything a base
+-- owns cannot be larger than the computer asking about it
+local MOST = 250
+
+-- Calls one readable method and says what came back. Three things can come
+-- back, and they are not the same kind of thing at all:
 --
--- Whatever the call built is dropped as soon as it has been described, because
--- what a request pipe answers with can be larger than the computer running the
--- question. Returns the description, and the proxy when the answer was one, so
--- the caller can decide whether to go into it.
+--   value   something to read, described in one line
+--   proxy   more methods, which the caller may go into
+--   list    rows of data, which is what "everything we have" looks like
+--
+-- Whatever the call built is described and then let go, because what a request
+-- pipe answers with can be larger than the computer running the question.
 function lp.read(proxy, name)
   if not core.isReadable(name) then
-    return nil, nil, "changes something, so it is not called"
+    return { kind = "value", text = "changes something, so it is not called" }
   end
 
   local value, reason = lp.invoke(proxy, name)
   if value == nil then
-    return nil, nil, tostring(reason or "no answer")
+    return { kind = "value", failed = true,
+      text = tostring(reason or "no answer") }
   end
+
   if type(value) == "table" and lp.methods(value)[1] then
-    return "a proxy, with " .. #lp.methods(value) .. " methods", value
+    return { kind = "proxy", proxy = value,
+      text = #lp.methods(value) .. " methods" }
   end
-  return core.formatValue(value)
+
+  if type(value) == "table" and #value > 0 then
+    local rows = {}
+    for index = 1, math.min(#value, MOST) do
+      rows[index] = core.formatValue(value[index])
+    end
+    return { kind = "list", rows = rows, total = #value,
+      text = #value .. " entries" }
+  end
+
+  return { kind = "value", text = core.formatValue(value) }
 end
 
 return lp

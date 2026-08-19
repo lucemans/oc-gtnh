@@ -3962,3 +3962,137 @@ test("versions.txt keeps to one word after the path", function()
       "an older ocup cannot read this line: " .. line)
   end
 end)
+
+-- getAvailableItems answers with a list, whose keys are numbers. Taking those
+-- for method names put a number where a name was expected and ended the program.
+test("ocitems reads a list answer instead of taking it for methods", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local requestPipe = {
+    address = "96cdfbc3-11fa-462f-adf2-2599720fbb33",
+    kind = "logisticspipe",
+    methods = { getPipe = "function():table" },
+    values = {
+      getPipe = function()
+        return {
+          getRouterId = proxyMethod("getRouterId", 7),
+          getAvailableItems = proxyMethod("getAvailableItems", {
+            { name = "minecraft:iron_ingot", amount = 4096 },
+            { name = "minecraft:gold_ingot", amount = 128 },
+          }),
+        }
+      end,
+    },
+  }
+  oc.components = { requestPipe }
+
+  -- down onto getAvailableItems, then call it
+  oc.push("key_down", "keyboard", 0, 0x1C)
+
+  local ok, reason = oc.run("ocitems")
+  check(ok, "ocitems crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  check(contains(frame, "2 entries"), "did not say how many came back")
+  check(contains(frame, "iron_ingot"), "did not show what is in the list")
+  check(contains(frame, "4096"), "did not show how many of it there are")
+end)
+
+test("a list is bounded so it cannot be larger than the computer", function()
+  oc.components = {}
+  local lplib = require("oclogistics")
+  local many = {}
+  for index = 1, 4000 do
+    many[index] = { name = "thing " .. index, amount = index }
+  end
+  local proxy = { getAvailableItems = proxyMethod("getAvailableItems", many) }
+
+  local answer = lplib.read(proxy, "getAvailableItems")
+  check(answer.kind == "list", "did not read it as a list")
+  check(answer.total == 4000, "lost the count: " .. tostring(answer.total))
+  -- everything a base owns, formatted and kept, is what ended the computer
+  check(#answer.rows <= 250, "kept " .. #answer.rows .. " rows of it")
+end)
+
+-- A bar says how full something is. Where the alert on it sits says how full it
+-- has to get before anything happens, which is the other half of the question.
+test("an alert threshold is marked on the bar", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local tank = tankAt("2,000,000")
+  oc.components = { tank }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { { name = "diesel low", address = tank.address,
+      label = "Bio Diesel", below = 1000000, above = 3000000, beep = false } },
+  })
+
+  oc.run("ocwatch")
+  local row = oc.frame():match("[^\n]*Bio Diesel[^\n]*") or ""
+  -- the mark sits inside the bar, not beside it
+  check(row:find("\226\148\130") ~= nil, "no threshold marked on the bar: " .. row)
+end)
+
+test("the marks travel to the tablet with the reading", function()
+  oc.components = {}
+  local net = require("ocnet")
+  local config = { alerts = { { name = "diesel low", label = "Bio Diesel",
+    below = 1000000, above = 3000000 } } }
+  local report = net.report(config, { {
+    entry = {},
+    name = "Super Tank",
+    readings = { { kind = "gauge", label = "Bio Diesel", value = 2000000,
+      max = 4000000, current = "2,000,000", maximum = "4,000,000", unit = "L" } },
+  } })
+
+  local marks = report.cards[1].gauges[1].marks
+  check(marks ~= nil and #marks == 2, "sent " .. #(marks or {}) .. " marks")
+  check(marks and marks[1] == 0.25, "the floor is at " .. tostring(marks and marks[1]))
+end)
+
+-- A pipe is drained by what is downstream and refilled from the tank, so what
+-- is in it barely moves however much goes through. Adding up only the falls
+-- measures what left, which is the usage of that one pipe.
+test("a pipe can count only what leaves it", function()
+  oc.width, oc.height = 140, 30
+  oc.reset()
+  local levels = { 19200, 18560, 19200, 18560, 19200, 18560, 19200, 18560 }
+  local step = 0
+  local pipe = {
+    address = "5150000e-0000-0000-0000-000000000003",
+    kind = "transposer",
+    methods = { getTankCount = "f", getFluidInTank = "f" },
+    values = {
+      getTankCount = function(side)
+        if side == 3 then
+          return 1
+        end
+        return 0
+      end,
+      getFluidInTank = function(side)
+        if side ~= 3 then
+          return {}
+        end
+        step = step + 1
+        return { { name = "steam", label = "Steam",
+          amount = levels[(step - 1) % #levels + 1], capacity = 19200 } }
+      end,
+    },
+  }
+  oc.components = { pipe }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = { [pipe.address .. "/3"] = "S1" },
+    watch = { { address = pipe.address, side = 3, hidden = {}, usage = true } },
+    alerts = {},
+  })
+
+  for _ = 1, 400 do
+    oc.push("nothing in particular")
+  end
+  oc.run("ocwatch")
+
+  -- the level ends where it began, so counting overall change says nothing at
+  -- all, while counting what left says how much steam the pipe carried
+  local row = oc.frame():match("[^\n]*Steam[^\n]*") or ""
+  check(row:find("%-%d[%d,]* L/s") ~= nil, "no usage on a pipe that carried steam: " .. row)
+end)
