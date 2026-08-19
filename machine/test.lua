@@ -5,10 +5,22 @@
 
 local oc = dofile("machine/oc.lua")
 
--- install() redirects the global print into the fake screen, so the harness
--- keeps its own handle on the real one to report with
+-- install() redirects the global print into the fake screen, and io.open into the
+-- fake filesystem, so the harness keeps its own handles on the real ones: one to
+-- report with, one to read the repository with
 local say = print
+local openReal = io.open
 oc.install()
+
+local function declaredVersion(path)
+  local file = openReal(path, "r")
+  if not file then
+    return nil
+  end
+  local text = file:read("*a") or ""
+  file:close()
+  return text:match('VERSION%s*=%s*"([^"]+)"')
+end
 
 local show = (arg and arg[1] == "--show") or false
 
@@ -179,7 +191,7 @@ test("ocup installs missing programs", function()
   oc.components = { INTERNET }
   oc.respond = serveProgram({
     ["manifest.txt"] = MANIFEST,
-    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
     ["lib/oclib.lua"] = program("0.1.0"),
@@ -3653,4 +3665,109 @@ test("moving a machine twice moves the same machine twice", function()
   check(watch[1] and watch[1].address == tank.address,
     "the second press moved something else: the tank is at position "
       .. (watch[2] and watch[2].address == tank.address and "2" or "3"))
+end)
+
+-------------------------------------------------------------------------------
+-- ocup only fetches what changed
+
+-- The manifest carries the version each file declares, so a copy already saying
+-- the same thing is never downloaded to find out it was the same.
+-- ocup is named at the version the file really is, so these stand for a
+-- computer that is already current rather than one that is behind
+local VERSIONED = table.concat({
+  "lib/oclib.lua 0.1.0",
+  "lib/ocgt.lua 0.1.0",
+  "lib/oclogistics.lua 0.1.0",
+  "programs/ocup.lua " .. declaredVersion("programs/ocup.lua"),
+  "programs/ocdebug.lua 0.2.0",
+  "programs/ocdump.lua 0.1.0",
+}, "\n")
+
+local function fetched()
+  local paths = {}
+  for _, request in ipairs(oc.requests) do
+    local path = request.url:match("[^/]+%.lua")
+    if path then
+      paths[#paths + 1] = path
+    end
+  end
+  return table.concat(paths, ",")
+end
+
+test("ocup does not fetch a file whose version it already has", function()
+  oc.components = { INTERNET }
+  -- everything already installed at the version the manifest names
+  oc.files["/bin/ocup.lua"] = program(declaredVersion("programs/ocup.lua"))
+  oc.files["/bin/ocdebug.lua"] = program("0.2.0")
+  oc.files["/bin/ocdump.lua"] = program("0.1.0")
+  oc.files["/lib/oclib.lua"] = program("0.1.0")
+  oc.files["/lib/ocgt.lua"] = program("0.1.0")
+  oc.files["/lib/oclogistics.lua"] = program("0.1.0")
+  oc.respond = serveProgram({
+    ["manifest.txt"] = VERSIONED,
+    ["programs/ocup.lua"] = program("0.3.0"),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+
+  local ok, reason = oc.run("ocup")
+  check(ok, "ocup crashed: " .. tostring(reason))
+  -- the commit and the manifest, and nothing else
+  check(fetched() == "", "downloaded " .. fetched())
+  check(contains(oc.printed(), "up to date"), "did not say it was up to date")
+end)
+
+test("ocup fetches the one file whose version moved", function()
+  oc.components = { INTERNET }
+  oc.files["/bin/ocup.lua"] = program(declaredVersion("programs/ocup.lua"))
+  oc.files["/bin/ocdebug.lua"] = program("0.1.0") -- behind the manifest
+  oc.files["/bin/ocdump.lua"] = program("0.1.0")
+  oc.files["/lib/oclib.lua"] = program("0.1.0")
+  oc.files["/lib/ocgt.lua"] = program("0.1.0")
+  oc.files["/lib/oclogistics.lua"] = program("0.1.0")
+  oc.respond = serveProgram({
+    ["manifest.txt"] = VERSIONED,
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+
+  oc.run("ocup")
+  check(fetched() == "ocdebug.lua", "downloaded " .. fetched())
+  check(oc.files["/bin/ocdebug.lua"] == program("0.2.0"), "did not install the new one")
+end)
+
+test("ocup still fetches everything when the manifest names no versions", function()
+  oc.components = { INTERNET }
+  oc.files["/bin/ocdebug.lua"] = program("0.2.0")
+  oc.respond = serveEverything()
+
+  oc.run("ocup")
+  -- a manifest written before versions were in it has to keep working
+  check(fetched():find("ocdebug%.lua") ~= nil, "skipped a file it could not compare")
+end)
+
+test("the manifest says the version every file declares", function()
+  local wrong = {}
+  for line in io.lines("manifest.txt") do
+    local path, stated = line:match("^%s*(%S+)%s+(%S+)%s*$")
+    if not path then
+      wrong[#wrong + 1] = "no version on: " .. line
+    else
+      local declared = declaredVersion(path)
+      if declared ~= stated then
+        wrong[#wrong + 1] = path .. " says " .. tostring(declared)
+          .. ", manifest says " .. stated
+      end
+    end
+  end
+  -- ocup trusts this to decide what to download, so a stale line here means a
+  -- file that never updates. Run: nix develop -c lua machine/manifest.lua
+  check(#wrong == 0, table.concat(wrong, "; "))
 end)

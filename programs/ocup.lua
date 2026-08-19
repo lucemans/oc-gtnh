@@ -193,16 +193,26 @@ local function describe(existing, contents)
   return shown(version), "changed", CYAN
 end
 
+-- A manifest line is a path and the version that file declares. The version is
+-- what makes an update quick: a file whose installed copy already says the same
+-- thing is not downloaded at all, so a run with nothing to do costs two
+-- requests rather than one per file.
 local function parseManifest(text)
   local files = {}
   for entry in text:gmatch("[^\n]+") do
-    local source = entry:match("^%s*(%S+)%s*$")
+    local source, version = entry:match("^%s*(%S+)%s*(%S*)%s*$")
     if source then
       -- both captures are bound here: "a and a:match()" would keep only the first
       local folder, name = source:match("^(%w+)/(.+)$")
       local destination = folder and DESTINATIONS[folder]
       if destination then
-        files[#files + 1] = { source = source, target = destination .. name }
+        files[#files + 1] = {
+          source = source,
+          target = destination .. name,
+          -- a manifest written before versions were in it says nothing here,
+          -- and then every file is fetched, which is what used to happen
+          latest = version ~= "" and version or nil,
+        }
       end
     end
   end
@@ -398,25 +408,31 @@ end
 -- ocup updates itself first and hands over to the new copy, so the rest of the
 -- run already uses the behaviour that was just downloaded
 if not reloaded then
+  local self = nil
   for _, file in ipairs(FILES) do
     if file.source == SELF then
-      local current = readFile(file.target)
-      local latest = download(urlFor(file.source))
-      if latest and latest ~= current then
-        term.clearLine()
-        write("  " .. file.source .. "  ", WHITE)
-        local version, status, color = describe(current, latest)
-        write(version .. "  " .. status .. "\n", color)
-        if writeFile(file.target, latest) then
-          write("  reloading into the new ocup\n\n", CYAN)
-          paint(WHITE)
-          local chunk = loadfile(file.target)
-          if chunk then
-            return chunk("--reloaded")
-          end
+      self = file
+    end
+  end
+
+  -- the manifest says what version is out there, so a copy that already says
+  -- the same is not downloaded to find out it was the same
+  if self and self.latest ~= VERSION then
+    local current = readFile(self.target)
+    local latest = download(urlFor(self.source))
+    if latest and latest ~= current then
+      term.clearLine()
+      write("  " .. self.source .. "  ", WHITE)
+      local version, status, color = describe(current, latest)
+      write(version .. "  " .. status .. "\n", color)
+      if writeFile(self.target, latest) then
+        write("  reloading into the new ocup\n\n", CYAN)
+        paint(WHITE)
+        local chunk = loadfile(self.target)
+        if chunk then
+          return chunk("--reloaded")
         end
       end
-      break
     end
   end
 end
@@ -540,17 +556,26 @@ showBar("fetching")
 local failure = nil
 for _, file in ipairs(FILES) do
   if file.wanted then
-    repaint(file.line, rowText(file, "fetching"), CYAN)
-    local contents, reason = download(urlFor(file.source))
-    if not contents then
-      repaint(file.line, rowText(file, "failed  " .. reason), RED)
-      failure = file
-      break
+    -- The manifest already said which version is out there. A file whose
+    -- installed copy declares the same one is not fetched at all, which is what
+    -- makes a run with nothing to do cost two requests rather than one a file.
+    if file.latest and file.existing and versionOf(file.existing) == file.latest then
+      repaint(file.line, rowText(file, "up to date"), DIM)
+      done = done + 1
+      showBar("checking")
+    else
+      repaint(file.line, rowText(file, "fetching"), CYAN)
+      local contents, reason = download(urlFor(file.source))
+      if not contents then
+        repaint(file.line, rowText(file, "failed  " .. reason), RED)
+        failure = file
+        break
+      end
+      file.contents = contents
+      repaint(file.line, rowText(file, "fetched"), DIM)
+      done = done + 1
+      showBar("fetching")
     end
-    file.contents = contents
-    repaint(file.line, rowText(file, "fetched"), DIM)
-    done = done + 1
-    showBar("fetching")
   end
 end
 
@@ -582,6 +607,11 @@ for _, file in ipairs(FILES) do
         failed = failed + 1
       end
     end
+  elseif not file.contents then
+    -- never fetched, because the version on disk already matched
+    version, status, color = file.version, "up to date", DIM
+    done = done + 1
+    showBar("installing")
   else
     -- overwriting a running program is safe: OpenOS loads the whole file first
     local ok, writeReason = writeFile(file.target, file.contents)
