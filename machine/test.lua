@@ -3226,3 +3226,47 @@ test("ocitems says so when no pipe is attached", function()
   oc.run("ocitems")
   check(contains(oc.frame(), "no Logistics Pipe attached"), "did not say the list was empty")
 end)
+
+-- A computer with nothing configured has no row to select: both sections of the
+-- editor are empty, so every row is a heading. Reading that as "the user asked
+-- to leave" made adding the very first machine quit to the shell.
+test("the first machine can be added on a computer with nothing configured", function()
+  oc.width, oc.height = 160, 50
+  oc.reset()
+  local reader = transposer(3, 12000)
+  oc.components = { reader }
+
+  local function press(code)
+    oc.push("key_down", "keyboard", 0, code)
+  end
+  press(0x32)   -- m, watch a machine
+  press(0x1C)   -- enter, take the transposer
+  press(0x1C)   -- enter, take the side its tank is on
+  press(0x10)   -- q, done
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  local watch = saved and saved.watch or {}
+  check(#watch == 1, "watching " .. #watch .. " machines after adding one")
+  check(watch[1] and watch[1].side == 3, "did not record which face the tank is on")
+  -- and it should have gone on to draw the dashboard rather than exiting
+  check(contains(oc.frame(), "Creosote Oil"), "never reached the dashboard")
+end)
+
+test("ocdebug shows the tanks around a transposer, not just the transposer", function()
+  oc.width, oc.height = 160, 40
+  oc.reset()
+  oc.components = { transposer(3, 12000) }
+
+  local ok, reason = oc.run("ocdebug")
+  check(ok, "ocdebug crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  -- the transposer is a way of reaching a block that has no component of its
+  -- own, so the tank is the thing worth seeing
+  check(contains(frame, "south"), "did not say which face the tank is on")
+  check(contains(frame, "Creosote Oil"), "did not name the fluid behind it")
+  check(contains(frame, "12,000 / 64,000"), "did not show the level")
+end)

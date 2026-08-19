@@ -5,11 +5,12 @@ local event = require("event")
 local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
+local tank = require("octank")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.9.0"
+local VERSION = "0.10.0"
 
 -- indirect component calls block until the next server tick, so re-reading a
 -- machine costs real time; two seconds keeps the readings live without
@@ -149,6 +150,24 @@ local function detailLines(entry)
 
   local before = #lines
   summaryLines(readings, add)
+
+  -- A transposer is a way of reaching a block that has no component of its own,
+  -- so what is worth seeing is the tanks around it rather than the transposer.
+  -- Which faces have one is asked once per component, since that is six calls
+  -- and the answer does not change while the world runs.
+  if tank.isReader(entry.kind) then
+    if entry.tankSides == nil then
+      entry.tankSides = tank.sides(entry.address)
+    end
+    if #entry.tankSides == 0 then
+      add("no tank on any side of it", DIM)
+    end
+    for _, side in ipairs(entry.tankSides) do
+      add(tank.sideName(side), DIM)
+      summaryLines(tank.inspect(entry.address, side, config).readings, add)
+    end
+  end
+
   if #lines > before then
     add("")
   end

@@ -18,7 +18,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.12.0"
+local VERSION = "0.13.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -536,8 +536,10 @@ local function menu(title, rows, buttons)
       end
     end
 
-    if #rows == 0 then
-      paint.write(3, 3, fit("nothing here yet", W - 3), DIM, BG)
+    -- a screen of nothing but headings has nothing to land on, and saying so is
+    -- better than an empty space under each one
+    if not rows[cursor] then
+      paint.write(3, H - 2, fit("nothing here yet", W - 3), DIM, BG)
     end
 
     -- where each button sits, so a click can be matched back to one
@@ -997,25 +999,25 @@ local function editor()
         { label = "remove", code = keyboard.keys.d },
         { label = "done", code = keyboard.keys.q } })
 
-    if not row then
-      return
-    end
-
+    -- The action is read before the row, because on a computer with nothing
+    -- configured there is no row: both sections are empty, every row is a
+    -- heading, and nothing can be selected. Treating that as "the user asked to
+    -- leave" is what made adding the very first machine quit to the shell.
     if code == keyboard.keys.q then
       return
     elseif code == keyboard.keys.m then
       addMachine()
     elseif code == keyboard.keys.n then
       addAlert()
-    elseif code == keyboard.keys.d and row.what == "machine" then
+    elseif row and code == keyboard.keys.d and row.what == "machine" then
       table.remove(config.watch, row.index)
       save()
-    elseif code == keyboard.keys.d and row.what == "alert" then
+    elseif row and code == keyboard.keys.d and row.what == "alert" then
       table.remove(config.alerts, row.index)
       save()
-    elseif code == keyboard.keys.enter and row.what == "machine" then
+    elseif row and code == keyboard.keys.enter and row.what == "machine" then
       editMachine(row.entry)
-    elseif code == keyboard.keys.enter and row.what == "alert" then
+    elseif row and code == keyboard.keys.enter and row.what == "alert" then
       editAlert(row.alert)
     end
   end

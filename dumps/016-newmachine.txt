@@ -1,0 +1,775 @@
+ocdump v0.7.0
+uptime      324.2s
+os          OpenOS 1.8.9  Lua 5.3
+computer    b4c1e159-772b-46a1-8bc6-78ed545ddebc
+memory      643601 free of 1048576
+energy      3099 of 3100
+
+== devices ==
+0bfd6db0-53c1-4388-b60a-58cb78276eff  {description="Memory bank",vendor="MightyPirates GmbH & Co. KG",clock="1500",class="memory",product="Multipurpose RAM Type"}
+3e027115-bf62-4289-8543-7c9c86851f6a  {description="Keyboard",vendor="MightyPirates GmbH & Co. KG",product="Fancytyper MX-Stone",class="input"}
+4d177e58-b594-4bae-bec6-a987520640d1  {description="Battery",vendor="MightyPirates GmbH & Co. KG",class="power",product="CapBank3x",capacity="8800.0"}
+6e5306f3-69eb-4e6f-9fd3-0b50c998c006  {description="Transposer",vendor="MightyPirates GmbH & Co. KG",product="TP4k-iX",class="generic"}
+7457c040-471d-4ae9-b2cf-03a06a19f1ed  {description="APU",vendor="MightyPirates GmbH & Co. KG",clock="1500+2560/2560/320/5120/1280/2560",class="processor",capacity="8000",product="FlexiArch 3 Processor (Builtin Graphics)",width="8"}
+74850cce-f2d8-46f5-badf-6af921fd2a66  {size="65536",vendor="MightyPirates GmbH & Co. KG",clock="260/260/100",class="volume",capacity="67108",product="MPFS.21.6",description="Filesystem"}
+79fc639b-f050-4933-824b-4b77d29faa17  {description="Transposer",vendor="MightyPirates GmbH & Co. KG",product="TP4k-iX",class="generic"}
+876f9920-fb89-479e-9e9e-dbaa6d502f0c  {description="Text buffer",vendor="MightyPirates GmbH & Co. KG",class="display",capacity="8000",product="Text Screen V0",width="8"}
+8c4c446f-acc4-4457-9586-29bf7501b8b7  {description="Internet modem",vendor="MightyPirates GmbH & Co. KG",product="SuperLink X-D4NK",class="communication"}
+9543a4b5-2aa4-4650-8e80-e45ed6e14249  {size="4194304",vendor="MightyPirates GmbH & Co. KG",clock="200/200/80",class="volume",capacity="4294967",product="MPFS.21.6",description="Filesystem"}
+ac283323-8c10-4269-a886-01a19cb12038  {description="Transposer",vendor="MightyPirates GmbH & Co. KG",product="TP4k-iX",class="generic"}
+b4c1e159-772b-46a1-8bc6-78ed545ddebc  {description="Computer",vendor="MightyPirates GmbH & Co. KG",class="system",product="Blocker",capacity="10"}
+c10f28ca-794c-438c-8b01-df5a61484924  {description="Graphics controller",vendor="MightyPirates GmbH & Co. KG",clock="2560/2560/320/5120/1280/2560",class="display",capacity="8000",product="MPG3000 GTZ",width="8"}
+c3746e04-f239-472d-a1b9-da938f13230e  {size="4096",vendor="MightyPirates GmbH & Co. KG",class="memory",capacity="4096",product="FlashStick2k",description="EEPROM"}
+f5cde3e2-649e-4f48-b701-415cb2e1ee22  {description="Transposer",vendor="MightyPirates GmbH & Co. KG",product="TP4k-iX",class="generic"}
+ffa75f42-8c41-4c9e-870a-3c19ac877a66  {description="Floppy disk drive",vendor="MightyPirates GmbH & Co. KG",product="Spinner 520p1",class="disk"}
+
+== index ==
+computer           b4c1e159  
+disk_drive         ffa75f42  
+eeprom             c3746e04  
+filesystem         74850cce  
+filesystem         9543a4b5  
+gpu                7457c040  
+gpu                c10f28ca  
+internet           8c4c446f  
+keyboard           3e027115  
+screen             876f9920  
+transposer         6e5306f3  
+transposer         79fc639b  
+transposer         ac283323  
+transposer         f5cde3e2  
+
+== components (14) ==
+
+-- computer  b4c1e159-772b-46a1-8bc6-78ed545ddebc  slot -1
+  beep  [indirect]
+    doc: function([frequency:string or number[, duration:number]]) -- Plays a tone, useful to alert users via audible feedback.
+  getDeviceInfo  [indirect]
+    doc: function():table -- Collect information on all connected devices.
+    value: table
+      ["0bfd6db0-53c1-4388-b60a-58cb78276eff"] = table
+        class = "memory"
+        clock = "1500"
+        description = "Memory bank"
+        product = "Multipurpose RAM Type"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["3e027115-bf62-4289-8543-7c9c86851f6a"] = table
+        class = "input"
+        description = "Keyboard"
+        product = "Fancytyper MX-Stone"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["4d177e58-b594-4bae-bec6-a987520640d1"] = table
+        capacity = "8800.0"
+        class = "power"
+        description = "Battery"
+        product = "CapBank3x"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["6e5306f3-69eb-4e6f-9fd3-0b50c998c006"] = table
+        class = "generic"
+        description = "Transposer"
+        product = "TP4k-iX"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["7457c040-471d-4ae9-b2cf-03a06a19f1ed"] = table
+        capacity = "8000"
+        class = "processor"
+        clock = "1500+2560/2560/320/5120/1280/2560"
+        description = "APU"
+        product = "FlexiArch 3 Processor (Builtin Graphics)"
+        vendor = "MightyPirates GmbH & Co. KG"
+        width = "8"
+      ["74850cce-f2d8-46f5-badf-6af921fd2a66"] = table
+        capacity = "67108"
+        class = "volume"
+        clock = "260/260/100"
+        description = "Filesystem"
+        product = "MPFS.21.6"
+        size = "65536"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["79fc639b-f050-4933-824b-4b77d29faa17"] = table
+        class = "generic"
+        description = "Transposer"
+        product = "TP4k-iX"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["876f9920-fb89-479e-9e9e-dbaa6d502f0c"] = table
+        capacity = "8000"
+        class = "display"
+        description = "Text buffer"
+        product = "Text Screen V0"
+        vendor = "MightyPirates GmbH & Co. KG"
+        width = "8"
+      ["8c4c446f-acc4-4457-9586-29bf7501b8b7"] = table
+        class = "communication"
+        description = "Internet modem"
+        product = "SuperLink X-D4NK"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["9543a4b5-2aa4-4650-8e80-e45ed6e14249"] = table
+        capacity = "4294967"
+        class = "volume"
+        clock = "200/200/80"
+        description = "Filesystem"
+        product = "MPFS.21.6"
+        size = "4194304"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["ac283323-8c10-4269-a886-01a19cb12038"] = table
+        class = "generic"
+        description = "Transposer"
+        product = "TP4k-iX"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["b4c1e159-772b-46a1-8bc6-78ed545ddebc"] = table
+        capacity = "10"
+        class = "system"
+        description = "Computer"
+        product = "Blocker"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["c10f28ca-794c-438c-8b01-df5a61484924"] = table
+        capacity = "8000"
+        class = "display"
+        clock = "2560/2560/320/5120/1280/2560"
+        description = "Graphics controller"
+        product = "MPG3000 GTZ"
+        vendor = "MightyPirates GmbH & Co. KG"
+        width = "8"
+      ["c3746e04-f239-472d-a1b9-da938f13230e"] = table
+        capacity = "4096"
+        class = "memory"
+        description = "EEPROM"
+        product = "FlashStick2k"
+        size = "4096"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["f5cde3e2-649e-4f48-b701-415cb2e1ee22"] = table
+        class = "generic"
+        description = "Transposer"
+        product = "TP4k-iX"
+        vendor = "MightyPirates GmbH & Co. KG"
+      ["ffa75f42-8c41-4c9e-870a-3c19ac877a66"] = table
+        class = "disk"
+        description = "Floppy disk drive"
+        product = "Spinner 520p1"
+        vendor = "MightyPirates GmbH & Co. KG"
+  getProgramLocations  [indirect]
+    doc: function():table -- Returns a map of program name to disk label for known programs.
+    value: table
+      [1] = table
+        [1] = "dig"
+        [2] = "dig"
+      [2] = table
+        [1] = "oppm"
+        [2] = "oppm"
+      [3] = table
+        [1] = "md5sum"
+        [2] = "data"
+      [4] = table
+        [1] = "tape"
+        [2] = "tape"
+      [5] = table
+        [1] = "maze"
+        [2] = "maze"
+      [6] = table
+        [1] = "sha256sum"
+        [2] = "data"
+      [7] = table
+        [1] = "irc"
+        [2] = "irc"
+      [8] = table
+        [1] = "deflate"
+        [2] = "data"
+      [9] = table
+        [1] = "gpg"
+        [2] = "data"
+      [10] = table
+        [1] = "explode"
+        [2] = "explode"
+      [11] = table
+        [1] = "ifconfig"
+        [2] = "network"
+      [12] = table
+        [1] = "ping"
+        [2] = "network"
+      [13] = table
+        [1] = "base64"
+        [2] = "data"
+      [14] = table
+        [1] = "route"
+        [2] = "network"
+      [15] = table
+        [1] = "inflate"
+        [2] = "data"
+      [16] = table
+        [1] = "arp"
+        [2] = "network"
+      [17] = table
+        [1] = "opl-flash"
+        [2] = "openloader"
+      [18] = table
+        [1] = "build"
+        [2] = "builder"
+      [19] = table
+        [1] = "refuel"
+        [2] = "generator"
+  isRunning
+    doc: function():boolean -- Returns whether the computer is running.
+    value: true
+  start  [indirect]
+    doc: function():boolean -- Starts the computer. Returns true if the state changed.
+  stop  [indirect]
+    doc: function():boolean -- Stops the computer. Returns true if the state changed.
+
+-- disk_drive  ffa75f42-8c41-4c9e-870a-3c19ac877a66  slot -1
+  eject  [indirect]
+    doc: function([velocity:number]):boolean -- Eject the currently present medium from the drive.
+  isEmpty  [indirect]
+    doc: function():boolean -- Checks whether some medium is currently in the drive.
+    value: true
+  media  [indirect]
+    doc: function(): string -- Return the internal floppy disk address
+
+-- eeprom  c3746e04-f239-472d-a1b9-da938f13230e  slot 9
+  get
+    doc: function():string -- Get the currently stored byte array.
+    value: local init do local component_invoke = component.invoke local function boot_invoke(address, method, ...) local result = table.pack(pcall(component_invoke, address, method, ...)) if not result[1] then return nil, result[2] else return table.unpack(result, 2, result.n) end end -- backwards compatibility, may remove later local eeprom = component.list("eeprom")() computer.getBootAddress = function() return boot_invoke(eeprom, "getData") end computer.setBootAddress = function(address) return boot_invoke(eeprom, "setData", address) end do local screen = component.list("screen")() local gpu = component.list("gpu")() if gpu and screen then boot_invoke(gpu, "bind", screen) end end local function tryLoadFrom(address) local handle, reason = boot_invoke(address, "open", "/init.lua") if not handle then return nil, reason end local buffer = "" repeat local data, reason = boot_invoke(address, "read", handle, math.maxinteger or math.huge) if not data and reason then return nil, reason end buffer = buffer .. (data or "") until not data boot_invoke(address, "close", handle) return load(buffer, "=init") end local reason if computer.getBootAddress() then init, reason = tryLoadFrom(computer.getBootAddress()) end if not init then computer.setBootAddress() for address in component.list("filesystem") do init, reason = tryLoadFrom(address) if init then computer.setBootAddress(address) break end end end if not init then error("no bootable medium found" .. (reason and (": " .. tostring(reason)) or ""), 0) end computer.beep(1000, 0.2) end return init() 
+  getChecksum
+    doc: function():string -- Get the checksum of the data on this EEPROM.
+    value: 0674306c
+  getData
+    doc: function():string -- Get the currently stored byte array.
+    value: 9543a4b5-2aa4-4650-8e80-e45ed6e14249
+  getDataSize
+    doc: function():number -- Get the storage capacity of this EEPROM.
+    value: 256
+  getLabel
+    doc: function():string -- Get the label of the EEPROM.
+    value: EEPROM (Lua BIOS)
+  getSize
+    doc: function():number -- Get the storage capacity of this EEPROM.
+    value: 4096
+  makeReadonly
+    doc: function(checksum:string):boolean -- Make this EEPROM readonly if it isn't already. This process cannot be reversed!
+  set  [indirect]
+    doc: function(data:string) -- Overwrite the currently stored byte array.
+  setData  [indirect]
+    doc: function(data:string) -- Overwrite the currently stored byte array.
+  setLabel  [indirect]
+    doc: function(data:string):string -- Set the label of the EEPROM.
+
+-- filesystem  74850cce-f2d8-46f5-badf-6af921fd2a66  slot -1
+  close
+    doc: function(handle:userdata) -- Closes an open file descriptor with the specified handle.
+  exists
+    doc: function(path:string):boolean -- Returns whether an object exists at the specified absolute path in the file system.
+  getLabel
+    doc: function():string -- Get the current label of the drive.
+    value: tmpfs
+  isDirectory
+    doc: function(path:string):boolean -- Returns whether the object at the specified absolute path in the file system is a directory.
+    error: bad arguments #1 (string expected, got no value)
+  isReadOnly
+    doc: function():boolean -- Returns whether the file system is read-only.
+    value: false
+  lastModified
+    doc: function(path:string):number -- Returns the (real world) timestamp of when the object at the specified absolute path in the file system was modified.
+  list  [indirect]
+    doc: function(path:string):table -- Returns a list of names of objects in the directory at the specified absolute path in the file system.
+  makeDirectory  [indirect]
+    doc: function(path:string):boolean -- Creates a directory at the specified absolute path in the file system. Creates parent directories, if necessary.
+  open
+    doc: function(path:string[, mode:string='r']):userdata -- Opens a new file descriptor and returns its handle.
+  read
+    doc: function(handle:userdata, count:number):string or nil -- Reads up to the specified amount of data from an open file descriptor with the specified handle. Returns nil when EOF is reached.
+  remove  [indirect]
+    doc: function(path:string):boolean -- Removes the object at the specified absolute path in the file system.
+  rename  [indirect]
+    doc: function(from:string, to:string):boolean -- Renames/moves an object from the first specified absolute path in the file system to the second.
+  seek
+    doc: function(handle:userdata, whence:string, offset:number):number -- Seeks in an open file descriptor with the specified handle. Returns the new pointer position.
+  setLabel  [indirect]
+    doc: function(value:string):string -- Sets the label of the drive. Returns the new value, which may be truncated.
+  size
+    doc: function(path:string):number -- Returns the size of the object at the specified absolute path in the file system.
+  spaceTotal
+    doc: function():number -- The overall capacity of the file system, in bytes.
+  spaceUsed
+    doc: function():number -- The currently used capacity of the file system, in bytes.
+  write
+    doc: function(handle:userdata, value:string):boolean -- Writes the specified data to an open file descriptor with the specified handle.
+
+-- filesystem  9543a4b5-2aa4-4650-8e80-e45ed6e14249  slot 5
+  close
+    doc: function(handle:userdata) -- Closes an open file descriptor with the specified handle.
+  exists
+    doc: function(path:string):boolean -- Returns whether an object exists at the specified absolute path in the file system.
+  getLabel
+    doc: function():string -- Get the current label of the drive.
+    value: OpenOS
+  isDirectory
+    doc: function(path:string):boolean -- Returns whether the object at the specified absolute path in the file system is a directory.
+    error: bad arguments #1 (string expected, got no value)
+  isReadOnly
+    doc: function():boolean -- Returns whether the file system is read-only.
+    value: false
+  lastModified
+    doc: function(path:string):number -- Returns the (real world) timestamp of when the object at the specified absolute path in the file system was modified.
+  list  [indirect]
+    doc: function(path:string):table -- Returns a list of names of objects in the directory at the specified absolute path in the file system.
+  makeDirectory  [indirect]
+    doc: function(path:string):boolean -- Creates a directory at the specified absolute path in the file system. Creates parent directories, if necessary.
+  open
+    doc: function(path:string[, mode:string='r']):userdata -- Opens a new file descriptor and returns its handle.
+  read
+    doc: function(handle:userdata, count:number):string or nil -- Reads up to the specified amount of data from an open file descriptor with the specified handle. Returns nil when EOF is reached.
+  remove  [indirect]
+    doc: function(path:string):boolean -- Removes the object at the specified absolute path in the file system.
+  rename  [indirect]
+    doc: function(from:string, to:string):boolean -- Renames/moves an object from the first specified absolute path in the file system to the second.
+  seek
+    doc: function(handle:userdata, whence:string, offset:number):number -- Seeks in an open file descriptor with the specified handle. Returns the new pointer position.
+  setLabel  [indirect]
+    doc: function(value:string):string -- Sets the label of the drive. Returns the new value, which may be truncated.
+  size
+    doc: function(path:string):number -- Returns the size of the object at the specified absolute path in the file system.
+  spaceTotal
+    doc: function():number -- The overall capacity of the file system, in bytes.
+  spaceUsed
+    doc: function():number -- The currently used capacity of the file system, in bytes.
+  write
+    doc: function(handle:userdata, value:string):boolean -- Writes the specified data to an open file descriptor with the specified handle.
+
+-- gpu  7457c040-471d-4ae9-b2cf-03a06a19f1ed  slot 8
+  allocateBuffer
+    doc: function([width: number, height: number]): number -- allocates a new buffer with dimensions width*height (defaults to max resolution) and appends it to the buffer list. Returns the index of the new buffer and returns nil with an error message on failure. A buffer can be allocated even when there is no screen bound to this gpu. Index 0 is always reserved for the screen and thus the lowest index of an allocated buffer is always 1.
+  bind  [indirect]
+    doc: function(address:string[, reset:boolean=true]):boolean -- Binds the GPU to the screen with the specified address and resets screen settings if `reset` is true.
+  bitblt
+    doc: function([dst: number, col: number, row: number, width: number, height: number, src: number, fromCol: number, fromRow: number]):boolean -- bitblt from buffer to screen. All parameters are optional. Writes to `dst` page in rectangle `x, y, width, height`, defaults to the bound screen and its viewport. Reads data from `src` page at `fx, fy`, default is the active page from position 1, 1
+  buffers
+    doc: function(): number -- Returns an array of indexes of the allocated buffers
+  copy
+    doc: function(x:number, y:number, width:number, height:number, tx:number, ty:number):boolean -- Copies a portion of the screen from the specified location with the specified size by the specified translation.
+  fill
+    doc: function(x:number, y:number, width:number, height:number, char:string):boolean -- Fills a portion of the screen at the specified position with the specified size with the specified character.
+  freeAllBuffers
+    doc: function(): number -- Closes all buffers and returns the count. If the active buffer is closed, index moves to 0
+  freeBuffer
+    doc: function(index: number): boolean -- Closes buffer at `index`. Returns true if a buffer closed. If the current buffer is closed, index moves to 0
+  freeMemory
+    doc: function(): number -- returns the total free memory not allocated to buffers. This does not include the screen.
+  get
+    doc: function(x:number, y:number):string, number, number, number or nil, number or nil -- Get the value displayed on the screen at the specified index, as well as the foreground and background color. If the foreground or background is from the palette, returns the palette indices as fourth and fifth results, else nil, respectively.
+    error: bad arguments #1 (integer expected, got no value)
+  getActiveBuffer
+    doc: function(): number -- returns the index of the currently selected buffer. 0 is reserved for the screen. Can return 0 even when there is no screen
+    value: 0
+  getBackground
+    doc: function():number, boolean -- Get the current background color and whether it's from the palette or not.
+    value: 0, false
+  getBufferSize
+    doc: function(index: number): number, number -- returns the buffer size at index. Returns the screen resolution for index 0. returns nil for invalid indexes
+    value: 160, 50
+  getDepth
+    doc: function():number -- Returns the currently set color depth.
+    value: 8
+  getForeground
+    doc: function():number, boolean -- Get the current foreground color and whether it's from the palette or not.
+    value: 16777215, false
+  getPaletteColor
+    doc: function(index:number):number -- Get the palette color at the specified palette index.
+    error: bad arguments #1 (integer expected, got no value)
+  getResolution
+    doc: function():number, number -- Get the current screen resolution.
+    value: 160, 50
+  getScreen
+    doc: function():string -- Get the address of the screen the GPU is currently bound to.
+    value: 876f9920-fb89-479e-9e9e-dbaa6d502f0c
+  getViewport
+    doc: function():number, number -- Get the current viewport resolution.
+    value: 160, 50
+  maxDepth
+    doc: function():number -- Get the maximum supported color depth.
+  maxResolution
+    doc: function():number, number -- Get the maximum screen resolution.
+  set
+    doc: function(x:number, y:number, value:string[, vertical:boolean]):boolean -- Plots a string value to the screen at the specified position. Optionally writes the string vertically.
+  setActiveBuffer
+    doc: function(index: number): number -- Sets the active buffer to `index`. 1 is the first vram buffer and 0 is reserved for the screen. returns nil for invalid index (0 is always valid)
+  setBackground
+    doc: function(value:number[, palette:boolean]):number, number or nil -- Sets the background color to the specified value. Optionally takes an explicit palette index. Returns the old value and if it was from the palette its palette index.
+  setDepth  [indirect]
+    doc: function(depth:number):number -- Set the color depth. Returns the previous value.
+  setForeground
+    doc: function(value:number[, palette:boolean]):number, number or nil -- Sets the foreground color to the specified value. Optionally takes an explicit palette index. Returns the old value and if it was from the palette its palette index.
+  setPaletteColor
+    doc: function(index:number, color:number):number -- Set the palette color at the specified palette index. Returns the previous value.
+  setResolution  [indirect]
+    doc: function(width:number, height:number):boolean -- Set the screen resolution. Returns true if the resolution changed.
+  setViewport  [indirect]
+    doc: function(width:number, height:number):boolean -- Set the viewport resolution. Cannot exceed the screen resolution. Returns true if the resolution changed.
+  totalMemory
+    doc: function(): number -- returns the total memory size of the gpu vram. This does not include the screen.
+
+-- gpu  c10f28ca-794c-438c-8b01-df5a61484924  slot 0
+  allocateBuffer
+    doc: function([width: number, height: number]): number -- allocates a new buffer with dimensions width*height (defaults to max resolution) and appends it to the buffer list. Returns the index of the new buffer and returns nil with an error message on failure. A buffer can be allocated even when there is no screen bound to this gpu. Index 0 is always reserved for the screen and thus the lowest index of an allocated buffer is always 1.
+  bind  [indirect]
+    doc: function(address:string[, reset:boolean=true]):boolean -- Binds the GPU to the screen with the specified address and resets screen settings if `reset` is true.
+  bitblt
+    doc: function([dst: number, col: number, row: number, width: number, height: number, src: number, fromCol: number, fromRow: number]):boolean -- bitblt from buffer to screen. All parameters are optional. Writes to `dst` page in rectangle `x, y, width, height`, defaults to the bound screen and its viewport. Reads data from `src` page at `fx, fy`, default is the active page from position 1, 1
+  buffers
+    doc: function(): number -- Returns an array of indexes of the allocated buffers
+  copy
+    doc: function(x:number, y:number, width:number, height:number, tx:number, ty:number):boolean -- Copies a portion of the screen from the specified location with the specified size by the specified translation.
+  fill
+    doc: function(x:number, y:number, width:number, height:number, char:string):boolean -- Fills a portion of the screen at the specified position with the specified size with the specified character.
+  freeAllBuffers
+    doc: function(): number -- Closes all buffers and returns the count. If the active buffer is closed, index moves to 0
+  freeBuffer
+    doc: function(index: number): boolean -- Closes buffer at `index`. Returns true if a buffer closed. If the current buffer is closed, index moves to 0
+  freeMemory
+    doc: function(): number -- returns the total free memory not allocated to buffers. This does not include the screen.
+  get
+    doc: function(x:number, y:number):string, number, number, number or nil, number or nil -- Get the value displayed on the screen at the specified index, as well as the foreground and background color. If the foreground or background is from the palette, returns the palette indices as fourth and fifth results, else nil, respectively.
+    error: bad arguments #1 (integer expected, got no value)
+  getActiveBuffer
+    doc: function(): number -- returns the index of the currently selected buffer. 0 is reserved for the screen. Can return 0 even when there is no screen
+    value: 0
+  getBackground
+    doc: function():number, boolean -- Get the current background color and whether it's from the palette or not.
+    value: 0, false
+  getBufferSize
+    doc: function(index: number): number, number -- returns the buffer size at index. Returns the screen resolution for index 0. returns nil for invalid indexes
+    value: 160, 50
+  getDepth
+    doc: function():number -- Returns the currently set color depth.
+    value: 8
+  getForeground
+    doc: function():number, boolean -- Get the current foreground color and whether it's from the palette or not.
+    value: 16777215, false
+  getPaletteColor
+    doc: function(index:number):number -- Get the palette color at the specified palette index.
+    error: bad arguments #1 (integer expected, got no value)
+  getResolution
+    doc: function():number, number -- Get the current screen resolution.
+    value: 160, 50
+  getScreen
+    doc: function():string -- Get the address of the screen the GPU is currently bound to.
+    value: 876f9920-fb89-479e-9e9e-dbaa6d502f0c
+  getViewport
+    doc: function():number, number -- Get the current viewport resolution.
+    value: 160, 50
+  maxDepth
+    doc: function():number -- Get the maximum supported color depth.
+  maxResolution
+    doc: function():number, number -- Get the maximum screen resolution.
+  set
+    doc: function(x:number, y:number, value:string[, vertical:boolean]):boolean -- Plots a string value to the screen at the specified position. Optionally writes the string vertically.
+  setActiveBuffer
+    doc: function(index: number): number -- Sets the active buffer to `index`. 1 is the first vram buffer and 0 is reserved for the screen. returns nil for invalid index (0 is always valid)
+  setBackground
+    doc: function(value:number[, palette:boolean]):number, number or nil -- Sets the background color to the specified value. Optionally takes an explicit palette index. Returns the old value and if it was from the palette its palette index.
+  setDepth  [indirect]
+    doc: function(depth:number):number -- Set the color depth. Returns the previous value.
+  setForeground
+    doc: function(value:number[, palette:boolean]):number, number or nil -- Sets the foreground color to the specified value. Optionally takes an explicit palette index. Returns the old value and if it was from the palette its palette index.
+  setPaletteColor
+    doc: function(index:number, color:number):number -- Set the palette color at the specified palette index. Returns the previous value.
+  setResolution  [indirect]
+    doc: function(width:number, height:number):boolean -- Set the screen resolution. Returns true if the resolution changed.
+  setViewport  [indirect]
+    doc: function(width:number, height:number):boolean -- Set the viewport resolution. Cannot exceed the screen resolution. Returns true if the resolution changed.
+  totalMemory
+    doc: function(): number -- returns the total memory size of the gpu vram. This does not include the screen.
+
+-- internet  8c4c446f-acc4-4457-9586-29bf7501b8b7  slot 1
+  connect  [indirect]
+    doc: function(address:string[, port:number]):userdata -- Opens a new TCP connection. Returns the handle of the connection.
+  isHttpEnabled
+    doc: function():boolean -- Returns whether HTTP requests can be made (config setting).
+    value: true
+  isTcpEnabled
+    doc: function():boolean -- Returns whether TCP connections can be made (config setting).
+    value: true
+  request  [indirect]
+    doc: function(url:string[, postData:string[, headers:table[, method:string]]]):userdata -- Starts an HTTP request. If this returns true, further results will be pushed using `http_response` signals.
+
+-- keyboard  3e027115-bf62-4289-8543-7c9c86851f6a  slot -1
+  (no callable methods)
+
+-- screen  876f9920-fb89-479e-9e9e-dbaa6d502f0c  slot -1
+  getAspectRatio
+    doc: function():number, number -- The aspect ratio of the screen. For multi-block screens this is the number of blocks, horizontal and vertical.
+    value: 3.0, 2.0
+  getKeyboards  [indirect]
+    doc: function():table -- The list of keyboards attached to the screen.
+    value: table
+      [1] = "3e027115-bf62-4289-8543-7c9c86851f6a"
+  isOn
+    doc: function():boolean -- Returns whether the screen is currently on.
+    value: true
+  isPrecise
+    doc: function():boolean -- Returns whether the screen is in high precision mode (sub-pixel mouse event positions).
+    value: false
+  isTouchModeInverted
+    doc: function():boolean -- Whether touch mode is inverted (sneak-activate opens GUI, instead of normal activate).
+    value: false
+  setPrecise  [indirect]
+    doc: function(enabled:boolean):boolean -- Set whether to use high precision mode (sub-pixel mouse event positions).
+  setTouchModeInverted  [indirect]
+    doc: function(value:boolean):boolean -- Sets whether to invert touch mode (sneak-activate opens GUI, instead of normal activate).
+  turnOff  [indirect]
+    doc: function():boolean -- Turns off the screen. Returns whether the state changed, and whether it is now on.
+  turnOn  [indirect]
+    doc: function():boolean -- Turns the screen on. Returns whether the state changed, and whether it is now on.
+
+-- transposer  6e5306f3-69eb-4e6f-9fd3-0b50c998c006  slot -1
+  areStacksEquivalent  [indirect]
+    doc: function(side:number, slotA:number, slotB:number):boolean -- Get whether the items in the two specified slots of the inventory on the specified side of the device are equivalent (have shared OreDictionary IDs).
+  compareStackToDatabase  [indirect]
+    doc: function(side:number, slot:number, dbAddress:string, dbSlot:number[, checkNBT:boolean=false]):boolean -- Compare an item in the specified slot in the inventory on the specified side with one in the database with the specified address.
+  compareStacks  [indirect]
+    doc: function(side:number, slotA:number, slotB:number[, checkNBT:boolean=false]):boolean -- Get whether the items in the two specified slots of the inventory on the specified side of the device are of the same type.
+  getAllStacks  [indirect]
+    doc: function(side:number):userdata -- Get a description of all stacks in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getContainerCapacityInSlot  [indirect]
+    doc: function(side:number, slot:number):number -- Get the capacity of the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getContainerLevelInSlot  [indirect]
+    doc: function(side:number, slot:number):number -- Get the capacity the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidInContainerInSlot  [indirect]
+    doc: function(side:number, slot:number):table -- Get a description of the fluid in the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidInTank  [indirect]
+    doc: function(side:number [, tank:number]):table -- Get a description of the fluid in the the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidTransferRate  [indirect]
+    doc: function():number -- Returns the fluid transfer rate in liters per second.
+    value: 2560
+  getInventoryName  [indirect]
+    doc: function(side:number):string -- Get the the name of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getInventorySize  [indirect]
+    doc: function(side:number):number -- Get the number of slots in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getSlotMaxStackSize  [indirect]
+    doc: function(side:number, slot:number):number -- Get the maximum number of items in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getSlotStackSize  [indirect]
+    doc: function(side:number, slot:number):number -- Get number of items in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getStackInSlot  [indirect]
+    doc: function(side:number, slot:number):table -- Get a description of the stack in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankCapacity  [indirect]
+    doc: function(side:number [, tank:number]):number -- Get the capacity of the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankCount  [indirect]
+    doc: function(side:number):number -- Get the number of tanks available on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankLevel  [indirect]
+    doc: function(side:number [, tank:number]):number -- Get the amount of fluid in the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  setStackDisplayName  [indirect]
+    doc: function(side:number, slot:number, label:string):boolean -- Change the display name of the stack in the inventory on the specified side of the device.
+  store  [indirect]
+    doc: function(side:number, slot:number, dbAddress:string, dbSlot:number):boolean -- Store an item stack description in the specified slot of the database with the specified address.
+  transferFluid  [indirect]
+    doc: function(sourceSide:number, sinkSide:number[, count:number [, sourceTank:number]]):boolean, number -- Transfer some fluid between two tanks. Returns operation result and filled amount
+  transferFluidBetweenContainers  [indirect]
+    doc: function(sourceSide:number, sourceSlot:number, sinkSide:number, sinkSlot:number[, count:number [, sourceOutputSide:number[, sinkOutputSide:number[, sourceOutputSlot:number[, sinkOutputSlot:number]]]]]):boolean, number -- Transfer some fluid from a container to another container. Returns operation result and filled amount
+  transferFluidFromContainerToTank  [indirect]
+    doc: function(inventorySide:number, inventorySlot:number, tankSide:number [, count:number [, outputSide:number[, outputSlot:number]]]):boolean, number -- Transfer some fluid from the container to the tank. Returns operation result and filled amount
+  transferFluidFromTankToContainer  [indirect]
+    doc: function(tankSide:number, inventorySide:number, inventorySlot:number [, count:number [, sourceTank:number [, outputSide:number[, outputSlot:number]]]]):boolean, number -- Transfer some fluid from the tank to the container. Returns operation result and filled amount
+  transferItem  [indirect]
+    doc: function(sourceSide:number, sinkSide:number[, count:number[, sourceSlot:number[, sinkSlot:number]]]):number -- Transfer some items between two inventories.
+
+-- transposer  79fc639b-f050-4933-824b-4b77d29faa17  slot -1
+  areStacksEquivalent  [indirect]
+    doc: function(side:number, slotA:number, slotB:number):boolean -- Get whether the items in the two specified slots of the inventory on the specified side of the device are equivalent (have shared OreDictionary IDs).
+  compareStackToDatabase  [indirect]
+    doc: function(side:number, slot:number, dbAddress:string, dbSlot:number[, checkNBT:boolean=false]):boolean -- Compare an item in the specified slot in the inventory on the specified side with one in the database with the specified address.
+  compareStacks  [indirect]
+    doc: function(side:number, slotA:number, slotB:number[, checkNBT:boolean=false]):boolean -- Get whether the items in the two specified slots of the inventory on the specified side of the device are of the same type.
+  getAllStacks  [indirect]
+    doc: function(side:number):userdata -- Get a description of all stacks in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getContainerCapacityInSlot  [indirect]
+    doc: function(side:number, slot:number):number -- Get the capacity of the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getContainerLevelInSlot  [indirect]
+    doc: function(side:number, slot:number):number -- Get the capacity the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidInContainerInSlot  [indirect]
+    doc: function(side:number, slot:number):table -- Get a description of the fluid in the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidInTank  [indirect]
+    doc: function(side:number [, tank:number]):table -- Get a description of the fluid in the the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidTransferRate  [indirect]
+    doc: function():number -- Returns the fluid transfer rate in liters per second.
+    value: 2560
+  getInventoryName  [indirect]
+    doc: function(side:number):string -- Get the the name of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getInventorySize  [indirect]
+    doc: function(side:number):number -- Get the number of slots in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getSlotMaxStackSize  [indirect]
+    doc: function(side:number, slot:number):number -- Get the maximum number of items in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getSlotStackSize  [indirect]
+    doc: function(side:number, slot:number):number -- Get number of items in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getStackInSlot  [indirect]
+    doc: function(side:number, slot:number):table -- Get a description of the stack in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankCapacity  [indirect]
+    doc: function(side:number [, tank:number]):number -- Get the capacity of the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankCount  [indirect]
+    doc: function(side:number):number -- Get the number of tanks available on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankLevel  [indirect]
+    doc: function(side:number [, tank:number]):number -- Get the amount of fluid in the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  setStackDisplayName  [indirect]
+    doc: function(side:number, slot:number, label:string):boolean -- Change the display name of the stack in the inventory on the specified side of the device.
+  store  [indirect]
+    doc: function(side:number, slot:number, dbAddress:string, dbSlot:number):boolean -- Store an item stack description in the specified slot of the database with the specified address.
+  transferFluid  [indirect]
+    doc: function(sourceSide:number, sinkSide:number[, count:number [, sourceTank:number]]):boolean, number -- Transfer some fluid between two tanks. Returns operation result and filled amount
+  transferFluidBetweenContainers  [indirect]
+    doc: function(sourceSide:number, sourceSlot:number, sinkSide:number, sinkSlot:number[, count:number [, sourceOutputSide:number[, sinkOutputSide:number[, sourceOutputSlot:number[, sinkOutputSlot:number]]]]]):boolean, number -- Transfer some fluid from a container to another container. Returns operation result and filled amount
+  transferFluidFromContainerToTank  [indirect]
+    doc: function(inventorySide:number, inventorySlot:number, tankSide:number [, count:number [, outputSide:number[, outputSlot:number]]]):boolean, number -- Transfer some fluid from the container to the tank. Returns operation result and filled amount
+  transferFluidFromTankToContainer  [indirect]
+    doc: function(tankSide:number, inventorySide:number, inventorySlot:number [, count:number [, sourceTank:number [, outputSide:number[, outputSlot:number]]]]):boolean, number -- Transfer some fluid from the tank to the container. Returns operation result and filled amount
+  transferItem  [indirect]
+    doc: function(sourceSide:number, sinkSide:number[, count:number[, sourceSlot:number[, sinkSlot:number]]]):number -- Transfer some items between two inventories.
+
+-- transposer  ac283323-8c10-4269-a886-01a19cb12038  slot -1
+  areStacksEquivalent  [indirect]
+    doc: function(side:number, slotA:number, slotB:number):boolean -- Get whether the items in the two specified slots of the inventory on the specified side of the device are equivalent (have shared OreDictionary IDs).
+  compareStackToDatabase  [indirect]
+    doc: function(side:number, slot:number, dbAddress:string, dbSlot:number[, checkNBT:boolean=false]):boolean -- Compare an item in the specified slot in the inventory on the specified side with one in the database with the specified address.
+  compareStacks  [indirect]
+    doc: function(side:number, slotA:number, slotB:number[, checkNBT:boolean=false]):boolean -- Get whether the items in the two specified slots of the inventory on the specified side of the device are of the same type.
+  getAllStacks  [indirect]
+    doc: function(side:number):userdata -- Get a description of all stacks in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getContainerCapacityInSlot  [indirect]
+    doc: function(side:number, slot:number):number -- Get the capacity of the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getContainerLevelInSlot  [indirect]
+    doc: function(side:number, slot:number):number -- Get the capacity the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidInContainerInSlot  [indirect]
+    doc: function(side:number, slot:number):table -- Get a description of the fluid in the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidInTank  [indirect]
+    doc: function(side:number [, tank:number]):table -- Get a description of the fluid in the the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidTransferRate  [indirect]
+    doc: function():number -- Returns the fluid transfer rate in liters per second.
+    value: 2560
+  getInventoryName  [indirect]
+    doc: function(side:number):string -- Get the the name of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getInventorySize  [indirect]
+    doc: function(side:number):number -- Get the number of slots in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getSlotMaxStackSize  [indirect]
+    doc: function(side:number, slot:number):number -- Get the maximum number of items in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getSlotStackSize  [indirect]
+    doc: function(side:number, slot:number):number -- Get number of items in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getStackInSlot  [indirect]
+    doc: function(side:number, slot:number):table -- Get a description of the stack in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankCapacity  [indirect]
+    doc: function(side:number [, tank:number]):number -- Get the capacity of the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankCount  [indirect]
+    doc: function(side:number):number -- Get the number of tanks available on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankLevel  [indirect]
+    doc: function(side:number [, tank:number]):number -- Get the amount of fluid in the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  setStackDisplayName  [indirect]
+    doc: function(side:number, slot:number, label:string):boolean -- Change the display name of the stack in the inventory on the specified side of the device.
+  store  [indirect]
+    doc: function(side:number, slot:number, dbAddress:string, dbSlot:number):boolean -- Store an item stack description in the specified slot of the database with the specified address.
+  transferFluid  [indirect]
+    doc: function(sourceSide:number, sinkSide:number[, count:number [, sourceTank:number]]):boolean, number -- Transfer some fluid between two tanks. Returns operation result and filled amount
+  transferFluidBetweenContainers  [indirect]
+    doc: function(sourceSide:number, sourceSlot:number, sinkSide:number, sinkSlot:number[, count:number [, sourceOutputSide:number[, sinkOutputSide:number[, sourceOutputSlot:number[, sinkOutputSlot:number]]]]]):boolean, number -- Transfer some fluid from a container to another container. Returns operation result and filled amount
+  transferFluidFromContainerToTank  [indirect]
+    doc: function(inventorySide:number, inventorySlot:number, tankSide:number [, count:number [, outputSide:number[, outputSlot:number]]]):boolean, number -- Transfer some fluid from the container to the tank. Returns operation result and filled amount
+  transferFluidFromTankToContainer  [indirect]
+    doc: function(tankSide:number, inventorySide:number, inventorySlot:number [, count:number [, sourceTank:number [, outputSide:number[, outputSlot:number]]]]):boolean, number -- Transfer some fluid from the tank to the container. Returns operation result and filled amount
+  transferItem  [indirect]
+    doc: function(sourceSide:number, sinkSide:number[, count:number[, sourceSlot:number[, sinkSlot:number]]]):number -- Transfer some items between two inventories.
+
+-- transposer  f5cde3e2-649e-4f48-b701-415cb2e1ee22  slot -1
+  areStacksEquivalent  [indirect]
+    doc: function(side:number, slotA:number, slotB:number):boolean -- Get whether the items in the two specified slots of the inventory on the specified side of the device are equivalent (have shared OreDictionary IDs).
+  compareStackToDatabase  [indirect]
+    doc: function(side:number, slot:number, dbAddress:string, dbSlot:number[, checkNBT:boolean=false]):boolean -- Compare an item in the specified slot in the inventory on the specified side with one in the database with the specified address.
+  compareStacks  [indirect]
+    doc: function(side:number, slotA:number, slotB:number[, checkNBT:boolean=false]):boolean -- Get whether the items in the two specified slots of the inventory on the specified side of the device are of the same type.
+  getAllStacks  [indirect]
+    doc: function(side:number):userdata -- Get a description of all stacks in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getContainerCapacityInSlot  [indirect]
+    doc: function(side:number, slot:number):number -- Get the capacity of the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getContainerLevelInSlot  [indirect]
+    doc: function(side:number, slot:number):number -- Get the capacity the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidInContainerInSlot  [indirect]
+    doc: function(side:number, slot:number):table -- Get a description of the fluid in the fluid container in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidInTank  [indirect]
+    doc: function(side:number [, tank:number]):table -- Get a description of the fluid in the the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getFluidTransferRate  [indirect]
+    doc: function():number -- Returns the fluid transfer rate in liters per second.
+    value: 2560
+  getInventoryName  [indirect]
+    doc: function(side:number):string -- Get the the name of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getInventorySize  [indirect]
+    doc: function(side:number):number -- Get the number of slots in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getSlotMaxStackSize  [indirect]
+    doc: function(side:number, slot:number):number -- Get the maximum number of items in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getSlotStackSize  [indirect]
+    doc: function(side:number, slot:number):number -- Get number of items in the specified slot of the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getStackInSlot  [indirect]
+    doc: function(side:number, slot:number):table -- Get a description of the stack in the inventory on the specified side of the device.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankCapacity  [indirect]
+    doc: function(side:number [, tank:number]):number -- Get the capacity of the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankCount  [indirect]
+    doc: function(side:number):number -- Get the number of tanks available on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  getTankLevel  [indirect]
+    doc: function(side:number [, tank:number]):number -- Get the amount of fluid in the specified tank on the specified side.
+    error: bad arguments #1 (integer expected, got no value)
+  setStackDisplayName  [indirect]
+    doc: function(side:number, slot:number, label:string):boolean -- Change the display name of the stack in the inventory on the specified side of the device.
+  store  [indirect]
+    doc: function(side:number, slot:number, dbAddress:string, dbSlot:number):boolean -- Store an item stack description in the specified slot of the database with the specified address.
+  transferFluid  [indirect]
+    doc: function(sourceSide:number, sinkSide:number[, count:number [, sourceTank:number]]):boolean, number -- Transfer some fluid between two tanks. Returns operation result and filled amount
+  transferFluidBetweenContainers  [indirect]
+    doc: function(sourceSide:number, sourceSlot:number, sinkSide:number, sinkSlot:number[, count:number [, sourceOutputSide:number[, sinkOutputSide:number[, sourceOutputSlot:number[, sinkOutputSlot:number]]]]]):boolean, number -- Transfer some fluid from a container to another container. Returns operation result and filled amount
+  transferFluidFromContainerToTank  [indirect]
+    doc: function(inventorySide:number, inventorySlot:number, tankSide:number [, count:number [, outputSide:number[, outputSlot:number]]]):boolean, number -- Transfer some fluid from the container to the tank. Returns operation result and filled amount
+  transferFluidFromTankToContainer  [indirect]
+    doc: function(tankSide:number, inventorySide:number, inventorySlot:number [, count:number [, sourceTank:number [, outputSide:number[, outputSlot:number]]]]):boolean, number -- Transfer some fluid from the tank to the container. Returns operation result and filled amount
+  transferItem  [indirect]
+    doc: function(sourceSide:number, sinkSide:number[, count:number[, sourceSlot:number[, sinkSlot:number]]]):number -- Transfer some items between two inventories.
