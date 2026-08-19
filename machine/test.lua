@@ -12,14 +12,19 @@ local say = print
 local openReal = io.open
 oc.install()
 
-local function declaredVersion(path)
+local function contentsOf(path)
   local file = openReal(path, "r")
   if not file then
     return nil
   end
   local text = file:read("*a") or ""
   file:close()
-  return text:match('VERSION%s*=%s*"([^"]+)"')
+  return text
+end
+
+local function declaredVersion(path)
+  local text = contentsOf(path)
+  return text and text:match('VERSION%s*=%s*"([^"]+)"')
 end
 
 local show = (arg and arg[1] == "--show") or false
@@ -3783,14 +3788,18 @@ end)
 test("versions.txt says the version every file declares", function()
   local wrong = {}
   for line in io.lines("versions.txt") do
-    local path, stated = line:match("^%s*(%S+)%s+(%S+)%s*$")
+    local path, stated, size = line:match("^%s*(%S+)%s+(%S+)%s+(%d+)%s*$")
     if not path then
-      wrong[#wrong + 1] = "no version on: " .. line
+      wrong[#wrong + 1] = "not a path, a version and a size: " .. line
     else
-      local declared = declaredVersion(path)
+      local text = contentsOf(path)
+      local declared = text and text:match('VERSION%s*=%s*"([^"]+)"')
       if declared ~= stated then
         wrong[#wrong + 1] = path .. " says " .. tostring(declared)
-          .. ", manifest says " .. stated
+          .. ", versions.txt says " .. stated
+      elseif text and #text ~= tonumber(size) then
+        wrong[#wrong + 1] = path .. " is " .. #text
+          .. " bytes, versions.txt says " .. size
       end
     end
   end
@@ -3821,7 +3830,7 @@ test("manifest.txt and versions.txt name the same files", function()
     end
   end
   for line in io.lines("versions.txt") do
-    local path = line:match("^%s*(%S+)%s+%S+%s*$")
+    local path = line:match("^%s*(%S+)%s+%S+%s+%S+%s*$")
     if path then
       versioned[#versioned + 1] = path
     end
@@ -3887,4 +3896,43 @@ test("ocview lights a lamp when a satellite reports a tripped alert", function()
   -- the screen is watching the whole base, so the lamp beside it should say so
   check(#colors > 0 and colors[#colors] == 31 * 1024,
     "the lamp ended " .. tostring(colors[#colors]) .. ", not red")
+end)
+
+-- A version alone is only as good as the discipline behind it. A library once
+-- got rewritten and kept its number, so every computer went on running the old
+-- one and crashed on a function that was no longer there.
+test("ocup fetches a file whose bytes moved even when its version did not", function()
+  oc.components = { INTERNET }
+  oc.files["/bin/ocup.lua"] = program(declaredVersion("programs/ocup.lua"))
+  oc.files["/bin/ocdebug.lua"] = program("0.2.0")
+  oc.files["/bin/ocdump.lua"] = program("0.1.0")
+  oc.files["/lib/oclib.lua"] = program("0.1.0")
+  oc.files["/lib/ocgt.lua"] = program("0.1.0")
+  -- same version, different contents, which is what a rewrite looks like
+  oc.files["/lib/oclogistics.lua"] = program("0.1.0") .. "-- and more besides\n"
+
+  local sized = table.concat({
+    "lib/oclib.lua 0.1.0 " .. #program("0.1.0"),
+    "lib/ocgt.lua 0.1.0 " .. #program("0.1.0"),
+    "lib/oclogistics.lua 0.1.0 " .. #program("0.1.0"),
+    "programs/ocup.lua " .. declaredVersion("programs/ocup.lua") .. " "
+      .. #program(declaredVersion("programs/ocup.lua")),
+    "programs/ocdebug.lua 0.2.0 " .. #program("0.2.0"),
+    "programs/ocdump.lua 0.1.0 " .. #program("0.1.0"),
+  }, "\n")
+
+  oc.respond = serveProgram({
+    ["versions.txt"] = sized,
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+
+  oc.run("ocup")
+  check(fetched() == "oclogistics.lua", "downloaded " .. fetched())
+  check(oc.files["/lib/oclogistics.lua"] == program("0.1.0"),
+    "did not put the real one back")
 end)

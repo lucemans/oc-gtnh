@@ -14,7 +14,7 @@ local keyboard = require("keyboard")
 local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.15.0"
+local VERSION = "0.16.0"
 
 -- read here rather than through oclib: on a fresh computer ocup arrives alone
 -- and there is no /lib yet for it to require
@@ -194,14 +194,14 @@ local function describe(existing, contents)
   return shown(version), "changed", CYAN
 end
 
--- A manifest line is a path and the version that file declares. The version is
--- what makes an update quick: a file whose installed copy already says the same
--- thing is not downloaded at all, so a run with nothing to do costs two
--- requests rather than one per file.
+-- A line is a path, the version that file declares, and its size in bytes. Both
+-- have to match for a file to go unfetched: a version alone is only as good as
+-- the discipline behind it, and a library once got rewritten without its number
+-- moving, so every computer went on running the old one.
 local function parseManifest(text)
   local files = {}
   for entry in text:gmatch("[^\n]+") do
-    local source, version = entry:match("^%s*(%S+)%s*(%S*)%s*$")
+    local source, version, size = entry:match("^%s*(%S+)%s*(%S*)%s*(%S*)%s*$")
     if source then
       -- both captures are bound here: "a and a:match()" would keep only the first
       local folder, name = source:match("^(%w+)/(.+)$")
@@ -213,6 +213,7 @@ local function parseManifest(text)
           -- a manifest written before versions were in it says nothing here,
           -- and then every file is fetched, which is what used to happen
           latest = version ~= "" and version or nil,
+          bytes = tonumber(size),
         }
       end
     end
@@ -569,7 +570,10 @@ for _, file in ipairs(FILES) do
     -- The manifest already said which version is out there. A file whose
     -- installed copy declares the same one is not fetched at all, which is what
     -- makes a run with nothing to do cost two requests rather than one a file.
-    if file.latest and file.existing and versionOf(file.existing) == file.latest then
+    local same = file.latest and file.existing
+      and versionOf(file.existing) == file.latest
+      and (file.bytes == nil or #file.existing == file.bytes)
+    if same then
       repaint(file.line, rowText(file, "up to date"), DIM)
       done = done + 1
       showBar("checking")

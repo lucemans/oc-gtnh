@@ -456,8 +456,12 @@ So the format is two files:
 
 `ocup` asks for `versions.txt` and falls back to `manifest.txt` when it is not
 there, so a current one costs two requests and an old one keeps working.
-Generate both with `nix develop -c lua machine/manifest.lua`; checks fail if the
-two drift apart, or if a manifest line ever gains a second word.
+
+A line carries the size in bytes as well as the version, because a version alone
+is only as good as the discipline behind it. `oclogistics` was rewritten and
+kept its number: every computer decided it was current, went on running the old
+one, and crashed on a function that no longer existed. Bytes change whatever
+anybody remembered to do.
 
 ## What ran the computer out of memory
 

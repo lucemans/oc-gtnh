@@ -8,19 +8,22 @@
 -- ocup that cannot read the manifest cannot update itself out of the problem.
 --
 --   manifest.txt   one path a line, and nothing else, for good
---   versions.txt   the same paths with the version each file declares
+--   versions.txt   the same paths, the version each file declares, and its size
 --
--- ocup asks for versions.txt first and uses manifest.txt only when that is not
--- there, so a new one costs two requests and an old one keeps working.
+-- The size is there because a version alone is only as good as the discipline
+-- behind it. A file edited without its VERSION moving is invisible to an update
+-- that compares versions, and that has happened: a library was rewritten, kept
+-- its number, and every computer went on running the old one. Bytes change
+-- whatever anybody remembered to do.
 
-local function versionOf(path)
+local function contentsOf(path)
   local file = io.open(path, "r")
   if not file then
     return nil
   end
   local text = file:read("*a") or ""
   file:close()
-  return text:match('VERSION%s*=%s*"([^"]+)"')
+  return text
 end
 
 local paths = {}
@@ -33,13 +36,14 @@ end
 
 local plain, versioned = {}, {}
 for _, path in ipairs(paths) do
-  local version = versionOf(path)
+  local text = contentsOf(path)
+  local version = text and text:match('VERSION%s*=%s*"([^"]+)"')
   if not version then
     io.stderr:write("no VERSION in " .. path .. "\n")
     os.exit(1)
   end
   plain[#plain + 1] = path
-  versioned[#versioned + 1] = path .. " " .. version
+  versioned[#versioned + 1] = path .. " " .. version .. " " .. #text
 end
 
 local function put(name, lines)
