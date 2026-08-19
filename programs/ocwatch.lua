@@ -13,11 +13,12 @@ local lp = require("oclogistics")
 local net = require("ocnet")
 local tank = require("octank")
 local ct = require("occomputronics")
+local sec = require("ocsecurity")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.11.0"
+local VERSION = "0.12.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -48,6 +49,7 @@ local DIM = 0x999999
 local BAR = 0x333333
 local OK_COLOR = 0x66CC66
 local ALARM = 0xCC6666
+local SELECTED = 0x0066CC
 
 local FULL_BLOCK = "\226\150\136"
 local LIGHT_BLOCK = "\226\150\145"
@@ -189,22 +191,30 @@ local function act(alert, tripped)
   return table.concat(done, ", ")
 end
 
--- A tripped alert is worth hearing from another room. Computronics gives three
--- ways to say so and this computer may have none of them, in which case the
--- built-in beep is still better than silence.
+-- A tripped alert is worth hearing from another room, so each thing that can
+-- say something is asked in turn: words where words are possible, a noise
+-- otherwise, and the computer's own beep when the machine has none of them.
 local function announce(alert, text, urgent)
   if alert.beep == false then
     return nil
   end
-  local used = ct.announce(text, urgent)
-  if not used then
-    pcall(computer.beep, urgent and 880 or 440, 0.2)
+
+  local said = ct.speak(text)
+  local played = ct.play(urgent)
+  if said and played then
+    return said .. " and " .. played
   end
-  return used
+  if said or played then
+    return said or played
+  end
+
+  pcall(computer.beep, urgent and 880 or 440, 0.2)
+  return nil
 end
 
--- whether the lamps are showing an alarm, so they are only set on a change
-local lampLit = nil
+-- whether the lamps and sirens are showing trouble, so they are only set on a
+-- change rather than on every refresh
+local alarmShown = nil
 
 local notices = {}
 
@@ -433,15 +443,18 @@ local function sample()
     end
   end
 
-  -- A colourful lamp says from across the room what the screen says up close.
-  -- Only on a change, since setting it is a call into the world.
-  if alarmed ~= lampLit then
+  -- A lamp says from across the room what the screen says up close, and an
+  -- alarm says it from outside. Both are set only on a change, since each is a
+  -- call into the world, and both stay set while anything is wrong rather than
+  -- sounding once and stopping.
+  if alarmed ~= alarmShown then
     if alarmed then
       ct.lamps(ct.rgb(255, 0, 0))
     else
       ct.lamps(ct.rgb(0, 255, 0))
     end
-    lampLit = alarmed
+    sec.alarm(alarmed)
+    alarmShown = alarmed
   end
 
   return cards
@@ -452,6 +465,8 @@ end
 
 local function prompt(message, current)
   term.clear()
+  -- printing goes around the painter, which then believes rows it no longer owns
+  paint.forget()
   print(message)
   if current ~= nil and current ~= "" then
     print("currently " .. tostring(current))
@@ -463,54 +478,120 @@ end
 -- A list you move through with the arrow keys. Returns the row it was on and
 -- the key that ended it, so each screen decides what its own keys mean. Rows
 -- marked as headings are drawn but never landed on.
-local function menu(title, rows, help)
-  local cursor = 1
+-- A drawn, clickable list. Rows marked as headings are shown but never landed
+-- on. The buttons along the bottom are what this screen can do: click one, or
+-- press the key it names. Clicking a row selects it, and clicking the row that
+-- is already selected does whatever the first button does, which is what a
+-- second click on a thing is expected to mean.
+--
+-- Returns the row that was selected and the key of the action chosen, so each
+-- screen still decides what its own actions do.
+local function menu(title, rows, buttons)
+  local cursor, top = 1, 1
   while cursor <= #rows and rows[cursor].heading do
     cursor = cursor + 1
   end
 
+  -- moving lands on a row, never on a heading, and never off either end
+  local function step(from, delta)
+    local index = from
+    repeat
+      index = index + delta
+    until index < 1 or index > #rows or not rows[index].heading
+    if index < 1 or index > #rows then
+      return from
+    end
+    return index
+  end
+
+  paint.forget()
+
   while true do
-    term.clear()
-    print(title)
-    print("")
-    if #rows == 0 then
-      print("  nothing here yet")
+    local body = H - 3
+    if cursor < top then
+      top = cursor
     end
-    for index, row in ipairs(rows) do
-      if row.heading then
-        if index > 1 then
-          print("")
-        end
-        print("  " .. row.text)
+    if cursor > top + body - 1 then
+      top = cursor - body + 1
+    end
+    if top < 1 then
+      top = 1
+    end
+
+    paint.write(1, 1, fit("  " .. title, W), FG, BAR)
+    paint.write(1, 2, fit("", W), FG, BG)
+
+    for line = 0, body - 1 do
+      local index = top + line
+      local row = rows[index]
+      local y = 3 + line
+      if not row then
+        paint.write(1, y, fit("", W), FG, BG)
+      elseif row.heading then
+        paint.write(1, y, fit("  " .. row.text, W), DIM, BG)
+      elseif index == cursor then
+        paint.write(1, y, fit("  " .. row.text, W), FG, SELECTED)
       else
-        print((index == cursor and "  > " or "    ") .. row.text)
+        paint.write(1, y, fit("  " .. row.text, W), FG, BG)
       end
     end
-    print("")
-    print("  " .. help)
 
-    local name, _, _, code = event.pull(nil, "key_down")
-    if name == nil then
+    if #rows == 0 then
+      paint.write(3, 3, fit("nothing here yet", W - 3), DIM, BG)
+    end
+
+    -- where each button sits, so a click can be matched back to one
+    local spots = {}
+    local x = 2
+    for _, button in ipairs(buttons) do
+      local label = " " .. button.label .. " "
+      spots[#spots + 1] = {
+        from = x, to = x + unicode.len(label) - 1, code = button.code,
+      }
+      paint.write(x, H, label, FG, SELECTED)
+      x = x + unicode.len(label) + 1
+    end
+    paint.write(x, H, fit("", math.max(0, W - x + 1)), FG, BAR)
+    paint.flush(W, H, BG, FG)
+
+    local packed = table.pack(event.pull())
+    local name = packed[1]
+
+    if name == "interrupted" then
       return nil, keyboard.keys.q
-    end
-
-    local delta = nil
-    if code == keyboard.keys.up then
-      delta = -1
-    elseif code == keyboard.keys.down then
-      delta = 1
-    end
-
-    if delta then
-      local index = cursor
-      repeat
-        index = index + delta
-      until index < 1 or index > #rows or not rows[index].heading
-      if index >= 1 and index <= #rows then
-        cursor = index
+    elseif name == "key_down" then
+      local code = packed[4]
+      if code == keyboard.keys.up then
+        cursor = step(cursor, -1)
+      elseif code == keyboard.keys.down then
+        cursor = step(cursor, 1)
+      else
+        return rows[cursor], code
       end
-    else
-      return rows[cursor], code
+    elseif name == "touch" then
+      local column, row = packed[3], packed[4]
+      if row == H then
+        for _, spot in ipairs(spots) do
+          if column >= spot.from and column <= spot.to then
+            return rows[cursor], spot.code
+          end
+        end
+      elseif row >= 3 then
+        local index = top + row - 3
+        local landed = rows[index]
+        if landed and not landed.heading then
+          if index == cursor and buttons[1] then
+            return landed, buttons[1].code
+          end
+          cursor = index
+        end
+      end
+    elseif name == "scroll" then
+      if packed[5] > 0 then
+        cursor = step(cursor, -1)
+      else
+        cursor = step(cursor, 1)
+      end
     end
   end
 end
@@ -532,7 +613,8 @@ local function chooseComponent(only)
   end)
 
   local row, code = menu("attached components", rows,
-    "[up/down] move   [enter] choose   [q] cancel")
+    { { label = "choose", code = keyboard.keys.enter },
+      { label = "cancel", code = keyboard.keys.q } })
   if not row or code ~= keyboard.keys.enter then
     return nil
   end
@@ -574,7 +656,8 @@ local function chooseSide(address)
   end
 
   local row, code = menu("which face is the tank on", rows,
-    "[up/down] move   [enter] choose   [q] cancel")
+    { { label = "choose", code = keyboard.keys.enter },
+      { label = "cancel", code = keyboard.keys.q } })
   if not row or code ~= keyboard.keys.enter then
     return nil
   end
@@ -624,7 +707,8 @@ local function editReadings(entry)
     end
 
     local row, code = menu("which readings to show on " .. entryName(entry), rows,
-      "[up/down] move   [space] show or hide   [q] done")
+      { { label = "show or hide", code = keyboard.keys.space },
+        { label = "done", code = keyboard.keys.q } })
     if not row or code ~= keyboard.keys.space then
       save()
       return
@@ -658,7 +742,8 @@ local function editLimits(entry)
     end
 
     local row, code = menu("the maximum each bar is drawn against", rows,
-      "[up/down] move   [enter] set   [q] done")
+      { { label = "set", code = keyboard.keys.enter },
+        { label = "done", code = keyboard.keys.q } })
     if not row or code ~= keyboard.keys.enter then
       save()
       return
@@ -680,7 +765,8 @@ local function editMachine(entry)
     }
 
     local row, code = menu(entryName(entry), rows,
-      "[up/down] move   [enter] change   [q] back")
+      { { label = "change", code = keyboard.keys.enter },
+        { label = "back", code = keyboard.keys.q } })
     if not row or code ~= keyboard.keys.enter then
       return
     end
@@ -759,7 +845,9 @@ local function editAlert(alert)
     rows[#rows + 1] = { what = "add", text = "add a machine to act on" }
 
     local row, code = menu("alert: " .. tostring(alert.name), rows,
-      "[up/down] move   [enter] change   [d] remove an action   [q] back")
+      { { label = "change", code = keyboard.keys.enter },
+        { label = "remove action", code = keyboard.keys.d },
+        { label = "back", code = keyboard.keys.q } })
     if not row or code == keyboard.keys.q then
       save()
       return
@@ -814,7 +902,8 @@ local function addAlert()
     rows[#rows + 1] = { gauge = gauge, text = gaugeText(gauge) }
   end
   local row, code = menu("which reading should it watch", rows,
-    "[up/down] move   [enter] choose   [q] cancel")
+    { { label = "choose", code = keyboard.keys.enter },
+      { label = "cancel", code = keyboard.keys.q } })
   if not row or code ~= keyboard.keys.enter then
     return
   end
@@ -902,8 +991,11 @@ local function editor()
     end
 
     local row, code = menu("ocwatch v" .. VERSION .. "   configuration", rows,
-      "[up/down] move   [enter] open   [m] watch a machine   [n] new alert"
-        .. "   [d] remove   [q] done")
+      { { label = "open", code = keyboard.keys.enter },
+        { label = "watch a machine", code = keyboard.keys.m },
+        { label = "new alert", code = keyboard.keys.n },
+        { label = "remove", code = keyboard.keys.d },
+        { label = "done", code = keyboard.keys.q } })
 
     if not row then
       return

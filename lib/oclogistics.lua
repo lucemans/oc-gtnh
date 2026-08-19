@@ -5,11 +5,12 @@
 -- rather than data. Each field of that proxy is one method, shaped
 -- {name = "...", proxy = <the proxy>}, callable through a __call metamethod.
 
+local component = require("component")
 local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.1.0"
+lp.VERSION = "0.2.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -60,6 +61,70 @@ end
 function lp.displayName(address)
   local id = lp.routerId(address)
   return id and ("Logistics Pipe #" .. id) or nil
+end
+
+function lp.pipes()
+  local found = {}
+  for address in component.list("logisticspipe") do
+    found[#found + 1] = address
+  end
+  table.sort(found)
+  return found
+end
+
+-- The names a proxy offers, sorted. Every field of a proxy is one method, so
+-- this is its whole vocabulary.
+function lp.methods(proxy)
+  local names = {}
+  if type(proxy) ~= "table" then
+    return names
+  end
+  for name, entry in pairs(proxy) do
+    if type(entry) == "table" and name ~= "proxy" then
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  return names
+end
+
+-- Logistics Pipes is a moving target: a pack forks it, and which methods a pipe
+-- offers depends on which pipe it is. So rather than name them in advance, every
+-- method that only reads is called and shown, and anything that answers with
+-- another proxy is walked into.
+--
+-- Returns a flat list of { depth, name, text, proxy }, deep first, bounded so a
+-- proxy that refers back to itself cannot run away with the program.
+function lp.walk(proxy, depth, seen, out)
+  depth = depth or 0
+  seen = seen or {}
+  out = out or {}
+
+  if depth > 3 or seen[proxy] then
+    return out
+  end
+  seen[proxy] = true
+
+  for _, name in ipairs(lp.methods(proxy)) do
+    if core.isReadable(name) then
+      local value, reason = lp.invoke(proxy, name)
+      if type(value) == "table" and lp.methods(value)[1] then
+        out[#out + 1] = { depth = depth, name = name, text = "", proxy = value }
+        lp.walk(value, depth + 1, seen, out)
+      else
+        out[#out + 1] = {
+          depth = depth,
+          name = name,
+          text = value == nil and ("- " .. tostring(reason or "no answer"))
+            or core.formatValue(value),
+        }
+      end
+    else
+      out[#out + 1] = { depth = depth, name = name, text = "", callable = true }
+    end
+  end
+
+  return out
 end
 
 return lp

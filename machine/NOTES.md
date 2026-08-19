@@ -371,3 +371,26 @@ came from the `@Callback` annotations on the tile classes in
 node and refuses every connection: it is the loudspeaker a tape drive feeds
 over audio cable, not something a program calls. Sound a program chooses comes
 from the note block, speech from the speech box, and words from the chat box.
+
+## What can make a noise without anything installed
+
+The speech box cannot, in this pack. It needs text-to-speech on the server, and
+without it every `say` **returns false while the call itself succeeds**. Reading
+the call as success is what kept the chat box silent behind it, so `core.setValue`
+now hands back what the method returned as well as whether it raised.
+
+What does work with nothing installed:
+
+| block | how it sounds |
+| --- | --- |
+| the computer itself | `computer.beep(hz, seconds)`, always there |
+| OpenSecurity alarm, `os_alarm` | a siren with a range of up to 15 blocks. Two sounds ship, klaxon1 and klaxon2. Every call is direct. It is its own loudspeaker and needs no cable. |
+| Computronics iron note block | one vanilla note at a time, seven named instruments |
+| Computronics chat box | words, into Minecraft chat, within a range the server config caps |
+
+Computronics speakers carry audio from an `IAudioSource`, and the only two are
+the tape drive and the speech box. Nothing else can be wired into them, so a
+speaker is not a way to make a general noise.
+
+An alarm is set while something is wrong and cleared when it is not, rather than
+sounded once, which is what separates it from an announcement.

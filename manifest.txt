@@ -3,11 +3,13 @@ lib/ocgt.lua
 lib/oclogistics.lua
 lib/octank.lua
 lib/occomputronics.lua
+lib/ocsecurity.lua
 lib/ocnet.lua
 programs/ocup.lua
 programs/ocdebug.lua
 programs/ocdump.lua
 programs/ocwatch.lua
+programs/ocitems.lua
 programs/ocsweeper.lua
 programs/occonnect.lua
 programs/ockeypad.lua

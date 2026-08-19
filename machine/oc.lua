@@ -552,6 +552,9 @@ function oc.install()
   package.preload["occomputronics"] = function()
     return dofile("lib/occomputronics.lua")
   end
+  package.preload["ocsecurity"] = function()
+    return dofile("lib/ocsecurity.lua")
+  end
   package.preload["ocnet"] = function()
     return dofile("lib/ocnet.lua")
   end

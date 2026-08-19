@@ -7,7 +7,7 @@ local serialization = require("serialization")
 
 local core = {}
 
-core.VERSION = "0.7.0"
+core.VERSION = "0.8.0"
 
 -- the Minecraft section sign, two bytes in UTF-8
 core.SECTION = "\194\167"
@@ -59,14 +59,19 @@ function core.call(address, method, ...)
   return table.unpack(results, 2, results.n)
 end
 
--- the one place a method that changes the world may be called. Inspection
+-- The one place a method that changes the world may be called. Inspection
 -- programs must never reach for this; ocwatch acts through it deliberately.
+--
+-- Whatever the method returned comes back after the success flag. A call that
+-- does not raise has still not necessarily done anything: a speech box with no
+-- text-to-speech on the server answers its say with false, and reading that as
+-- success is how a silent alert looked like a working one.
 function core.setValue(address, method, ...)
   local results = table.pack(pcall(component.invoke, address, method, ...))
   if not results[1] then
     return nil, core.oneLine(tostring(results[2]))
   end
-  return true
+  return true, table.unpack(results, 2, results.n)
 end
 
 function core.strip(text)

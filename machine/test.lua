@@ -2201,6 +2201,82 @@ test("a tripped alert is spoken aloud and turns the lamps red", function()
   check(colors[1] == 31 * 1024, "lit the lamp " .. tostring(colors[1]) .. ", not red")
 end)
 
+-- The speech box needs text-to-speech installed on the server. Without it the
+-- call succeeds and returns false, and reading that as success is what kept the
+-- chat box silent behind it.
+test("a speech box that cannot speak hands over to the chat box", function()
+  local chatted = {}
+  local mute = {
+    address = "5e100000-0000-0000-0000-000000000002",
+    kind = "speech_box",
+    methods = { say = "function(text:string):boolean" },
+    values = {
+      say = function()
+        return false, "MaryTTS is not installed"
+      end,
+    },
+  }
+  local chat = {
+    address = "c8a70000-0000-0000-0000-000000000001",
+    kind = "chat_box",
+    methods = { say = "function(text:string [, distance:number]):boolean" },
+    values = {
+      say = function(text)
+        chatted[#chatted + 1] = text
+        return true
+      end,
+    },
+  }
+  local tank = tankAt("100")
+  oc.components = { tank, mute, chat }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { { name = "diesel low", address = tank.address,
+      label = "Bio Diesel", below = 50000, above = 200000 } },
+  })
+
+  oc.run("ocwatch")
+  check(#chatted == 1, "the chat box said " .. #chatted .. " things")
+  check(contains(chatted[1] or "", "diesel low"), "did not name the alert")
+end)
+
+test("an alarm sounds while an alert is tripped", function()
+  local calls = {}
+  local alarm = {
+    address = "a1a70000-0000-0000-0000-000000000001",
+    kind = "os_alarm",
+    methods = {
+      activate = "function():string",
+      deactivate = "function():string",
+      setAlarm = "function(name:string):string",
+      setRange = "function(blocks:number):string",
+      listSounds = "function():table",
+    },
+    values = {
+      activate = function()
+        calls[#calls + 1] = "activate"
+        return "Ok"
+      end,
+      deactivate = function()
+        calls[#calls + 1] = "deactivate"
+        return "Ok"
+      end,
+    },
+  }
+  local tank = tankAt("100")
+  oc.components = { tank, alarm }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { { name = "diesel low", address = tank.address,
+      label = "Bio Diesel", below = 50000, above = 200000, beep = false } },
+  })
+
+  oc.run("ocwatch")
+  -- an alarm is set while something is wrong, not sounded once and stopped
+  check(#calls == 1 and calls[1] == "activate",
+    "the alarm was told " .. table.concat(calls, ", "))
+end)
+
 test("an alert set not to beep stays quiet", function()
   local said, colors = {}, {}
   local tank = tankAt("100")
@@ -2271,6 +2347,8 @@ end)
 
 test("the editor lists what is watched and what will fire", function()
   local tank = tankAt("100000")
+  oc.width, oc.height = 160, 50
+  oc.reset()
   oc.components = { tank }
   oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
     nicknames = { [tank.address] = "EBF Fluid Tank" },
@@ -2284,7 +2362,8 @@ test("the editor lists what is watched and what will fire", function()
   oc.push("key_down", "keyboard", 0, 0x10)
 
   oc.run("ocwatch", "--edit")
-  local out = oc.printed()
+  -- the editor is drawn on the screen now, not printed
+  local out = oc.frame()
   check(contains(out, "MACHINES"), "no machines section")
   check(contains(out, "ALERTS"), "no alerts section")
   check(contains(out, "EBF Fluid Tank"), "did not name the machine")
@@ -3115,3 +3194,35 @@ if failures > 0 then
   os.exit(1)
 end
 say("all checks passed")
+
+-------------------------------------------------------------------------------
+-- ocitems
+
+test("ocitems walks a pipe and shows what it answers", function()
+  local written = { value = false }
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  oc.components = { logisticsPipe(written) }
+
+  local ok, reason = oc.run("ocitems")
+  check(ok, "ocitems crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  check(contains(frame, "Logistics Pipe #42"), "did not name the pipe by its router")
+  check(contains(frame, "getRouterId"), "did not list the pipe's methods")
+  check(contains(frame, "42"), "did not read a value back")
+  -- which methods a fork of the mod offers is not known in advance, so a proxy
+  -- that answers with another proxy has to be walked into
+  check(contains(frame, "isDefaultRoute"), "did not walk into the nested proxy")
+  -- and nothing that changes the world may be called to find out what it does
+  check(written.value == false, "called a method that writes")
+  if show then
+    say(frame)
+  end
+end)
+
+test("ocitems says so when no pipe is attached", function()
+  oc.components = {}
+  oc.run("ocitems")
+  check(contains(oc.frame(), "no Logistics Pipe attached"), "did not say the list was empty")
+end)

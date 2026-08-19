@@ -28,7 +28,7 @@ local core = require("oclib")
 
 local ct = {}
 
-ct.VERSION = "0.1.0"
+ct.VERSION = "0.2.0"
 
 -- what each component is, for a program that lists what it can see
 ct.KINDS = {
@@ -85,42 +85,55 @@ function ct.lamps(color)
   return lit
 end
 
--- Says something out loud, by whatever this computer has to say it with. A
--- speech box speaks; a chat box writes; a note block can only make a noise, so
--- it plays a short rising or falling figure instead of the words.
+-- Puts words somewhere a person will read or hear them, or nil if this computer
+-- has nothing that can.
 --
--- Returns what it used, or nil when the computer has none of them and the
--- caller should fall back to its own beep.
-function ct.announce(text, urgent)
+-- The speech box is tried first and is the one that often cannot: it needs
+-- text-to-speech installed on the server, and without it every say answers
+-- false. That false has to be read, because the call itself succeeds either
+-- way, and taking it for success is what kept the chat box silent.
+function ct.speak(text)
   local speech = ct.first("speech_box")
-  if speech and core.setValue(speech, "say", text) then
-    return "speech_box"
+  if speech then
+    local ok, said = core.setValue(speech, "say", text)
+    if ok and said ~= false then
+      return "speech_box"
+    end
   end
 
   local chat = ct.first("chat_box")
-  if chat and core.setValue(chat, "say", text) then
-    return "chat_box"
+  if chat then
+    local ok, said = core.setValue(chat, "say", text)
+    if ok and said ~= false then
+      return "chat_box"
+    end
   end
 
+  return nil
+end
+
+-- A note block cannot say words, so it says which of two things happened:
+-- falling for trouble, rising for it being over.
+function ct.play(urgent)
   local note = ct.first("iron_noteblock")
-  if note then
-    -- falling for trouble, rising for it being over: the only two things a
-    -- single note block can say apart
-    local figure = { 12, 7, 3 }
-    if not urgent then
-      figure = { 3, 7, 12 }
-    end
-    local played = false
-    for _, pitch in ipairs(figure) do
-      if core.setValue(note, "playNote", "harp", pitch, 1) then
-        played = true
-      end
-    end
-    if played then
-      return "iron_noteblock"
-    end
+  if not note then
+    return nil
   end
 
+  local figure = { 12, 7, 3 }
+  if not urgent then
+    figure = { 3, 7, 12 }
+  end
+
+  local played = false
+  for _, pitch in ipairs(figure) do
+    if core.setValue(note, "playNote", "harp", pitch, 1) then
+      played = true
+    end
+  end
+  if played then
+    return "iron_noteblock"
+  end
   return nil
 end
 
