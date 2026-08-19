@@ -424,3 +424,19 @@ same way. That has not been confirmed against a real one yet.
 away the name of every machine somebody had called S1 or EBF2. A reading is
 either coloured, or it is a label followed by a number; anything else with
 letters in it is a name.
+
+## Why the manifest carries versions
+
+`ocup` used to download every file in the manifest and compare it against the
+copy on disk, which is one HTTPS round trip a file and most of the time it does
+nothing. The manifest names the version each file declares, so the comparison
+happens against the version already installed and only the files that differ are
+fetched: two requests for a run with nothing to do, rather than twenty-odd.
+
+The cost is that the manifest has to tell the truth. A file changed without its
+`VERSION` moving is invisible to an update. `machine/manifest.lua` regenerates
+the file from the sources, and a check in `machine/test.lua` fails when the two
+have drifted apart.
+
+A manifest line with no version still works and means "always fetch this", which
+is what an older manifest does.
