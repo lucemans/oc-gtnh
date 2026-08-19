@@ -19,7 +19,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.16.0"
+local VERSION = "0.16.1"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -552,8 +552,14 @@ end
 --
 -- Returns the row that was selected and the key of the action chosen, so each
 -- screen still decides what its own actions do.
-local function menu(title, rows, buttons)
-  local cursor, top = 1, 1
+local function menu(title, rows, buttons, start)
+  -- Where the cursor was when this screen was last left. Every action returns
+  -- to the caller and comes straight back, and starting again at the top each
+  -- time moved the selection out from under whoever was pressing the button.
+  local cursor, top = start or 1, 1
+  if cursor < 1 or cursor > #rows then
+    cursor = 1
+  end
   while cursor <= #rows and rows[cursor].heading do
     cursor = cursor + 1
   end
@@ -626,7 +632,7 @@ local function menu(title, rows, buttons)
     local name = packed[1]
 
     if name == "interrupted" then
-      return nil, keyboard.keys.q
+      return nil, keyboard.keys.q, cursor
     elseif name == "key_down" then
       local code = packed[4]
       if code == keyboard.keys.up then
@@ -634,14 +640,14 @@ local function menu(title, rows, buttons)
       elseif code == keyboard.keys.down then
         cursor = step(cursor, 1)
       else
-        return rows[cursor], code
+        return rows[cursor], code, cursor
       end
     elseif name == "touch" then
       local column, row = packed[3], packed[4]
       if row == H then
         for _, spot in ipairs(spots) do
           if column >= spot.from and column <= spot.to then
-            return rows[cursor], spot.code
+            return rows[cursor], spot.code, cursor
           end
         end
       elseif row >= 3 then
@@ -649,7 +655,7 @@ local function menu(title, rows, buttons)
         local landed = rows[index]
         if landed and not landed.heading then
           if index == cursor and buttons[1] then
-            return landed, buttons[1].code
+            return landed, buttons[1].code, index
           end
           cursor = index
         end
@@ -762,6 +768,7 @@ end
 
 local function editReadings(entry)
   entry.hidden = entry.hidden or {}
+  local at = 1
   while true do
     local readings = readingsOf(entry.address, entry.side)
     local rows = {}
@@ -775,9 +782,10 @@ local function editReadings(entry)
         text = (entry.hidden[index] and "[ ] " or "[x] ") .. label }
     end
 
-    local row, code = menu("which readings to show on " .. entryName(entry), rows,
+    local row, code
+    row, code, at = menu("which readings to show on " .. entryName(entry), rows,
       { { label = "show or hide", code = keyboard.keys.space },
-        { label = "done", code = keyboard.keys.q } })
+        { label = "done", code = keyboard.keys.q } }, at)
     if not row or code ~= keyboard.keys.space then
       save()
       return
@@ -794,6 +802,7 @@ end
 -- 5,000 and 10,000 then a bar against four million never leaves zero, so the
 -- maximum worth drawing against is set per gauge here.
 local function editLimits(entry)
+  local at = 1
   while true do
     local gauges = gaugesOf(readingsOf(entry.address, entry.side))
     if #gauges == 0 then
@@ -810,9 +819,10 @@ local function editLimits(entry)
           .. (limit and ("   drawn against " .. core.comma(limit)) or "") }
     end
 
-    local row, code = menu("the maximum each bar is drawn against", rows,
+    local row, code
+    row, code, at = menu("the maximum each bar is drawn against", rows,
       { { label = "set", code = keyboard.keys.enter },
-        { label = "done", code = keyboard.keys.q } })
+        { label = "done", code = keyboard.keys.q } }, at)
     if not row or code ~= keyboard.keys.enter then
       save()
       return
@@ -826,6 +836,7 @@ local function editLimits(entry)
 end
 
 local function editMachine(entry)
+  local at = 1
   while true do
     local shown = "a card of its own, with a bar for each reading"
     if entry.compact then
@@ -839,9 +850,10 @@ local function editMachine(entry)
       { what = "limits", text = "bar maximum       what each gauge is drawn against" },
     }
 
-    local row, code = menu(entryName(entry), rows,
+    local row, code
+    row, code, at = menu(entryName(entry), rows,
       { { label = "change", code = keyboard.keys.enter },
-        { label = "back", code = keyboard.keys.q } })
+        { label = "back", code = keyboard.keys.q } }, at)
     if not row or code ~= keyboard.keys.enter then
       return
     end
@@ -907,6 +919,7 @@ end
 -- One trigger, any number of machines. Two blast furnaces fed by one tank were
 -- two identical alerts before this, which then had to be kept in step by hand.
 local function editAlert(alert)
+  local at = 1
   while true do
     local rows = {
       { what = "name", text = "name              " .. tostring(alert.name) },
@@ -926,10 +939,11 @@ local function editAlert(alert)
     end
     rows[#rows + 1] = { what = "add", text = "add a machine to act on" }
 
-    local row, code = menu("alert: " .. tostring(alert.name), rows,
+    local row, code
+    row, code, at = menu("alert: " .. tostring(alert.name), rows,
       { { label = "change", code = keyboard.keys.enter },
         { label = "remove action", code = keyboard.keys.d },
-        { label = "back", code = keyboard.keys.q } })
+        { label = "back", code = keyboard.keys.q } }, at)
     if not row or code == keyboard.keys.q then
       save()
       return
@@ -1009,6 +1023,7 @@ end
 -- lamp and a siren and a line in chat are not alternatives: they do different
 -- jobs, in different rooms, at the same time.
 local function editNotify()
+  local at = 1
   while true do
     local rows = {}
     for _, channel in ipairs(notify.CHANNELS) do
@@ -1037,11 +1052,12 @@ local function editNotify()
       }
     end
 
-    local row, code = menu("how this base says something happened", rows,
+    local row, code
+    row, code, at = menu("how this base says something happened", rows,
       { { label = "on or off", code = keyboard.keys.space },
         { label = "settings", code = keyboard.keys.enter },
         { label = "test it", code = keyboard.keys.t },
-        { label = "back", code = keyboard.keys.q } })
+        { label = "back", code = keyboard.keys.q } }, at)
     if not row or code == keyboard.keys.q then
       save()
       return
@@ -1127,6 +1143,7 @@ local function alertSummary(alert)
 end
 
 local function editor()
+  local at = 1
   while true do
     local rows = { { heading = true, text = "MACHINES" } }
     for index, entry in ipairs(config.watch) do
@@ -1139,7 +1156,8 @@ local function editor()
         text = alertSummary(alert) }
     end
 
-    local row, code = menu("ocwatch v" .. VERSION .. "   configuration", rows,
+    local row, code
+    row, code, at = menu("ocwatch v" .. VERSION .. "   configuration", rows,
       { { label = "open", code = keyboard.keys.enter },
         { label = "move up", code = keyboard.keys.pageUp },
         { label = "move down", code = keyboard.keys.pageDown },
@@ -1147,7 +1165,7 @@ local function editor()
         { label = "new alert", code = keyboard.keys.n },
         { label = "remove", code = keyboard.keys.d },
         { label = "notifications", code = keyboard.keys.t },
-        { label = "done", code = keyboard.keys.q } })
+        { label = "done", code = keyboard.keys.q } }, at)
 
     -- The action is read before the row, because on a computer with nothing
     -- configured there is no row: both sections are empty, every row is a
@@ -1172,6 +1190,10 @@ local function editor()
       if config.watch[to] then
         config.watch[row.index], config.watch[to] =
           config.watch[to], config.watch[row.index]
+        -- the cursor follows the machine, not the position it left: the first
+        -- row is the MACHINES heading, so a machine sits one row below its
+        -- place in the list
+        at = to + 1
         save()
       end
     elseif row and code == keyboard.keys.d and row.what == "machine" then

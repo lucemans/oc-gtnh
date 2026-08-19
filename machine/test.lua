@@ -282,27 +282,40 @@ test("ocup sinks what it is not installing to the bottom of its folder", functio
     "left an untouched program above the ones being installed")
 end)
 
-test("ocup --edit writes the choice and applies nothing yet", function()
+test("ocup install chooses and then installs, without a second run", function()
   oc.components = { INTERNET }
   oc.files["/bin/ocdump.lua"] = program("0.1.0")
   oc.respond = serveEverything()
-  -- down to ocdump, space to turn it off, enter to save
+  -- down to ocdump, space to turn it off, enter to install what is left
   oc.push("key_down", "keyboard", 0, 0xD0)
   oc.push("key_down", "keyboard", 32, 0x39)
   oc.push("key_down", "keyboard", 13, 0x1C)
 
-  local ok, reason = oc.run("ocup", "--edit")
-  check(ok, "ocup --edit crashed: " .. tostring(reason))
+  local ok, reason = oc.run("ocup", "install")
+  check(ok, "ocup install crashed: " .. tostring(reason))
 
   local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
-  check(saved and saved.programs, "wrote no choice")
   local chosen = table.concat(saved and saved.programs or {}, ",")
   check(chosen == "ocdebug", "chose " .. chosen)
-  -- editing decides, running applies: nothing should vanish behind the user
-  check(oc.files["/bin/ocdump.lua"] ~= nil, "removed a file while only editing")
+  -- being told to run the same program again was one step too many
+  check(oc.files["/bin/ocdebug.lua"] ~= nil, "did not install what was chosen")
+  check(oc.files["/bin/ocdump.lua"] == nil, "left behind what was turned off")
 end)
 
-test("ocup --edit keeps the rest of the config", function()
+test("ocup install leaves everything alone when it is cancelled", function()
+  oc.components = { INTERNET }
+  oc.files["/bin/ocdump.lua"] = program("0.1.0")
+  oc.respond = serveEverything()
+  oc.push("key_down", "keyboard", 0, 0xD0)
+  oc.push("key_down", "keyboard", 32, 0x39)
+  oc.push("key_down", "keyboard", 0, 0x10)
+
+  oc.run("ocup", "install")
+  check(oc.files["/etc/ocgt.cfg"] == nil, "saved a choice that was cancelled")
+  check(oc.files["/bin/ocdump.lua"] ~= nil, "removed a program on the way out")
+end)
+
+test("ocup install keeps the rest of the config", function()
   oc.components = { INTERNET }
   oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
     nicknames = { ["aa11bb22"] = "EBF Fluid Tank" },
@@ -311,7 +324,7 @@ test("ocup --edit keeps the rest of the config", function()
   oc.respond = serveEverything()
   oc.push("key_down", "keyboard", 13, 0x1C)
 
-  oc.run("ocup", "--edit")
+  oc.run("ocup", "install")
   local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
   check(saved and saved.nicknames and saved.nicknames["aa11bb22"] == "EBF Fluid Tank",
     "lost what ocwatch had saved")
@@ -3604,4 +3617,40 @@ test("a siren is told it is over as well as that it started", function()
   notify.state({}, false)
   -- an alarm never told the trouble ended goes on sounding
   check(calls[#calls] == "deactivate", "the siren was never stopped")
+end)
+
+-- Every action returns to the caller and comes straight back, so a cursor that
+-- started at the top each time moved out from under whoever was pressing the
+-- button: the second press moved a different machine.
+test("moving a machine twice moves the same machine twice", function()
+  oc.width, oc.height = 140, 30
+  oc.reset()
+  local tank = tankAt("100000")
+  local one = steamPipe("11110000-0000-0000-0000-000000000001", 17920)
+  local two = steamPipe("22220000-0000-0000-0000-000000000002", 12800)
+  oc.components = { tank, one, two }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = {
+      { address = one.address, side = 3, hidden = {} },
+      { address = two.address, side = 3, hidden = {} },
+      { address = tank.address, hidden = {} },
+    },
+    alerts = {},
+  })
+
+  local function press(code)
+    oc.push("key_down", "keyboard", 0, code)
+  end
+  press(0xD0)   -- down, onto the second machine
+  press(0xD0)   -- down, onto the third
+  press(0xC9)   -- page up
+  press(0xC9)   -- page up again, the same machine
+  press(0x10)   -- q
+
+  oc.run("ocwatch", "--edit")
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  local watch = saved and saved.watch or {}
+  check(watch[1] and watch[1].address == tank.address,
+    "the second press moved something else: the tank is at position "
+      .. (watch[2] and watch[2].address == tank.address and "2" or "3"))
 end)

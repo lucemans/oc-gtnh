@@ -1,7 +1,7 @@
 -- ocup: installs the latest programs from https://github.com/lucemans/oc-gtnh
 --
---   ocup         install and update what this computer is set to have
---   ocup --edit  choose which programs this computer installs
+--   ocup          install and update what this computer is set to have
+--   ocup install  choose which programs this computer installs, then install them
 --
 -- Bootstrap on a fresh computer:
 --   wget https://raw.githubusercontent.com/lucemans/oc-gtnh/refs/heads/master/programs/ocup.lua /bin/ocup.lua
@@ -14,7 +14,7 @@ local keyboard = require("keyboard")
 local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.12.0"
+local VERSION = "0.13.0"
 
 -- read here rather than through oclib: on a fresh computer ocup arrives alone
 -- and there is no /lib yet for it to require
@@ -213,7 +213,7 @@ end
 
 local arguments = { ... }
 local reloaded = arguments[1] == "--reloaded"
-local editing = arguments[1] == "--edit"
+local choosing = arguments[1] == "install"
 
 if not component.isAvailable("internet") then
   io.stderr:write("ocup: no internet card installed\n")
@@ -303,7 +303,7 @@ local function isWanted(source)
   return chosen[name] == true
 end
 
-if editing then
+if choosing then
   local names = {}
   for _, file in ipairs(FILES) do
     local name = programName(file.source)
@@ -338,11 +338,24 @@ if editing then
       write((here and "  > " or "    ") .. (on and "[x] " or "[ ] ") .. name .. "\n",
         on and WHITE or DIM)
     end
+    local keeping = 0
+    for _, name in ipairs(names) do
+      if isWanted("programs/" .. name .. ".lua") then
+        keeping = keeping + 1
+      end
+    end
+
     write("\n  ocup and the libraries are always installed\n", DIM)
-    write("  up and down to move, space to toggle, enter to save\n", DIM)
+    write("  up and down to move, space to toggle\n", DIM)
+    write("  enter to install these " .. keeping .. ", q to leave it as it is\n", DIM)
 
     local name, _, _, code = event.pull(nil, "key_down")
-    if name == nil or code == keyboard.keys.enter then
+    if name == nil or code == keyboard.keys.q then
+      term.clear()
+      write("  nothing changed\n", DIM)
+      paint(WHITE)
+      return 0
+    elseif code == keyboard.keys.enter then
       break
     elseif code == keyboard.keys.up then
       if cursor > 1 then
@@ -377,9 +390,9 @@ if editing then
     return 1
   end
   write("  " .. #keep .. " of " .. #names .. " programs chosen\n", GREEN)
-  write("  run ocup to apply it\n", DIM)
-  paint(WHITE)
-  return 0
+  write("\n", DIM)
+  -- and straight on into installing it, because choosing and then being told to
+  -- run the same program again is one step too many
 end
 
 -- ocup updates itself first and hands over to the new copy, so the rest of the
