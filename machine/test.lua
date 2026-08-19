@@ -3256,16 +3256,21 @@ local function requestPipe(stock, tally)
     entry.itemData = entry.itemData or 0
     byKey[entry.itemId .. ":" .. entry.itemData] = entry
 
+    -- read live, so a test can move the world under a running program
     local identifier = {
       type = "userdata",
-      getName = proxyMethod("getName", entry.name),
-      getId = proxyMethod("getId", entry.itemId),
-      getData = proxyMethod("getData", entry.itemData),
-      hasTagCompound = proxyMethod("hasTagCompound", entry.tagged == true),
+      getName = proxyCall("getName", function() return entry.name end),
+      getId = proxyCall("getId", function() return entry.itemId end),
+      getData = proxyCall("getData", function() return entry.itemData end),
+      hasTagCompound = proxyCall("hasTagCompound", function()
+        return entry.tagged == true
+      end),
     }
     stacks[index] = {
       type = "userdata",
-      getValue2 = proxyMethod("getValue2", entry.amount),
+      getValue2 = proxyCall("getValue2", function()
+        return entry.later or entry.amount
+      end),
       getValue1 = proxyCall("getValue1", function()
         tally.names = tally.names + 1
         return identifier
@@ -3297,9 +3302,15 @@ local function requestPipe(stock, tally)
             type = "userdata",
             getItemIdentifierBuilder = proxyMethod("getItemIdentifierBuilder", builder),
           }),
+          -- a fresh list every call, as the real one hands back: the reader
+          -- blanks entries as it lets them go, and the world does not lose them
           getAvailableItems = proxyCall("getAvailableItems", function()
             tally.reads = tally.reads + 1
-            return stacks
+            local fresh = {}
+            for index, stack in ipairs(stacks) do
+              fresh[index] = stack
+            end
+            return fresh
           end),
           getItemAmount = proxyCall("getItemAmount", function(id)
             tally.counts = tally.counts + 1
@@ -3372,33 +3383,71 @@ test("ocitems names as many items as the memory allows, and no more", function()
     .. named[2] .. " against " .. named[1])
 end)
 
--- A rate over a quarter of a minute is mostly noise, and a stock that moves in
--- bursts sits still through a short window entirely, so a window is three
--- minutes and nothing is claimed until one has closed.
-test("an item says which way it is going, once its window has closed", function()
+-- Take 20 ingots out and it has to say 20. Scaling the figure to the window it
+-- was measured over reported that withdrawal as 18, because the window had run
+-- 200 seconds rather than 180, and it was the one number anybody could check.
+test("an item reports what actually moved, on the reading that sees it", function()
   local lplib = require("oclogistics")
   local item = {}
 
   lplib.mark(item, 100, 1000)
-  check(item.rate == nil, "claimed a rate from one reading")
-  lplib.mark(item, 400, 1060)
-  check(item.rate == nil, "claimed a rate from a minute")
-  check(item.amount == 400, "did not keep the count itself current")
+  check(item.rate == nil, "claimed movement from a single reading")
 
-  lplib.mark(item, 700, 1180)
-  check(item.rate == 600, "made the window " .. tostring(item.rate) .. ", not 600")
+  lplib.mark(item, 80, 1005)
+  check(item.rate == -20, "reported " .. tostring(item.rate) .. ", not the 20 taken")
+  check(item.amount == 80, "did not keep the count itself current")
 
-  -- and the next window is measured from here, not from where it all began
-  lplib.mark(item, 700, 1360)
-  check(item.rate == 0, "went on reporting a rate that had stopped")
+  -- it adds up as it goes rather than waiting for a window to run out
+  lplib.mark(item, 60, 1010)
+  check(item.rate == -40, "did not add the second withdrawal on")
 
-  -- a window closes on the first reading past its end, which is always a little
-  -- late, so what it reports is scaled to the window it names
-  local slow = {}
-  lplib.mark(slow, 0, 2000)
-  lplib.mark(slow, 360, 2360)
-  check(slow.rate == 180, "reported " .. tostring(slow.rate)
-    .. " over a window twice as long as it says")
+  -- a reading that changes nothing leaves it standing
+  lplib.mark(item, 60, 1100)
+  check(item.rate == -40, "forgot what moved while nothing was moving")
+
+  -- and three quiet minutes clear it: it is what moved lately or it is nothing
+  lplib.mark(item, 60, 1200)
+  check(item.rate == 0, "still reporting movement three minutes after it stopped")
+
+  -- a stock that moves all day reports what it did lately, not its whole life
+  local steady = {}
+  lplib.mark(steady, 0, 2000)
+  lplib.mark(steady, 10, 2010)
+  lplib.mark(steady, 20, 2100)
+  check(steady.rate == 20, "lost track inside the window")
+  lplib.mark(steady, 30, 2300)
+  check(steady.rate == 10, "went on adding up past the window it names")
+end)
+
+-- Reading the names is nearly all of what a read costs, so a read can be taken
+-- as counts alone against the names an earlier one established. That leans on
+-- the network answering in the same order, so it is checked rather than assumed.
+test("a read can be taken as counts alone, and is checked before it is", function()
+  oc.reset()
+  local lplib = require("oclogistics")
+  local stock = {
+    { name = "Cobblestone", amount = 100 },
+    { name = "Redstone", amount = 50 },
+  }
+  oc.components = { requestPipe(stock) }
+
+  local proxy = lplib.requestPipe()
+  local items, total = lplib.available(proxy)
+  check(#items == 2 and items[1].name == "Cobblestone", "did not read the list")
+
+  stock[1].amount = 80
+  check(lplib.recount(proxy, items, total, 2000), "would not take the counts")
+  check(items[1].amount == 80 and items[1].rate == -20,
+    "took the counts but not what they mean")
+
+  -- a list that is not the length it was is a list whose positions have moved
+  check(not lplib.recount(proxy, items, total + 1, 2100),
+    "believed a read whose total had moved")
+
+  -- and so is one where a position no longer holds what it held
+  stock[1].itemId = 4242
+  check(not lplib.recount(proxy, items, total, 2200),
+    "believed a read that had been reordered underneath it")
 end)
 
 test("only what is moving is worth a place, gains first", function()
@@ -3435,7 +3484,8 @@ test("a fresh read keeps the windows a rate is being measured over", function()
   local merged = lplib.merge(items, fresh, 1180)
   check(#merged == 2, "folded the read into " .. #merged .. " items, not two")
   check(merged[1].rate == 600, "threw away a window that was minutes old")
-  check(merged[2].when == 1180, "did not start a window for an item never seen")
+  check(merged[2].name == "Redstone" and merged[2].rate == nil,
+    "claimed movement for an item it has only ever seen once")
 
   -- and what the network no longer has does not linger
   local after = lplib.merge(merged, { fresh[2] }, 1200)

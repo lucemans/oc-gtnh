@@ -2,12 +2,14 @@
 --
 --   ocitems
 --
--- There are two ways to bring the counts up to date. Reading the whole network
--- is every count at once and the only way an item nobody has ever had appears,
--- and it costs about 950 KB in a single go. Counting one item at a time costs a
--- server tick each and finds nothing new. So the machine decides: with the
--- memory for a read it reads again on a clock, and without it, or in between,
--- it counts an item at a time.
+-- There are three ways to bring the counts up to date and the machine picks
+-- between them by what it can afford. A read of the network is every count at
+-- once; reading the names out of it as well is what takes the time, so most
+-- reads are taken as counts alone against the names the last full one
+-- established. Either way a read is about 950 KB in a single go, which is why
+-- it happens only when the memory is there. Counting one item at a time costs a
+-- server tick each and finds nothing new, and is what a machine without that
+-- memory is left with.
 --
 -- A machine with a network card answers for what it is watching as well as
 -- showing it, since it is the only one that can see the item network at all.
@@ -25,7 +27,7 @@ local net = require("ocnet")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.8.0"
+local VERSION = "0.9.0"
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -34,11 +36,19 @@ local CACHE = "/etc/ocitems.cache"
 local PER_DRAW = 4
 -- how long the loop listens before it goes back to counting
 local REST = 0.05
--- what one read of the whole network asks for in a single go. A computer that
--- goes into it with less free than this does not fail the call, it dies.
-local ROOM = 1100 * 1024
--- how long between reads of the whole network, on a machine with room for them
-local REREAD = 30
+-- What has to be free before the network is read at all. The read itself is
+-- about 950 KB in a single go, and a computer that goes into it with less than
+-- that does not fail the call, it dies. The margin over 950 is not spare: three
+-- reads in a row killed a server with 3.3 MB free, because the collector had
+-- not given the first two back yet, so what this really asks is whether the
+-- last read has been cleared up.
+local ROOM = 1600 * 1024
+-- How long between reads, on a machine with room for them. A counted read is
+-- quick — a tenth of a second against three — but it costs the same memory as
+-- any other, so how often one can really happen is settled by the guard above
+-- rather than by this.
+local COUNTED = 10
+local NAMED = 120
 
 local gpu = component.gpu
 local paint = core.painter(gpu)
@@ -98,7 +108,7 @@ local items, total, note = {}, 0, nil
 local movers = {}
 local scroll = 0
 local cursor = 1
-local lastRead = 0
+local lastRead, lastCount = 0, 0
 local proxy, builder, modem
 
 -------------------------------------------------------------------------------
@@ -193,18 +203,36 @@ local function count()
   end
 end
 
--- Which way round to refresh, decided by what the machine has rather than by a
--- setting. One read of the network is every count at once and finds kinds of
--- item nobody has ever had; counting an item at a time is a server tick each,
--- which is 250 ticks to go round a small list and a minute to go round a large
--- one. So where there is memory for the read, that is the fast way, and where
--- there is not, the counts are kept up one at a time.
+-- Three ways to bring the counts up to date, in order of what they cost.
 --
--- Counting between reads is not idle work either: memory only comes back under
--- the pressure of asking for more, so it is what makes the next read affordable.
+-- A counted read is every count in the network for about a tenth of a second,
+-- against three seconds for a named one, because reading the names is nearly
+-- all of the work. So the counted read is the one that runs often and is what
+-- makes a withdrawal show up within seconds rather than within a minute. It
+-- only holds while the network answers in the same order, which it says whether
+-- it did; when it did not, the list is read properly instead.
+--
+-- A named read runs on a slower clock. It is the only thing that finds an item
+-- nobody has ever had, and it settles where everything sits in the answer,
+-- which is what the counted read leans on.
+--
+-- Counting an item at a time is the slowest by far, a server tick each. It is
+-- what a machine without the memory for a read is left with, and it is not idle
+-- work in between either: memory comes back only under the pressure of asking
+-- for more, so the counting is what makes the next read affordable.
 local function refresh()
-  if computer.freeMemory() >= ROOM and computer.uptime() - lastRead >= REREAD then
+  local now = computer.uptime()
+  if computer.freeMemory() < ROOM then
+    count()
+  elseif now - lastRead >= NAMED then
     scan()
+  elseif now - lastCount >= COUNTED then
+    lastCount = now
+    if lp.recount(proxy, items, total, now) then
+      movers = lp.movers(items, MOVERS)
+    else
+      scan()
+    end
   else
     count()
   end

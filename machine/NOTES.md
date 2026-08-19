@@ -557,6 +557,52 @@ draws, round and round.
 So two numbers an item, written to disk, are enough to keep counting it for as
 long as the program runs. That is the whole reason `ocitems` has a cache.
 
+### Ask a pipe what it is
+
+`help()` answers with the pipe's own type and a numbered list of every command
+it takes, in pages. It is the quickest way to tell one pipe from another, and it
+is the pipe talking rather than a guess:
+
+```
+Type: LogisticsPipes:Request   Page 1 of 2
+  0  Q: getCraftableItems()          1  Q: getItemAmount(ItemIdentifier)
+  2  Q: getAvailableItems()          3  Q: makeRequest(ItemIdentifierStack)
+  4  Q: makeRequest(ItemIdentifier, Double, Boolean)
+  5  Q: makeRequest(ItemIdentifier, Double)
+  6  Q: makeRequest(ItemIdentifierStack, Boolean)
+  7   : canAccess()                  8 D : sendMessage(Object, Object)
+  9   : getLogisticsModule()        10   : getRouterId()
+ 11   : getRouterUUID()             12   : getRouterUUID(Double)
+ 13 D : setTurtleConnect(Boolean)   14 D : getTurtleConnect()
+ 15 D : sendBroadcast(Object)       16 D : getPipeForUUID(String)
+ 17 D : getLP()                     18   : hasLogisticsModule()
+```
+
+That is the whole surface of a request pipe. It can also **be asked to craft**,
+through the four `makeRequest` overloads, which nothing here uses yet.
+
+`help(2)` gives the second page. Passing no page gives the first, so a pipe with
+more than nine commands hides the rest until asked.
+
+### Fluids: still unanswered
+
+Two pipes have ever been reachable from a computer here, and `help()` names them
+`LogisticsPipes:Request` and `LogisticsPipes:Normal`. A Normal pipe offers the
+generic set and nothing else, which says what a plain pipe is and says nothing
+at all about fluids.
+
+**No fluid pipe has yet been reachable.** A pipe is only visible to a computer
+where an adapter or an MFU touches that pipe, so a fluid request pipe elsewhere
+in the network does not appear however many modules it holds. Until one is
+wired the same way the item request pipe is, whether Logistics Pipes exposes
+fluids to a computer at all is not known — and the earlier note here saying it
+does not was reading a Normal pipe and calling it a fluid one.
+
+A tank is readable meanwhile the way `octank` already reads one, through a
+transposer or an adapter with a tank controller upgrade, by the side it sits on.
+That is per tank rather than per network, which is a different question, but it
+is one that can be answered today.
+
 ### Except for a tagged item
 
 An item carrying an NBT tag cannot be named by two numbers. The network answers
@@ -616,6 +662,35 @@ A read hands back new tables. The window a rate is measured over lives on the
 old ones, so a read is folded in rather than swapped in: what is known keeps its
 window and takes the new count as a reading, what is new starts a window, and
 what the network no longer has is dropped.
+
+### A read can be taken as counts alone
+
+Reading the names is nearly all of what a read costs: 1,592 counts arrive in a
+twentieth of a second, the names behind them take three. And the network answers
+in the same order from one call to the next — thirty positions out of thirty
+matched between two consecutive calls at the same total — so a read can be
+matched to the names an earlier one established, by the position each item came
+back in.
+
+That is an assumption about the world, and it stops being true the moment one
+item stops being stocked and another starts, which can leave the total unchanged
+and every count attached to the wrong name. So `lp.recount` checks: the total
+has to match, and eight positions spread through the list are named and
+compared, for about 20 ms. It says whether it was believed, and a caller told no
+reads the list properly instead.
+
+### Cheap in time is not cheap in memory
+
+A counted read still costs the same **950 KB** as a named one. The call is the
+expensive part; what you read out of it is not.
+
+Three reads in one go killed a server with 3.3 MB free — a probe with no guard
+on it, which is exactly the mistake this file already warned about. The
+collector had not given the first two back, and the third had nowhere to go. So
+how often a read can really happen is not a number in the program: it is
+whatever `computer.freeMemory()` allows at the moment, and the guard is set well
+above the 950 KB a read needs so that what it is really asking is whether the
+last read has been cleared up yet.
 
 ### A cache can pin a list at the wrong size
 

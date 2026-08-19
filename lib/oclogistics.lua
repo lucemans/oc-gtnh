@@ -11,7 +11,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.9.0"
+lp.VERSION = "0.10.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -151,6 +151,9 @@ function lp.available(proxy, howMany)
         itemId = id.getId(),
         itemData = id.getData(),
         tagged = id.hasTagCompound() == true,
+        -- where in the answer it came, which is what lets a later read be taken
+        -- as counts alone
+        slot = index,
       }
       list[index] = false
     end
@@ -205,24 +208,77 @@ end
 local WINDOW = 180
 lp.OVER = "3 minutes"
 
--- Takes one reading of an item and works out which way it is going.
+-- Takes one reading of an item and adds up what has moved lately.
 --
--- The reading is compared with the one that opened the window rather than with
--- the reading before it, and the rate only changes when a window closes, so a
--- figure on screen is what happened over the whole window rather than what
--- happened between the last two passes. It is scaled to the window because a
--- window closes on the first reading past its end, which is a little late.
+-- What it reports is the plain difference: take 20 ingots out and it says 20.
+-- It used to be scaled to the window, which is right for a flow and a lie about
+-- an event. A window closes on the first reading past its end, so a withdrawal
+-- of 20 inside a 200-second window came out as 18 — and the one figure anybody
+-- could check against by hand was the one that was wrong.
+--
+-- Movement is added up rather than measured end to end, so it shows on the
+-- first reading that sees it instead of when a window runs out. The window only
+-- bounds how far back it reaches: movement collects for three minutes from the
+-- first of it, and three quiet minutes clear it, so what is on screen is what
+-- moved lately rather than everything that has moved since the program started.
 function lp.mark(item, amount, now)
+  local before = item.amount
   item.amount = amount
-  if not item.when then
-    item.was, item.when = amount, now
+  if before == nil then
     return
   end
-  local since = now - item.when
-  if since >= WINDOW then
-    item.rate = math.floor((amount - item.was) / since * WINDOW + 0.5)
-    item.was, item.when = amount, now
+
+  local change = amount - before
+  if change ~= 0 then
+    if not item.opened or now - item.opened >= WINDOW then
+      item.opened, item.rate = now, change
+    else
+      item.rate = item.rate + change
+    end
+    item.stirred = now
+  elseif item.stirred and now - item.stirred >= WINDOW then
+    item.rate, item.stirred = 0, nil
   end
+end
+
+-- How many positions are checked before a counted read is believed. Eight names
+-- cost about 20 ms; being wrong costs every count in the list.
+local CHECKED = 8
+
+-- A read taken as counts alone.
+--
+-- The call costs the same whether the names are read out of it or not, and the
+-- names are nearly all of the time it takes: 1,592 counts arrive in a twentieth
+-- of a second, the names behind them take three. The network answers in the
+-- same order from one call to the next — checked, thirty positions out of
+-- thirty — so the counts can be matched to the names an earlier read
+-- established, by the position each item came back in.
+--
+-- That stops being true the moment one item stops being stocked and another
+-- starts, which can leave the total unchanged and every count attached to the
+-- wrong name. So the total has to match and a few positions spread through the
+-- list are named and compared. It answers whether it was believed; a caller
+-- that is told no reads the list properly instead.
+function lp.recount(proxy, items, total, now)
+  local list = lp.invoke(proxy, "getAvailableItems")
+  if type(list) ~= "table" or #list ~= total or not items[1] then
+    return false
+  end
+
+  return (pcall(function()
+    local step = math.max(1, math.floor(#items / CHECKED))
+    for rank = 1, #items, step do
+      local item = items[rank]
+      local id = list[item.slot].getValue1()
+      if id.getId() ~= item.itemId or id.getData() ~= item.itemData then
+        error("the network answered in a different order")
+      end
+    end
+
+    for _, item in ipairs(items) do
+      lp.mark(item, list[item.slot].getValue2(), now)
+    end
+  end))
 end
 
 -- Folds a fresh read of the network into what is already known.
@@ -242,10 +298,11 @@ function lp.merge(items, fresh, now)
   for _, entry in ipairs(fresh) do
     local already = known[entry.itemId .. ":" .. entry.itemData]
     if already then
+      -- the position is the new one: a read is what settles where things are
+      already.slot = entry.slot
       lp.mark(already, entry.amount, now)
       out[#out + 1] = already
     else
-      entry.was, entry.when = entry.amount, now
       out[#out + 1] = entry
     end
   end
