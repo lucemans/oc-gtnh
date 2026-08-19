@@ -10,7 +10,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.5.0"
+lp.VERSION = "0.6.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -134,8 +134,14 @@ function lp.available(proxy, most)
 
     for rank = 1, wanted do
       local index = order[rank]
-      items[rank] = { name = list[index].getValue1().getName(),
-        amount = amounts[index] }
+      local id = list[index].getValue1()
+      items[rank] = {
+        name = id.getName(),
+        amount = amounts[index],
+        itemId = id.getId(),
+        itemData = id.getData(),
+        tagged = id.hasTagCompound() == true,
+      }
       list[index] = false
     end
   end)
@@ -144,6 +150,37 @@ function lp.available(proxy, most)
     return nil, core.oneLine(tostring(reason))
   end
   return items, total
+end
+
+-- The builder that names an item to the network. It is made once and set again
+-- for each item, since asking for a new one hands back another object the
+-- computer then has to hold.
+function lp.builder(proxy)
+  local object = lp.invoke(proxy, "getLP")
+  if type(object) ~= "table" then
+    return nil
+  end
+  local builder = lp.invoke(object, "getItemIdentifierBuilder")
+  return type(builder) == "table" and builder or nil
+end
+
+-- How many of one item the network has, asked for by the two numbers that name
+-- it. Building the identifier costs nothing and waits for nothing; the question
+-- itself takes a server tick, which is why a program asks it about a few items
+-- between draws rather than about all of them at once.
+--
+-- An item carrying an NBT tag cannot be asked for this way. Two numbers do not
+-- say which variant is meant and the network answers 0, so a tagged item is
+-- only ever counted by a full read.
+function lp.count(proxy, builder, itemId, itemData)
+  lp.invoke(builder, "setItemID", itemId)
+  lp.invoke(builder, "setItemData", itemData)
+  local id = lp.invoke(builder, "build")
+  if type(id) ~= "table" then
+    return nil
+  end
+  local amount = lp.invoke(proxy, "getItemAmount", id)
+  return type(amount) == "number" and amount or nil
 end
 
 return lp

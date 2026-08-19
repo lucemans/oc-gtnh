@@ -2,11 +2,17 @@
 --
 --   ocitems
 --
--- One request pipe can see the whole network, and asking it what is in there
--- costs about 950 KB on a computer that has 1.4 MB. So the network is read once
--- at the start and the program then lives off what it kept. Asking a second
--- time in one run runs the computer out of memory, which is why there is no
--- refresh: quit and start it again.
+-- Reading the whole network costs about 950 KB on a computer that has 1.4 MB,
+-- so it is read once and written down. After that the counts are kept current
+-- one item at a time: an item can be named to the network by two numbers, and
+-- it answers what it has of that item in one server tick. So the screen goes on
+-- moving without the expensive question ever being asked again, and a run that
+-- starts from what was written down never asks it at all.
+--
+-- [r] reads the whole network again, which is the only way an item nobody has
+-- ever had appears, and the only way a tool or anything else carrying an NBT
+-- tag is counted. It is refused when the memory for it is not there, because
+-- asking anyway does not fail the call, it ends the computer.
 
 local component = require("component")
 local computer = require("computer")
@@ -17,7 +23,18 @@ local lp = require("oclogistics")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
+
+local CACHE = "/etc/ocitems.cache"
+
+-- how many items are counted between two draws. Each one costs a server tick,
+-- so this is also how long a keypress can be left waiting.
+local PER_DRAW = 4
+-- how long the loop listens before it goes back to counting
+local REST = 0.05
+-- what one read of the whole network asks for in a single go. A computer that
+-- goes into it with less free than this does not fail the call, it dies.
+local ROOM = 1100 * 1024
 
 local gpu = component.gpu
 local paint = core.painter(gpu)
@@ -65,16 +82,112 @@ end
 
 local items, total, note = {}, 0, nil
 local scroll = 0
+local cursor = 1
+local proxy, builder
 
-local function header()
+-------------------------------------------------------------------------------
+-- what was written down last time
+
+local function readCache()
+  local file = io.open(CACHE, "r")
+  if not file then
+    return nil
+  end
+  local text = file:read("*a") or ""
+  file:close()
+
+  local network = text:match("^ocitems (%d+)\n")
+  if not network then
+    return nil
+  end
+
+  local kept = {}
+  for line in text:gmatch("[^\n]+") do
+    local itemId, itemData, tagged, amount, name =
+      line:match("^(%d+) (%d+) ([01]) (%d+) (.*)$")
+    if itemId then
+      kept[#kept + 1] = {
+        itemId = tonumber(itemId),
+        itemData = tonumber(itemData),
+        tagged = tagged == "1",
+        amount = tonumber(amount),
+        name = name,
+      }
+    end
+  end
+
+  if not kept[1] then
+    return nil
+  end
+  return kept, tonumber(network)
+end
+
+local function writeCache()
+  local file = io.open(CACHE, "w")
+  if not file then
+    return
+  end
+  file:write("ocitems " .. total .. "\n")
+  for _, item in ipairs(items) do
+    file:write(string.format("%d %d %d %d %s\n", item.itemId, item.itemData,
+      item.tagged and 1 or 0, item.amount, item.name))
+  end
+  file:close()
+end
+
+local function order()
+  table.sort(items, function(a, b) return a.amount > b.amount end)
+end
+
+-- reading the whole network is the slow part of a run and it is silent
+local function saying(text)
+  paint.write(3, TOP, fit(text, W - 2), DIM, BG)
+  paint.flush(W, H, BG, FG)
+end
+
+-------------------------------------------------------------------------------
+
+local function scan()
+  local read, answer = lp.available(proxy)
+  if not read then
+    note = tostring(answer)
+    return
+  end
+  items, total, note = read, answer, nil
+  cursor = 1
+  writeCache()
+end
+
+-- A few items, between draws. The pass runs on round after round: the counts on
+-- screen are never older than one way round the list, and the order is only
+-- settled at the end of a pass, so rows do not jump about while it is going on.
+local function count()
+  if not builder or not items[1] then
+    return
+  end
+  for _ = 1, PER_DRAW do
+    local item = items[cursor]
+    if item and not item.tagged then
+      local amount = lp.count(proxy, builder, item.itemId, item.itemData)
+      if amount then
+        item.amount = amount
+      end
+    end
+    cursor = cursor + 1
+    if cursor > #items then
+      cursor = 1
+      order()
+      writeCache()
+      return
+    end
+  end
+end
+
+local function render()
   paint.write(1, 1, fit("  ocitems v" .. VERSION .. "    "
     .. core.comma(total) .. " items in the network", W - 22), FG, BAR)
   paint.write(math.max(1, W - 21), 1,
     fit(math.floor(computer.freeMemory() / 1024) .. " KB free", 22), DIM, BAR)
-end
-
-local function render()
-  header()
 
   for row = 0, ROWS - 1 do
     for column = 0, COLUMNS - 1 do
@@ -95,10 +208,11 @@ local function render()
     paint.write(3, TOP, fit(note, W - 2), FAILED, BG)
   end
 
-  paint.write(1, H, fit("  [up/down] scroll   [q] quit", W - 24), FG, BAR)
-  paint.write(math.max(1, W - 23), H,
-    fit(core.comma(#items) .. " of " .. core.comma(total) .. " shown", 24),
-    DIM, BAR)
+  paint.write(1, H, fit("  [up/down] scroll   [r] read the network again"
+    .. "   [q] quit", W - 24), FG, BAR)
+  paint.write(math.max(1, W - 23), H, fit(builder
+    and ("counting " .. cursor .. " of " .. #items)
+    or (core.comma(#items) .. " shown"), 24), DIM, BAR)
   paint.flush(W, H, BG, FG)
 end
 
@@ -113,30 +227,30 @@ term.clear()
 term.setCursorBlink(false)
 paint.forget()
 
-local proxy = lp.requestPipe()
+proxy = lp.requestPipe()
 if not proxy then
   note = lp.pipes()[1] and "no request pipe attached"
     or "no Logistics Pipe attached"
 else
-  -- the reading is the slow part of the run and it is silent, so say so first
-  header()
-  paint.write(3, TOP, "reading the network, this takes a moment", DIM, BG)
-  paint.flush(W, H, BG, FG)
+  builder = lp.builder(proxy)
 
-  local read, answer = lp.available(proxy)
-  if read then
-    items, total = read, answer
+  local kept, network = readCache()
+  if kept then
+    items, total = kept, network
   else
-    note = tostring(answer)
+    saying("reading the network, this takes a moment")
+    scan()
   end
 end
 
 while true do
   render()
-  local packed = table.pack(event.pull())
+  local packed = table.pack(event.pull(REST))
   local name = packed[1]
 
-  if name == "interrupted" then
+  if name == nil then
+    count()
+  elseif name == "interrupted" then
     break
   elseif name == "screen_resized" then
     layout()
@@ -145,6 +259,14 @@ while true do
     local code = packed[4]
     if code == keyboard.keys.q then
       break
+    elseif code == keyboard.keys.r then
+      if computer.freeMemory() < ROOM then
+        note = "not enough memory to read the whole network again yet"
+      else
+        note = nil
+        saying("reading the network again")
+        scan()
+      end
     elseif code == keyboard.keys.up then
       move(-1)
     elseif code == keyboard.keys.down then

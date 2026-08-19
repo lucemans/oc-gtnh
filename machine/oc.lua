@@ -24,6 +24,12 @@ function oc.reset()
   oc.colors = {}
   oc.reads = {}
   oc.elapsed = 0
+  -- how many times a program waiting on a clock is allowed to hear nothing;
+  -- tests that watch something happen on a timer raise it
+  oc.idle = 0
+  -- a program that refuses to do something expensive when the memory is not
+  -- there needs both answers, so tests set this
+  oc.freeMemory = 1106167
   oc.directories = {}
   oc.deviceInfo = {}
   oc.output = {""}
@@ -303,7 +309,7 @@ function computer.tmpAddress()
   return "ab644ac9-35ab-4eb4-91fe-4b45750f14b0"
 end
 function computer.freeMemory()
-  return 1106167
+  return oc.freeMemory
 end
 function computer.totalMemory()
   return 1572864
@@ -342,6 +348,13 @@ function event.pull(timeout, filter)
   -- nothing matching, so the caller's timeout elapses in full
   oc.elapsed = oc.elapsed + (tonumber(timeout) or 1)
   if filter then
+    return nil
+  end
+  -- A program that works on a clock only does so between events, so a test that
+  -- wants to watch it tick asks for a number of quiet waits first. Without them
+  -- nothing on a timer is ever seen to happen; without a limit a test hangs.
+  if timeout and oc.idle > 0 then
+    oc.idle = oc.idle - 1
     return nil
   end
   return "key_down", "keyboard", 113, 0x10 -- q, so no test can hang

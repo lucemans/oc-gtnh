@@ -3225,39 +3225,64 @@ test("ocdump reports an upload failure", function()
 end)
 
 -------------------------------------------------------------------------------
-
-say("")
-if failures > 0 then
-  say(failures .. " check(s) failed")
-  os.exit(1)
-end
-say("all checks passed")
-
--------------------------------------------------------------------------------
 -- ocitems
 
--- shaped like a real request pipe: getAvailableItems answers with one Pair an
+-- a proxy entry that does something with what it is handed, which the plain
+-- proxyMethod cannot: the builder is told an id before it is asked to build
+local function proxyCall(name, work)
+  return setmetatable({ name = name }, {
+    __call = function(_, ...)
+      return work(...)
+    end,
+    __tostring = function()
+      return "function():" .. name
+    end,
+  })
+end
+
+-- Shaped like a real request pipe. getAvailableItems answers with one Pair an
 -- item, whose getValue2 is the count and whose getValue1 is the ItemIdentifier
--- the name has to be read from
+-- the name has to be read from. getItemAmount answers about one item, named by
+-- an identifier the builder makes out of two numbers -- and answers 0 for a
+-- tagged item, as the real one does, since two numbers do not say which variant
+-- is meant.
 local function requestPipe(stock, tally)
-  local stacks = {}
+  tally = tally or {}
+  tally.names, tally.reads, tally.counts = 0, 0, 0
+
+  local stacks, byKey = {}, {}
   for index, entry in ipairs(stock) do
+    entry.itemId = entry.itemId or (1000 + index)
+    entry.itemData = entry.itemData or 0
+    byKey[entry.itemId .. ":" .. entry.itemData] = entry
+
+    local identifier = {
+      type = "userdata",
+      getName = proxyMethod("getName", entry.name),
+      getId = proxyMethod("getId", entry.itemId),
+      getData = proxyMethod("getData", entry.itemData),
+      hasTagCompound = proxyMethod("hasTagCompound", entry.tagged == true),
+    }
     stacks[index] = {
       type = "userdata",
       getValue2 = proxyMethod("getValue2", entry.amount),
-      getValue1 = setmetatable({ name = "getValue1" }, {
-        __call = function()
-          if tally then
-            tally.names = tally.names + 1
-          end
-          return { getName = proxyMethod("getName", entry.name) }
-        end,
-        __tostring = function()
-          return "function():getValue1"
-        end,
-      }),
+      getValue1 = proxyCall("getValue1", function()
+        tally.names = tally.names + 1
+        return identifier
+      end),
     }
   end
+
+  local building = {}
+  local builder = {
+    type = "userdata",
+    setItemID = proxyCall("setItemID", function(value) building.itemId = value end),
+    setItemData = proxyCall("setItemData", function(value) building.itemData = value end),
+    build = proxyCall("build", function()
+      return { type = "userdata",
+        key = tostring(building.itemId) .. ":" .. tostring(building.itemData) }
+    end),
+  }
 
   return {
     address = "96cdfbc3-11fa-462f-adf2-2599720fbb33",
@@ -3268,7 +3293,23 @@ local function requestPipe(stock, tally)
         return {
           type = "userdata",
           getRouterId = proxyMethod("getRouterId", 7),
-          getAvailableItems = proxyMethod("getAvailableItems", stacks),
+          getLP = proxyMethod("getLP", {
+            type = "userdata",
+            getItemIdentifierBuilder = proxyMethod("getItemIdentifierBuilder", builder),
+          }),
+          getAvailableItems = proxyCall("getAvailableItems", function()
+            tally.reads = tally.reads + 1
+            return stacks
+          end),
+          getItemAmount = proxyCall("getItemAmount", function(id)
+            tally.counts = tally.counts + 1
+            local entry = byKey[id and id.key or ""]
+            if not entry or entry.tagged then
+              return 0
+            end
+            -- what the world holds now, which is not what the scan saw
+            return entry.later or entry.amount
+          end),
         }
       end,
     },
@@ -3319,6 +3360,80 @@ test("ocitems names only the items it will show", function()
   local frame = oc.frame()
   check(contains(frame, "4,000 items in the network"), "lost the count")
   check(contains(frame, "thing 4000"), "did not name the one there is most of")
+end)
+
+-- Reading the whole network is the one expensive thing this program can do, so
+-- once it is done the counts are kept current an item at a time instead.
+test("ocitems keeps the counts current without reading the network again", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local tally = {}
+  oc.components = { requestPipe({
+    { name = "Cobblestone", amount = 100, later = 9000 },
+    { name = "Redstone", amount = 4094 },
+    { name = "Dirt", amount = 200 },
+  }, tally) }
+  oc.idle = 3
+
+  local ok, reason = oc.run("ocitems")
+  check(ok, "ocitems crashed: " .. tostring(reason))
+  check(tally.reads == 1, "read the whole network " .. tally.reads .. " times")
+  check(tally.counts >= 3, "counted only " .. tally.counts .. " items")
+
+  local frame = oc.frame()
+  check(contains(frame, "9,000"), "did not take the new count")
+  local most, next = frame:find("Cobblestone"), frame:find("Redstone")
+  check(most and next and most < next, "did not settle the order after a pass")
+end)
+
+test("ocitems starts from what it wrote down, and asks the network nothing", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  oc.components = { requestPipe({
+    { name = "Cobblestone", amount = 22742 },
+    { name = "Redstone", amount = 4094 },
+  }) }
+  oc.run("ocitems")
+
+  local written = oc.files["/etc/ocitems.cache"]
+  check(written and contains(written, "Cobblestone"), "wrote nothing down")
+
+  local tally = {}
+  oc.reset()
+  oc.files["/etc/ocitems.cache"] = written
+  oc.components = { requestPipe({
+    { name = "Cobblestone", amount = 22742 },
+    { name = "Redstone", amount = 4094 },
+  }, tally) }
+
+  local ok, reason = oc.run("ocitems")
+  check(ok, "ocitems crashed: " .. tostring(reason))
+  check(tally.reads == 0, "read the network anyway, " .. tally.reads .. " times")
+  check(contains(oc.frame(), "22,742"), "did not show what it wrote down")
+end)
+
+-- Asking for the whole network without the memory for it does not fail the
+-- call. It ends the computer.
+test("reading the network again is refused when the memory is not there", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local tally = {}
+  oc.components = { requestPipe({ { name = "Cobblestone", amount = 22742 } }, tally) }
+  oc.freeMemory = 200 * 1024
+  oc.push("key_down", "keyboard", 0, 0x13) -- r
+
+  oc.run("ocitems")
+  check(tally.reads == 1, "read the network with no room for it")
+  check(contains(oc.frame(), "not enough memory"), "did not say why it refused")
+
+  oc.reset()
+  tally = {}
+  oc.components = { requestPipe({ { name = "Cobblestone", amount = 22742 } }, tally) }
+  oc.freeMemory = 4 * 1024 * 1024
+  oc.push("key_down", "keyboard", 0, 0x13)
+
+  oc.run("ocitems")
+  check(tally.reads == 2, "would not read the network with room to spare")
 end)
 
 test("ocitems tells a basic pipe from the request pipe it needs", function()
@@ -4147,3 +4262,14 @@ test("ocup leaves alone the rows that do not change", function()
   -- what made the whole table appear to rewrite itself
   check(said == 6, "wrote 'up to date' " .. said .. " times for six files")
 end)
+
+-------------------------------------------------------------------------------
+-- The summary belongs at the end. It once sat in the middle, where every check
+-- written after it could fail without the run failing with it.
+
+say("")
+if failures > 0 then
+  say(failures .. " check(s) failed")
+  os.exit(1)
+end
+say("all checks passed")

@@ -519,8 +519,60 @@ all; allocating hard afterwards recovers a few hundred kilobytes.
 That is what shapes `lp.available`: read every count, settle the order from the
 counts, drop the pairs nobody will name, and only then read the names of the 250
 that will be shown. Dropping the other 1,342 first is what leaves room for those
-250. The whole scan takes 1.6 seconds and ends with about 110 KB free, which
-climbs back to roughly 350 KB once the screen starts drawing.
+250. The whole scan takes 1.6 seconds and ends with about 110 KB free.
+
+### The memory does come back
+
+That 110 KB is not what the computer has left, it is what the collector has not
+got to yet. Measured over five cycles of work after a scan, free memory went
+390 KB, then **1,587 KB**, and stayed there. The whole 950 KB is reclaimed.
+
+What it needs is allocation, not time. A scan followed by three seconds of
+`os.sleep` and a second scan kills the computer; a scan followed by any real
+work and a second scan does not. Nothing in the sandbox asks for a collection
+directly, so the only honest guard is to look at `computer.freeMemory()` and
+refuse the expensive call when the room is not there yet.
+
+## Counting one item at a time
+
+`getItemAmount` is the way out of ever making the expensive call twice.
+
+It wants the ItemIdentifier itself. `getItemAmount(id.getId())` and
+`getItemAmount(id.getIdName())` both answer nil; the object answers. And the
+object can be rebuilt out of the two numbers that name it, through the builder
+on `getLP()`:
+
+```lua
+builder.setItemID(4)      -- and setItemData(0)
+local id = builder.build()
+proxy.getItemAmount(id)   -- 22,742, the same figure the scan read
+```
+
+Building costs nothing measurable: ten of them in under a tick, and the builder
+is reused rather than asked for again. **The call itself costs 50 ms**, one
+server tick, so 150 items took 7.5 seconds. That is the wrong tool for reading
+everything and the right one for keeping a screen current: a few items between
+draws, round and round.
+
+So two numbers an item, written to disk, are enough to keep counting it for as
+long as the program runs. That is the whole reason `ocitems` has a cache.
+
+### Except for a tagged item
+
+An item carrying an NBT tag cannot be named by two numbers. The network answers
+**0** for it, not an error:
+
+| item | listed | rebuilt from id and damage |
+| --- | --- | --- |
+| Bow | 1 | 1 |
+| Slime Broadsword | 1 | 0 |
+| File | 1 | 0 |
+
+58 of the first 400 items in the network carry one, and they are tools and
+weapons held one at a time. `hasTagCompound()` says which, so they are recorded
+and then never counted this way — only a full read counts them. In a list sorted
+by how many there are, 5 of the top 250 were tagged, which is what you would
+expect of things you own exactly one of.
 
 ## A manifest line has to stay readable by what is already installed
 
