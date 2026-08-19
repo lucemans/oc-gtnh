@@ -2,17 +2,18 @@
 --
 --   ocitems
 --
--- Reading the whole network costs about 950 KB on a computer that has 1.4 MB,
--- so it is read once and written down. After that the counts are kept current
--- one item at a time: an item can be named to the network by two numbers, and
--- it answers what it has of that item in one server tick. So the screen goes on
--- moving without the expensive question ever being asked again, and a run that
--- starts from what was written down never asks it at all.
+-- There are two ways to bring the counts up to date. Reading the whole network
+-- is every count at once and the only way an item nobody has ever had appears,
+-- and it costs about 950 KB in a single go. Counting one item at a time costs a
+-- server tick each and finds nothing new. So the machine decides: with the
+-- memory for a read it reads again on a clock, and without it, or in between,
+-- it counts an item at a time.
 --
--- [r] reads the whole network again, which is the only way an item nobody has
--- ever had appears, and the only way a tool or anything else carrying an NBT
--- tag is counted. It is refused when the memory for it is not there, because
--- asking anyway does not fail the call, it ends the computer.
+-- A machine with a network card answers for what it is watching as well as
+-- showing it, since it is the only one that can see the item network at all.
+--
+-- [r] reads the network again now. It is refused when the memory for it is not
+-- there, because asking anyway does not fail the call, it ends the computer.
 
 local component = require("component")
 local computer = require("computer")
@@ -20,10 +21,11 @@ local core = require("oclib")
 local event = require("event")
 local keyboard = require("keyboard")
 local lp = require("oclogistics")
+local net = require("ocnet")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.7.0"
+local VERSION = "0.8.0"
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -35,6 +37,8 @@ local REST = 0.05
 -- what one read of the whole network asks for in a single go. A computer that
 -- goes into it with less free than this does not fail the call, it dies.
 local ROOM = 1100 * 1024
+-- how long between reads of the whole network, on a machine with room for them
+local REREAD = 30
 
 local gpu = component.gpu
 local paint = core.painter(gpu)
@@ -94,7 +98,8 @@ local items, total, note = {}, 0, nil
 local movers = {}
 local scroll = 0
 local cursor = 1
-local proxy, builder
+local lastRead = 0
+local proxy, builder, modem
 
 -------------------------------------------------------------------------------
 -- what was written down last time
@@ -159,13 +164,16 @@ end
 -------------------------------------------------------------------------------
 
 local function scan()
-  local read, answer = lp.available(proxy)
-  if not read then
+  local fresh, answer = lp.available(proxy)
+  if not fresh then
     note = tostring(answer)
     return
   end
-  items, total, note = read, answer, nil
-  cursor = 1
+  items = lp.merge(items, fresh, computer.uptime())
+  total, note = answer, nil
+  lastRead = computer.uptime()
+  order()
+  movers = lp.movers(items, MOVERS)
   writeCache()
 end
 
@@ -185,9 +193,27 @@ local function count()
   end
 end
 
+-- Which way round to refresh, decided by what the machine has rather than by a
+-- setting. One read of the network is every count at once and finds kinds of
+-- item nobody has ever had; counting an item at a time is a server tick each,
+-- which is 250 ticks to go round a small list and a minute to go round a large
+-- one. So where there is memory for the read, that is the fast way, and where
+-- there is not, the counts are kept up one at a time.
+--
+-- Counting between reads is not idle work either: memory only comes back under
+-- the pressure of asking for more, so it is what makes the next read affordable.
+local function refresh()
+  if computer.freeMemory() >= ROOM and computer.uptime() - lastRead >= REREAD then
+    scan()
+  else
+    count()
+  end
+end
+
 local function render()
   paint.write(1, 1, fit("  ocitems v" .. VERSION .. "    "
-    .. core.comma(total) .. " items in the network", W - 22), FG, BAR)
+    .. core.comma(total) .. " items in the network"
+    .. (modem and ", answering for it" or ""), W - 22), FG, BAR)
   paint.write(math.max(1, W - 21), 1,
     fit(math.floor(computer.freeMemory() / 1024) .. " KB free", 22), DIM, BAR)
 
@@ -240,6 +266,12 @@ term.clear()
 term.setCursorBlink(false)
 paint.forget()
 
+-- The machine watching the item network is the only one that can say what it
+-- holds, so it answers for it as well as showing it. A network card is not
+-- required: without one this is a screen and nothing more.
+local config = core.loadConfig()
+modem = net.modem()
+
 proxy = lp.requestPipe()
 if not proxy then
   note = lp.pipes()[1] and "no request pipe attached"
@@ -262,7 +294,10 @@ while true do
   local name = packed[1]
 
   if name == nil then
-    count()
+    refresh()
+  elseif name == "modem_message" and modem then
+    net.answer(modem, packed[4], packed[3], packed[6], config,
+      net.report(config, net.machines(config), movers))
   elseif name == "interrupted" then
     break
   elseif name == "screen_resized" then

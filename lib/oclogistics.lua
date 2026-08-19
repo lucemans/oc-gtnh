@@ -11,7 +11,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.8.0"
+lp.VERSION = "0.9.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -223,6 +223,33 @@ function lp.mark(item, amount, now)
     item.rate = math.floor((amount - item.was) / since * WINDOW + 0.5)
     item.was, item.when = amount, now
   end
+end
+
+-- Folds a fresh read of the network into what is already known.
+--
+-- A read hands back new tables, and the window a rate is measured over lives on
+-- the old ones, so replacing the list outright throws away every rate the
+-- program has spent minutes collecting. What is already known keeps its window
+-- and takes the new count as an ordinary reading; what is new starts a window
+-- of its own; what the network no longer has is gone.
+function lp.merge(items, fresh, now)
+  local known = {}
+  for _, item in ipairs(items) do
+    known[item.itemId .. ":" .. item.itemData] = item
+  end
+
+  local out = {}
+  for _, entry in ipairs(fresh) do
+    local already = known[entry.itemId .. ":" .. entry.itemData]
+    if already then
+      lp.mark(already, entry.amount, now)
+      out[#out + 1] = already
+    else
+      entry.was, entry.when = entry.amount, now
+      out[#out + 1] = entry
+    end
+  end
+  return out
 end
 
 -- Counts a few items, carrying on from wherever the last call stopped, and says

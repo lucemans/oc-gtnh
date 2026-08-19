@@ -3423,6 +3423,69 @@ test("only what is moving is worth a place, gains first", function()
   end
 end)
 
+test("a fresh read keeps the windows a rate is being measured over", function()
+  local lplib = require("oclogistics")
+  local items = { { itemId = 4, itemData = 0, name = "Cobblestone",
+    amount = 100, was = 100, when = 1000 } }
+  local fresh = {
+    { itemId = 4, itemData = 0, name = "Cobblestone", amount = 700 },
+    { itemId = 9, itemData = 1, name = "Redstone", amount = 5 },
+  }
+
+  local merged = lplib.merge(items, fresh, 1180)
+  check(#merged == 2, "folded the read into " .. #merged .. " items, not two")
+  check(merged[1].rate == 600, "threw away a window that was minutes old")
+  check(merged[2].when == 1180, "did not start a window for an item never seen")
+
+  -- and what the network no longer has does not linger
+  local after = lplib.merge(merged, { fresh[2] }, 1200)
+  check(#after == 1 and after[1].name == "Redstone", "kept an item that is gone")
+end)
+
+-- One read is every count at once and finds items nobody has ever had. Counting
+-- an item at a time is a server tick each. So the memory decides which way round
+-- a machine refreshes, and one with room for the read uses it.
+test("ocitems reads the network again when it has the room for it", function()
+  oc.width, oc.height = 160, 30
+  local stock = {
+    { name = "Cobblestone", amount = 22742 },
+    { name = "Redstone", amount = 4094 },
+  }
+
+  local reads = {}
+  for _, free in ipairs({ 300 * 1024, 3000 * 1024 }) do
+    oc.reset()
+    local tally = {}
+    oc.components = { requestPipe(stock, tally) }
+    oc.freeMemory = free
+    -- long enough for the clock to pass a re-read
+    oc.idle = 700
+
+    local ok, reason = oc.run("ocitems")
+    check(ok, "ocitems crashed: " .. tostring(reason))
+    reads[#reads + 1] = tally.reads
+  end
+
+  check(reads[1] == 1, "read the whole network " .. reads[1]
+    .. " times with no memory for it")
+  check(reads[2] > 1, "never read the network again on a machine with room")
+end)
+
+test("ocitems answers for the network it is watching", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem,
+    requestPipe({ { name = "Cobblestone", amount = 22742 } }) }
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus?")
+
+  local ok, reason = oc.run("ocitems")
+  check(ok, "ocitems crashed: " .. tostring(reason))
+  check(#modem.sent == 1, "sent " .. #modem.sent .. " answers, not one")
+  check(modem.sent[1].kind == "ocstatus!", "answered with something else")
+  check(contains(oc.frame(), "answering for it"), "did not say it is answering")
+end)
+
 -- Reading the whole network is the one expensive thing this program can do, so
 -- once it is done the counts are kept current an item at a time instead.
 test("ocitems keeps the counts current without reading the network again", function()

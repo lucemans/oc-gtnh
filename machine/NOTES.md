@@ -592,6 +592,38 @@ what there is to work with. The small machine lands on about 220, the server on
 1,163 of 1,592, and neither is tuned by hand. The server's worst moment left
 1,748 KB free, which came back to 3,302 KB as soon as it did any work.
 
+## Which way round to refresh
+
+There are two ways to bring the counts up to date and they are not close:
+
+| | cost | finds new items |
+| --- | --- | --- |
+| read the whole network | ~950 KB, 3 s for every count | yes |
+| count an item at a time | a server tick each, 50 ms | no |
+
+A read is the fast way by a wide margin — 1,592 counts in one call against 58
+seconds of ticks for 1,163 — and it is the only way an item nobody has ever had
+appears at all. What it costs is memory, all at once. So the machine decides:
+where `computer.freeMemory()` says there is room, read again on a clock; where
+it does not, count one at a time.
+
+Counting between reads is not filler. Memory comes back only under the pressure
+of asking for more, so the counting is what reclaims the last read and makes the
+next one affordable. A program that only read, and idled in between, would be
+refused its second read forever.
+
+A read hands back new tables. The window a rate is measured over lives on the
+old ones, so a read is folded in rather than swapped in: what is known keeps its
+window and takes the new count as a reading, what is new starts a window, and
+what the network no longer has is dropped.
+
+### A cache can pin a list at the wrong size
+
+A run that starts from the cache never scans, so the number of items it holds is
+whatever the machine that wrote the file could afford. A cache written by a
+computer with 1.4 MB left a server with 3.8 MB showing 250 items and no way out
+of it. Reading again on a clock is what makes that self-correcting.
+
 ## A rate over a quarter of a minute is noise
 
 A pass round the list takes a count a tick, so about 16 seconds for 250 items
