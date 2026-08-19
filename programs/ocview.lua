@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.11.0"
+local VERSION = "0.12.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -251,7 +251,8 @@ local function planBlocks()
       -- what the item network is doing, from a satellite that watches one. The
       -- alerts view is for what is wrong, and a stock moving is not that.
       if mode ~= "alerts" and (answer.items or {})[1] then
-        rows[#rows + 1] = { kind = "heading", text = "changing, a minute" }
+        rows[#rows + 1] = { kind = "heading",
+          text = "changing, " .. (answer.over or "lately") }
         for _, item in ipairs(answer.items) do
           rows[#rows + 1] = { kind = "item", item = item }
         end

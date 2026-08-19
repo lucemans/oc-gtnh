@@ -3372,24 +3372,33 @@ test("ocitems names as many items as the memory allows, and no more", function()
     .. named[2] .. " against " .. named[1])
 end)
 
--- A rate over a quarter of a minute is mostly noise, so a window is a minute
--- and nothing is claimed until one has closed.
-test("an item says which way it is going, once a minute has passed", function()
+-- A rate over a quarter of a minute is mostly noise, and a stock that moves in
+-- bursts sits still through a short window entirely, so a window is three
+-- minutes and nothing is claimed until one has closed.
+test("an item says which way it is going, once its window has closed", function()
   local lplib = require("oclogistics")
   local item = {}
 
   lplib.mark(item, 100, 1000)
   check(item.rate == nil, "claimed a rate from one reading")
-  lplib.mark(item, 400, 1030)
-  check(item.rate == nil, "claimed a rate from half a minute")
+  lplib.mark(item, 400, 1060)
+  check(item.rate == nil, "claimed a rate from a minute")
   check(item.amount == 400, "did not keep the count itself current")
 
-  lplib.mark(item, 700, 1060)
-  check(item.rate == 600, "made the minute " .. tostring(item.rate) .. ", not 600")
+  lplib.mark(item, 700, 1180)
+  check(item.rate == 600, "made the window " .. tostring(item.rate) .. ", not 600")
 
   -- and the next window is measured from here, not from where it all began
-  lplib.mark(item, 700, 1120)
+  lplib.mark(item, 700, 1360)
   check(item.rate == 0, "went on reporting a rate that had stopped")
+
+  -- a window closes on the first reading past its end, which is always a little
+  -- late, so what it reports is scaled to the window it names
+  local slow = {}
+  lplib.mark(slow, 0, 2000)
+  lplib.mark(slow, 360, 2360)
+  check(slow.rate == 180, "reported " .. tostring(slow.rate)
+    .. " over a window twice as long as it says")
 end)
 
 test("only what is moving is worth a place, gains first", function()
@@ -4336,7 +4345,7 @@ test("a satellite sends what is moving, and ocview shows it", function()
 
   oc.run("ocview", "--once")
   local frame = oc.screen()
-  check(contains(frame, "changing, a minute"), "did not say what the list is")
+  check(contains(frame, "changing, 3 minutes"), "did not say what the list is")
   check(contains(frame, "+1,240"), "did not show a rising stock")
   check(contains(frame, "-820"), "did not show a falling one")
   check(contains(frame, "Redstone"), "did not name the item")

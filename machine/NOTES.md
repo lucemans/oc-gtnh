@@ -598,10 +598,21 @@ A pass round the list takes a count a tick, so about 16 seconds for 250 items
 and a minute for 1,163. Comparing a reading with the one before it therefore
 measures a quarter of a minute, or less, and small movements drown in it.
 
-A window is a minute instead: the reading that opened it is kept, and when a
-minute has gone by the difference becomes the rate and a new window opens. What
-is on screen is then what happened over the last minute rather than what happened
-between the last two passes, and it changes once a minute rather than constantly.
+A window is kept instead: the reading that opened it is held, and when the
+window is up the difference becomes the rate and a new one opens. What is on
+screen is then what happened over the whole window rather than between the last
+two passes.
+
+**A minute was too short.** Tried live, it missed changes. A stock that moves in
+bursts — a machine that finishes a batch, a chest emptied by hand — sits still
+through whole windows and reports nothing, and the one window it does move in
+has gone from the screen before anybody looks. Three minutes holds a burst and
+is still recent enough to be news. The window is scaled to what it names, since
+it closes on the first reading past its end and that is always a little late.
+
+The window and the words for it sit together in `lp.OVER`, and a satellite sends
+it along with the movers, so a dashboard says what the machine that measured it
+actually measured over rather than what it assumes.
 
 Only items that are moving are worth a place. Everything else is standing still
 and says nothing, so the few that are moving are the whole of what is happening

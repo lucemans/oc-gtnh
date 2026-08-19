@@ -14,7 +14,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.8.0"
+net.VERSION = "0.9.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -120,10 +120,15 @@ end
 function net.report(config, cards, movers)
   local report = { cards = {}, alerts = {}, items = {} }
 
-  -- what the item network is doing, if this computer is watching one. Only the
-  -- few that are moving travel; the list itself is thousands long.
+  -- What the item network is doing, if this computer is watching one. Only the
+  -- few that are moving travel; the list itself is thousands long. The window
+  -- travels with them, because the machine that measured it is the one that
+  -- knows what it measured over.
   for _, item in ipairs(movers or {}) do
     report.items[#report.items + 1] = { name = item.name, rate = item.rate }
+  end
+  if report.items[1] then
+    report.over = lp.OVER
   end
 
   for _, card in ipairs(cards) do
@@ -223,6 +228,7 @@ function net.decode(port, remote, kind, host, payload)
     cards = report.cards,
     alerts = report.alerts or {},
     items = report.items or {},
+    over = report.over,
   }
 end
 

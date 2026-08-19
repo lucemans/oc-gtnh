@@ -23,7 +23,7 @@ local lp = require("oclogistics")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -44,10 +44,8 @@ local paint = core.painter(gpu)
 local NARROWEST = 34
 local COUNT_W = 10
 local PANEL_W = 34
--- how many risers, and how many fallers, are worth a look
-local MOVERS = 6
 
-local W, H, TOP, BOTTOM, ROWS, COLUMNS, COLUMN_W, PANEL_X
+local W, H, TOP, BOTTOM, ROWS, COLUMNS, COLUMN_W, PANEL_X, MOVERS
 
 local function layout()
   W, H = core.viewport(gpu)
@@ -61,6 +59,9 @@ local function layout()
   grid = PANEL_X and grid or W
   COLUMNS = math.max(1, math.floor(grid / NARROWEST))
   COLUMN_W = math.floor(grid / COLUMNS)
+  -- as many risers and fallers as the panel has room for. A short list was
+  -- hiding changes on a screen with rows to spare.
+  MOVERS = math.max(3, math.floor((ROWS - 1) / 2))
   paint.forget()
 end
 
@@ -204,7 +205,7 @@ local function render()
   end
 
   if PANEL_X then
-    paint.write(PANEL_X, TOP, fit("  changing, a minute", PANEL_W), DIM, BAR)
+    paint.write(PANEL_X, TOP, fit("  changing, " .. lp.OVER, PANEL_W), DIM, BAR)
     for rank, item in ipairs(movers) do
       local y = TOP + rank
       if y <= BOTTOM then

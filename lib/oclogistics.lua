@@ -11,7 +11,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.7.0"
+lp.VERSION = "0.8.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -193,16 +193,25 @@ function lp.count(proxy, builder, itemId, itemData)
   return type(amount) == "number" and amount or nil
 end
 
--- what a rate is measured over
-local MINUTE = 60
+-- What a rate is measured over, and how to say so on a screen. The two belong
+-- together: a figure whose window is not named beside it is a figure nobody can
+-- read.
+--
+-- A minute was too short. A pass round the list is a quarter of a minute on a
+-- computer and a minute on a server, so a stock that moves in bursts sits still
+-- through whole windows and reports nothing, and the one window it does move in
+-- is gone from the screen before anybody sees it. Three minutes is long enough
+-- to hold a burst and still short enough to be news.
+local WINDOW = 180
+lp.OVER = "3 minutes"
 
 -- Takes one reading of an item and works out which way it is going.
 --
 -- The reading is compared with the one that opened the window rather than with
--- the reading before it: a pass round the list takes about a quarter of a
--- minute, and a difference over a quarter of a minute is mostly noise. The rate
--- only changes when a window closes, so a figure on screen is what happened
--- over the last minute rather than what happened in the last moment.
+-- the reading before it, and the rate only changes when a window closes, so a
+-- figure on screen is what happened over the whole window rather than what
+-- happened between the last two passes. It is scaled to the window because a
+-- window closes on the first reading past its end, which is a little late.
 function lp.mark(item, amount, now)
   item.amount = amount
   if not item.when then
@@ -210,8 +219,8 @@ function lp.mark(item, amount, now)
     return
   end
   local since = now - item.when
-  if since >= MINUTE then
-    item.rate = math.floor((amount - item.was) / since * MINUTE + 0.5)
+  if since >= WINDOW then
+    item.rate = math.floor((amount - item.was) / since * WINDOW + 0.5)
     item.was, item.when = amount, now
   end
 end
