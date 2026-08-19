@@ -3788,9 +3788,9 @@ end)
 test("versions.txt says the version every file declares", function()
   local wrong = {}
   for line in io.lines("versions.txt") do
-    local path, stated, size = line:match("^%s*(%S+)%s+(%S+)%s+(%d+)%s*$")
+    local path, stated, size = line:match("^%s*(%S+)%s+([^:%s]+):(%d+)%s*$")
     if not path then
-      wrong[#wrong + 1] = "not a path, a version and a size: " .. line
+      wrong[#wrong + 1] = "not a path and one word of version:size: " .. line
     else
       local text = contentsOf(path)
       local declared = text and text:match('VERSION%s*=%s*"([^"]+)"')
@@ -3830,7 +3830,7 @@ test("manifest.txt and versions.txt name the same files", function()
     end
   end
   for line in io.lines("versions.txt") do
-    local path = line:match("^%s*(%S+)%s+%S+%s+%S+%s*$")
+    local path = line:match("^%s*(%S+)%s+%S+%s*$")
     if path then
       versioned[#versioned + 1] = path
     end
@@ -3912,13 +3912,13 @@ test("ocup fetches a file whose bytes moved even when its version did not", func
   oc.files["/lib/oclogistics.lua"] = program("0.1.0") .. "-- and more besides\n"
 
   local sized = table.concat({
-    "lib/oclib.lua 0.1.0 " .. #program("0.1.0"),
-    "lib/ocgt.lua 0.1.0 " .. #program("0.1.0"),
-    "lib/oclogistics.lua 0.1.0 " .. #program("0.1.0"),
-    "programs/ocup.lua " .. declaredVersion("programs/ocup.lua") .. " "
+    "lib/oclib.lua 0.1.0:" .. #program("0.1.0"),
+    "lib/ocgt.lua 0.1.0:" .. #program("0.1.0"),
+    "lib/oclogistics.lua 0.1.0:" .. #program("0.1.0"),
+    "programs/ocup.lua " .. declaredVersion("programs/ocup.lua") .. ":"
       .. #program(declaredVersion("programs/ocup.lua")),
-    "programs/ocdebug.lua 0.2.0 " .. #program("0.2.0"),
-    "programs/ocdump.lua 0.1.0 " .. #program("0.1.0"),
+    "programs/ocdebug.lua 0.2.0:" .. #program("0.2.0"),
+    "programs/ocdump.lua 0.1.0:" .. #program("0.1.0"),
   }, "\n")
 
   oc.respond = serveProgram({
@@ -3935,4 +3935,30 @@ test("ocup fetches a file whose bytes moved even when its version did not", func
   check(fetched() == "oclogistics.lua", "downloaded " .. fetched())
   check(oc.files["/lib/oclogistics.lua"] == program("0.1.0"),
     "did not put the real one back")
+end)
+
+-- Twice now a new column in the manifest has made every line unreadable to the
+-- ocup already installed, which then reports an empty manifest and stops: a
+-- computer that cannot read the manifest cannot update itself out of it.
+test("ocup reads a manifest with more on the line than it knows about", function()
+  oc.components = { INTERNET }
+  oc.respond = serveProgram({
+    ["versions.txt"] = "programs/ocdebug.lua 0.2.0:120 sha256 whatever-comes-next",
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+  })
+
+  oc.run("ocup")
+  check(oc.files["/bin/ocdebug.lua"] ~= nil,
+    "a column it did not recognise stopped it")
+end)
+
+test("versions.txt keeps to one word after the path", function()
+  for line in io.lines("versions.txt") do
+    -- an older ocup takes exactly two words and reads the second as a version.
+    -- It will not match, so it fetches the file, which is slow and right and
+    -- ends with a newer ocup installed. Three words it cannot read at all.
+    local path, rest = line:match("^%s*(%S+)%s+(%S+)%s*$")
+    check(path ~= nil and rest ~= nil,
+      "an older ocup cannot read this line: " .. line)
+  end
 end)

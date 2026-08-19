@@ -14,7 +14,7 @@ local keyboard = require("keyboard")
 local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.16.0"
+local VERSION = "0.17.0"
 
 -- read here rather than through oclib: on a fresh computer ocup arrives alone
 -- and there is no /lib yet for it to require
@@ -194,14 +194,19 @@ local function describe(existing, contents)
   return shown(version), "changed", CYAN
 end
 
--- A line is a path, the version that file declares, and its size in bytes. Both
--- have to match for a file to go unfetched: a version alone is only as good as
--- the discipline behind it, and a library once got rewritten without its number
--- moving, so every computer went on running the old one.
+-- A line is a path and, on versions.txt, one word of "version:size" beside it.
+-- Both have to match for a file to go unfetched: a version alone is only as good
+-- as the discipline behind it, and a library once got rewritten without its
+-- number moving, so every computer went on running the old one.
+--
+-- Anything further along the line is ignored rather than refused. A stricter
+-- parser than this is what made a new column look like an empty manifest, and a
+-- computer that cannot read the manifest cannot update itself out of it.
 local function parseManifest(text)
   local files = {}
   for entry in text:gmatch("[^\n]+") do
-    local source, version, size = entry:match("^%s*(%S+)%s*(%S*)%s*(%S*)%s*$")
+    local source, stamp = entry:match("^%s*(%S+)%s*(%S*)")
+    local version, size = tostring(stamp):match("^([^:]*):?(%d*)$")
     if source then
       -- both captures are bound here: "a and a:match()" would keep only the first
       local folder, name = source:match("^(%w+)/(.+)$")

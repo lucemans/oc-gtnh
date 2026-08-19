@@ -109,17 +109,25 @@ Each program carries a `VERSION` constant. `ocup` compares the installed copy
 against the downloaded one and reports `v0.2.0 -> v0.3.0` when it changes, so
 you can tell whether an update actually landed.
 
-`manifest.txt` lists one path a line, followed by the version that file
-declares. The folder decides where a file lands: `programs/` installs to `/bin`,
-`lib/` installs to `/lib`.
+`manifest.txt` lists one path a line and nothing else, which is all an older
+`ocup` can read. `versions.txt` lists the same paths with more beside them. The
+folder decides where a file lands: `programs/` installs to `/bin`, `lib/`
+installs to `/lib`.
 
-The version is what makes an update quick. `ocup` compares it against the copy
-already installed and downloads only the files that differ, so a run with
-nothing to do costs two requests, the commit and the manifest, rather than one
-per file. That means a file changed without its `VERSION` moving will not be
-picked up; delete it and run `ocup` again if that happens. Regenerate the
-manifest with `nix develop -c lua machine/manifest.lua`, and a check fails if it
-is ever out of step with the files.
+A line in `versions.txt` is a path, the version that file declares, and its size
+in bytes. `ocup` compares both against the copy already installed and downloads
+only what differs, so a run with nothing to do costs two requests, the commit
+and the manifest, rather than one per file.
+
+The size is there because a version alone is only as good as the discipline
+behind it: a library once got rewritten and kept its number, so every computer
+went on running the old one and crashed on a function that was no longer there.
+Bytes change whatever anybody remembered to do.
+
+Regenerate both files with `nix develop -c lua machine/manifest.lua`. Checks fail
+if they are out of step with the sources, if the two lists drift apart, or if a
+`manifest.txt` line ever gains a second word, which is what an older `ocup`
+cannot read.
 
 Not every computer wants every program. `ocup install` lists what the manifest
 offers, records the choice in `/etc/ocgt.cfg` as `programs`, and then installs

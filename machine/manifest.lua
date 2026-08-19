@@ -8,7 +8,7 @@
 -- ocup that cannot read the manifest cannot update itself out of the problem.
 --
 --   manifest.txt   one path a line, and nothing else, for good
---   versions.txt   the same paths, the version each file declares, and its size
+--   versions.txt   the same paths, and "version:size" for each
 --
 -- The size is there because a version alone is only as good as the discipline
 -- behind it. A file edited without its VERSION moving is invisible to an update
@@ -43,7 +43,12 @@ for _, path in ipairs(paths) do
     os.exit(1)
   end
   plain[#plain + 1] = path
-  versioned[#versioned + 1] = path .. " " .. version .. " " .. #text
+  -- one word after the path, always. An ocup that knows nothing of the size
+  -- reads the whole word as the version, finds it does not match what it has,
+  -- and fetches the file: slow, correct, and it ends with a new ocup installed.
+  -- A second word would make its line unreadable and the manifest look empty,
+  -- which is a computer that cannot update itself at all.
+  versioned[#versioned + 1] = path .. " " .. version .. ":" .. #text
 end
 
 local function put(name, lines)
