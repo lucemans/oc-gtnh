@@ -1911,6 +1911,29 @@ local function tankAt(amount)
   }
 end
 
+-- The steam side of the boiler house, which is the other way round from the
+-- diesel: the tank filling up is the signal to stop, not to worry. Each read
+-- takes the next level, so one run can watch it fill and drain.
+local function steamTank(levels)
+  local reads = 0
+  return {
+    address = "5cf68471-2c11-4b38-ace3-83ff36864ca4",
+    kind = "gt_machine",
+    methods = { getSensorInformation = "function():table" },
+    values = {
+      getSensorInformation = function()
+        reads = reads + 1
+        return {
+          "\194\1679Super Tank\194\167r",
+          "\194\167fSteam\194\167r",
+          "\194\167a" .. levels[math.min(reads, #levels)]
+            .. "\194\167r L \194\167e4,000,000\194\167r L",
+        }
+      end,
+    },
+  }
+end
+
 local function furnace(stopped)
   return {
     address = "1c646dd8-0000-0000-0000-000000000005",
@@ -2193,6 +2216,9 @@ local function speechBox(said)
   }
 end
 
+-- 00ff00 packed down to the five bits a channel the lamp really takes
+local GREEN_LAMP = 31 * 32
+
 local function colorfulLamp(colors)
   return {
     address = "1a300000-0000-0000-0000-000000000001",
@@ -2306,7 +2332,7 @@ test("an alarm sounds while an alert is tripped", function()
   oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
     watch = { { address = tank.address, hidden = {} } },
     alerts = { { name = "diesel low", address = tank.address,
-      label = "Bio Diesel", below = 50000, above = 200000, beep = false } },
+      label = "Bio Diesel", below = 50000, above = 200000 } },
   })
 
   oc.run("ocwatch")
@@ -2315,7 +2341,10 @@ test("an alarm sounds while an alert is tripped", function()
     "the alarm was told " .. table.concat(calls, ", "))
 end)
 
-test("an alert set not to beep stays quiet", function()
+-- An alert that shuts the fuel off because the steam tank is full is doing its
+-- job, and it sits at its threshold most of the time. A base that runs with a
+-- red lamp all day has no red lamp left to mean anything with.
+test("an alert that does not count as trouble reddens nothing", function()
   local said, colors = {}, {}
   local tank = tankAt("100")
   oc.components = { tank, speechBox(said), colorfulLamp(colors) }
@@ -2327,14 +2356,30 @@ test("an alert set not to beep stays quiet", function()
       label = "Bio Diesel",
       below = 50000,
       above = 200000,
-      beep = false,
+      trouble = false,
     } },
   })
 
   oc.run("ocwatch")
+  check(#said == 0, "spoke for an alert that is not trouble")
+  -- the lamp is still set, to the colour that means all is well
+  check(colors[#colors] == GREEN_LAMP, "reddened the lamp for an alert that is not trouble")
+end)
+
+-- `trouble` was called `beep` and said only whether the alert made a noise
+test("an alert written before trouble had a name is still quiet", function()
+  local said, colors = {}, {}
+  local tank = tankAt("100")
+  oc.components = { tank, speechBox(said), colorfulLamp(colors) }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { { name = "diesel low", address = tank.address,
+      label = "Bio Diesel", below = 50000, above = 200000, beep = false } },
+  })
+
+  oc.run("ocwatch")
   check(#said == 0, "spoke for an alert that was told not to make a noise")
-  -- the lamp is not a noise, and is worth having either way
-  check(#colors == 1, "did not light the lamp")
+  check(colors[#colors] == GREEN_LAMP, "reddened the lamp for an alert told to stay quiet")
 end)
 
 -- Two blast furnaces fed by one tank were two identical alerts before this,
@@ -2367,7 +2412,7 @@ test("an action can be added to an alert that already exists", function()
 
   press(DOWN)          -- past the machine, onto the alert
   press(ENTER)         -- open it
-  for _ = 1, 7 do
+  for _ = 1, 8 do
     press(DOWN)        -- down to "add a machine to act on"
   end
   press(ENTER)
@@ -2408,6 +2453,31 @@ test("the editor lists what is watched and what will fire", function()
   check(contains(out, "diesel low"), "did not name the alert")
   check(contains(out, "below 5,000"), "did not show the threshold")
   check(contains(out, "acts on 1"), "did not say how many machines it acts on")
+end)
+
+test("an alert screen offers both directions", function()
+  oc.width, oc.height = 160, 50
+  oc.reset()
+  local steam = steamTank({ "3,900,000" })
+  oc.components = { steam }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = steam.address, hidden = {} } },
+    alerts = { { name = "steam full", address = steam.address, label = "Steam",
+      over = 3500000, under = 2000000, trouble = false } },
+  })
+
+  local DOWN, ENTER, Q = 0xD0, 0x1C, 0x10
+  oc.push("key_down", "keyboard", 0, DOWN)   -- past the machine, onto the alert
+  oc.push("key_down", "keyboard", 0, ENTER)  -- open it
+  oc.push("key_down", "keyboard", 0, Q)
+
+  local ok, reason = oc.run("ocwatch", "--edit")
+  check(ok, "the editor crashed: " .. tostring(reason))
+  local out = table.concat(oc.frames, "\n")
+  check(contains(out, "above 3,500,000"), "the list did not show the trip point")
+  check(contains(out, "trips above       3,500,000"), "no high trip point")
+  check(contains(out, "clears below      2,000,000"), "did not say where it clears")
+  check(contains(out, "counts as trouble no"), "did not say it is not trouble")
 end)
 
 test("ocwatch says nothing about a machine that never works", function()
@@ -2548,6 +2618,51 @@ test("ocwatch stops a machine when a tank runs low", function()
   if show then
     say(oc.frame())
   end
+end)
+
+-- A super tank has no auto-output switch of its own in the OpenComputers API.
+-- What stops it feeding the boilers is setWorkAllowed, the same switch a blast
+-- furnace has, so a full steam tank starves them and a falling one feeds them
+-- again.
+test("a tank that fills up stops a machine, and starts it as the tank drains",
+  function()
+  local stopped = { value = false }
+  local switched = {}
+  local fuel = furnace(stopped)
+  local setWork = fuel.values.setWorkAllowed
+  fuel.values.setWorkAllowed = function(allowed)
+    switched[#switched + 1] = allowed
+    return setWork(allowed)
+  end
+
+  local steam = steamTank({ "3,900,000", "3,000,000", "1,000,000" })
+  oc.components = { steam, fuel }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = steam.address, hidden = {} } },
+    alerts = { {
+      name = "steam full",
+      address = steam.address,
+      label = "Steam",
+      over = 3500000,
+      under = 2000000,
+      trouble = false,
+      act = { { address = fuel.address, method = "setWorkAllowed",
+        onTrip = false, onClear = true } },
+    } },
+  })
+
+  local R = 0x13
+  oc.push("key_down", "keyboard", 114, R)
+  oc.push("key_down", "keyboard", 114, R)
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  -- three quarters full is neither: an alert that cleared there would switch the
+  -- boilers on and off against the same steam
+  check(#switched == 2, "switched the fuel " .. #switched .. " times, not twice")
+  check(switched[1] == false, "the full tank did not stop the fuel")
+  check(switched[2] == true, "the drained tank did not start the fuel again")
+  check(stopped.value == false, "left the fuel off after the steam ran down")
 end)
 
 test("ocwatch repaints without clearing the screen every frame", function()
@@ -4032,7 +4147,7 @@ test("a lamp colour can be chosen", function()
     notify = { lamp = { on = true, tripped = "ff00ff" } },
     watch = { { address = tank.address, hidden = {} } },
     alerts = { { name = "diesel low", address = tank.address,
-      label = "Bio Diesel", below = 50000, above = 200000, beep = false } },
+      label = "Bio Diesel", below = 50000, above = 200000 } },
   })
 
   oc.run("ocwatch")

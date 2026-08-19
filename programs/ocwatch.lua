@@ -19,7 +19,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.18.0"
+local VERSION = "0.19.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -81,6 +81,23 @@ end
 
 forgetRuntime()
 
+-- `beep` said whether an alert made a noise, and the lamp and the siren were
+-- held to be worth having either way. An alert that shuts the fuel off because
+-- the steam tank is full is doing its job rather than reporting trouble, and a
+-- base that runs with a red lamp all day has no red lamp left to mean anything.
+-- The one switch now decides whether the alert is trouble at all. An alert
+-- written before that carries the old name.
+local function renameBeep()
+  for _, alert in ipairs(config.alerts) do
+    if alert.trouble == nil then
+      alert.trouble = alert.beep
+    end
+    alert.beep = nil
+  end
+end
+
+renameBeep()
+
 local function fit(text, width)
   local length = unicode.len(text)
   if length > width then
@@ -123,20 +140,22 @@ end
 -------------------------------------------------------------------------------
 -- alerts
 
--- an alert trips below its floor and only clears back above its ceiling, so a
--- reading sitting on the boundary cannot beep on every refresh
+-- An alert trips at one threshold and only clears back at another, so a reading
+-- sitting on the boundary cannot beep on every refresh.
+--
+-- Which end of the range is the interesting one is the alert's own choice.
+-- `below` and `above` watch a tank that must not run out. `over` and `under`
+-- watch one that must not fill up: a steam tank at its ceiling is the signal to
+-- stop feeding the boilers, and its falling back is the signal to feed them
+-- again.
 local function evaluate(alert, value)
-  local tripped = alert.tripped or false
-  if not tripped and alert.below and value < alert.below then
-    tripped = true
-  elseif tripped and alert.above and value >= alert.above then
-    tripped = false
-  elseif not tripped and alert.over and value > alert.over then
-    tripped = true
-  elseif tripped and alert.under and value <= alert.under then
-    tripped = false
+  if alert.tripped then
+    return not ((alert.above and value >= alert.above)
+      or (alert.under and value <= alert.under))
   end
-  return tripped
+  return (alert.below and value < alert.below)
+    or (alert.over and value > alert.over)
+    or false
 end
 
 -- An alert used to stop one machine. One tank feeds both blast furnaces, so it
@@ -191,7 +210,7 @@ end
 -- this base wants is its own choice, kept per channel, so the library is asked
 -- rather than each device in turn.
 local function announce(alert, text, urgent)
-  if alert.beep == false then
+  if alert.trouble == false then
     return nil
   end
   local used = notify.event(config, text, urgent)
@@ -570,10 +589,14 @@ local function sample()
 
   checkAlerts(byAddress)
 
+  -- Only an alert that counts as trouble reddens anything. One that merely
+  -- switches a machine over is at its threshold most of the time, and a lamp
+  -- that is red most of the time says nothing when it matters.
   local alarmed = false
   for _, card in ipairs(cards) do
     for _, alert in ipairs(config.alerts) do
-      if alert.address == card.entry.address and alert.tripped then
+      if alert.address == card.entry.address and alert.tripped
+        and alert.trouble ~= false then
         card.alarm = true
         alarmed = true
       end
@@ -1000,17 +1023,25 @@ end
 local function editAlert(alert)
   local at = 1
   while true do
+    local function threshold(value)
+      return value and core.comma(value) or "-"
+    end
+
     local rows = {
       { what = "name", text = "name              " .. tostring(alert.name) },
       { what = "watches", text = "watches           "
         .. entryName({ address = alert.address, side = alert.side })
         .. "  " .. tostring(alert.label ~= "" and alert.label or "value") },
-      { what = "below", text = "trips below       "
-        .. (alert.below and core.comma(alert.below) or "-") },
-      { what = "above", text = "clears above      "
-        .. (alert.above and core.comma(alert.above) or "-") },
-      { what = "announce", text = "announces         "
-        .. (alert.beep == false and "no" or "yes, aloud if it can") },
+      { what = "trouble", text = "counts as trouble "
+        .. (alert.trouble == false
+          and "no, it only acts"
+          or "yes, said aloud and shown red") },
+      { heading = true, text = "WHEN IT RUNS LOW" },
+      { what = "below", text = "trips below       " .. threshold(alert.below) },
+      { what = "above", text = "clears above      " .. threshold(alert.above) },
+      { heading = true, text = "WHEN IT RUNS HIGH" },
+      { what = "over", text = "trips above       " .. threshold(alert.over) },
+      { what = "under", text = "clears below      " .. threshold(alert.under) },
       { heading = true, text = "MACHINES IT ACTS ON" },
     }
     for index, action in ipairs(actions(alert)) do
@@ -1040,8 +1071,14 @@ local function editAlert(alert)
       elseif row.what == "above" then
         alert.above = tonumber(prompt("clear when it rises back to (blank to clear)",
           alert.above))
-      elseif row.what == "announce" then
-        alert.beep = alert.beep == false
+      elseif row.what == "over" then
+        alert.over = tonumber(prompt("trip when the value rises above (blank to clear)",
+          alert.over))
+      elseif row.what == "under" then
+        alert.under = tonumber(prompt("clear when it falls back to (blank to clear)",
+          alert.under))
+      elseif row.what == "trouble" then
+        alert.trouble = alert.trouble == false
       elseif row.what == "add" then
         addAction(alert)
       end
@@ -1078,6 +1115,10 @@ local function addAlert()
   end
 
   local reading = row.gauge.reading
+  -- The thresholds are not asked for here. There are four of them, two for a
+  -- reading that must not run out and two for one that must not fill up, and
+  -- three blank answers in a row is a worse way to say which pair is meant than
+  -- the alert's own screen, which opens next.
   local alert = {
     name = prompt("name for this alert") or "alert",
     address = chosen.address,
@@ -1088,9 +1129,7 @@ local function addAlert()
     unit = reading.unit,
     gauge = row.gauge.ordinal,
     index = row.gauge.index,
-    below = tonumber(prompt("trip when the value falls below (blank to skip)")),
-    above = tonumber(prompt("clear when it rises back to (blank to skip)")),
-    beep = true,
+    trouble = true,
   }
 
   config.alerts[#config.alerts + 1] = alert
@@ -1201,13 +1240,15 @@ end
 
 -------------------------------------------------------------------------------
 
+-- the trip points only: the line is narrow, and where an alert clears is on its
+-- own screen beside the point it trips at
 local function alertSummary(alert)
   local parts = {}
   if alert.below then
     parts[#parts + 1] = "below " .. core.comma(alert.below)
   end
-  if alert.above then
-    parts[#parts + 1] = "above " .. core.comma(alert.above)
+  if alert.over then
+    parts[#parts + 1] = "above " .. core.comma(alert.over)
   end
   local acting = #actions(alert)
   if acting > 0 then
@@ -1371,6 +1412,7 @@ while true do
     elseif code == keyboard.keys.e then
       editor()
       config = core.loadConfig()
+      renameBeep()
       blank()
       term.setCursorBlink(false)
       refresh()
