@@ -15,7 +15,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -127,7 +127,7 @@ local function drawGauge(x, y, gauge, width)
   write(x, y, "[", DIM, BG)
   local cursor = x + 1
   if filled > 0 then
-    write(cursor, y, string.rep(FULL_BLOCK, filled), OK_COLOR, BG)
+    write(cursor, y, string.rep(FULL_BLOCK, filled), core.gaugeColor(gauge, OK_COLOR), BG)
     cursor = cursor + filled
   end
   if width - filled > 0 then
@@ -142,6 +142,14 @@ local function drawGauge(x, y, gauge, width)
   -- maximum, so the real capacity is never lost
   if gauge.capacity then
     text = text .. "  of " .. tostring(gauge.capacity)
+  end
+  if gauge.rate and math.abs(gauge.rate) >= 1 then
+    local sign = "+"
+    if gauge.rate < 0 then
+      sign = "-"
+    end
+    text = text .. "  " .. sign
+      .. core.comma(math.floor(math.abs(gauge.rate) + 0.5)) .. " " .. unit:gsub("^ ", "") .. "/s"
   end
   write(cursor + 1, y, fit(text, math.max(0, W - cursor - 1)), FG, BG)
 end

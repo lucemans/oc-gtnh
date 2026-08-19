@@ -394,3 +394,33 @@ speaker is not a way to make a general noise.
 
 An alarm is set while something is wrong and cleared when it is not, rather than
 sounded once, which is what separates it from an announcement.
+
+## Reading a GregTech pipe
+
+Through a transposer you get the fluid handler's view and nothing else: how much
+is in the pipe and how much fits. That is a level, not a flow. A pipe carrying a
+steady flow holds a roughly constant amount, because what goes in also comes
+out, so a rate worked out from the level reads near zero however much is moving
+through it. What the level does tell you is net drain, which is real and worth
+showing.
+
+For the flow itself, give the pipe its own **adapter**. A GregTech block reached
+that way appears as `gt_machine` and answers `getSensorInformation`. A cable in
+`dumps/015-satellite-speechbox.txt` reports exactly the shape wanted:
+
+```
+Amperage: §a0§r / §e16§r A
+Voltage Out: §a0§r / §e2,032§r EU/t
+Avg Amperage (20t): §e0§r A
+Avg Output (20t): §e0§r EU/t
+```
+
+A fluid pipe is the same kind of block, so it should report its throughput the
+same way. That has not been confirmed against a real one yet.
+
+## A name with a number in it
+
+`looksLikeName` used to reject any sensor line containing a digit, which threw
+away the name of every machine somebody had called S1 or EBF2. A reading is
+either coloured, or it is a label followed by a number; anything else with
+letters in it is a name.

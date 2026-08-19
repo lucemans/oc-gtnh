@@ -14,7 +14,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.4.0"
+net.VERSION = "0.5.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -117,6 +117,11 @@ function net.report(config, cards)
           -- real capacity is still visible somewhere
           capacity = isLocal and reading.maximum or nil,
           unit = reading.unit,
+          -- the colour travels too, or a bar means one thing on the dashboard
+          -- and another on the tablet watching it
+          colorCode = reading.colorCode,
+          -- which way the reading is going, and how fast
+          rate = reading.rate,
           percent = max > 0 and (reading.value / max * 100) or 0,
         }
       end

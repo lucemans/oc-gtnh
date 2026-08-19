@@ -7,7 +7,7 @@ local serialization = require("serialization")
 
 local core = {}
 
-core.VERSION = "0.8.0"
+core.VERSION = "0.9.0"
 
 -- the Minecraft section sign, two bytes in UTF-8
 core.SECTION = "\194\167"
@@ -130,6 +130,18 @@ function core.scale(gauge, limit)
     return gauge.max, false
   end
   return limit, true
+end
+
+-- What colour to draw a gauge in. GregTech colours its own sensor text and we
+-- keep the code it used; a fluid read through a transposer is coloured by what
+-- it is called. Everything that draws a gauge asks here, so a bar means the
+-- same on a dashboard as it does on the tablet watching that dashboard.
+function core.gaugeColor(gauge, fallback)
+  local code = gauge and gauge.colorCode
+  if code and core.MC_COLORS[code] then
+    return core.MC_COLORS[code]
+  end
+  return fallback
 end
 
 -- A painter that only touches the rows whose contents changed.

@@ -3270,3 +3270,85 @@ test("ocdebug shows the tanks around a transposer, not just the transposer", fun
   check(contains(frame, "Creosote Oil"), "did not name the fluid behind it")
   check(contains(frame, "12,000 / 64,000"), "did not show the level")
 end)
+
+-- A transposer can only say how much is in a pipe, so how fast that changes is
+-- the one usage signal it can give. True throughput needs the pipe's own sensor
+-- through an adapter, where GregTech reports it the way a cable reports amps.
+test("a gauge says which way it is going and how fast", function()
+  oc.width, oc.height = 160, 50
+  oc.reset()
+
+  local level = 19200
+  local pipe = {
+    address = "5150000e-0000-0000-0000-000000000001",
+    kind = "transposer",
+    methods = { getTankCount = "f", getFluidInTank = "f" },
+    values = {
+      getTankCount = function(side)
+        if side == 3 then
+          return 1
+        end
+        return 0
+      end,
+      getFluidInTank = function(side)
+        if side ~= 3 then
+          return {}
+        end
+        -- a pipe being drained faster than it is filled
+        level = level - 640
+        return { { name = "steam", label = "Steam",
+          amount = level, capacity = 19200 } }
+      end,
+    },
+  }
+  oc.components = { pipe }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    nicknames = { [pipe.address .. "/3"] = "S1" },
+    watch = { { address = pipe.address, side = 3, hidden = {} } },
+    alerts = {},
+  })
+
+  -- A rate needs two readings and the time between them. The fake clock only
+  -- moves when an event is pulled, so this is how two seconds pass.
+  for _ = 1, 50 do
+    oc.push("nothing in particular")
+  end
+  oc.run("ocwatch")
+
+  local frame = oc.frame()
+  check(contains(frame, "S1"), "did not use the nickname given to the face")
+  check(frame:find("%-%d[%d,]* L/s") ~= nil, "no rate on a falling gauge: " ..
+    (frame:match("Steam[^\n]*") or "no steam row"))
+end)
+
+test("a fluid keeps its colour on the tablet watching the dashboard", function()
+  oc.components = {}
+  local net = require("ocnet")
+  local report = net.report({ alerts = {} }, { {
+    entry = {},
+    name = "S1",
+    readings = { { kind = "gauge", label = "Steam", value = 12000, max = 19200,
+      current = "12,000", maximum = "19,200", unit = "L", colorCode = "f" } },
+  } })
+
+  local gauge = report.cards[1].gauges[1]
+  -- ocview drew every bar green because the colour never left the satellite
+  check(gauge.colorCode == "f", "the colour did not travel: " .. tostring(gauge.colorCode))
+end)
+
+-- Machines get named S1 and EBF2, and the older rule threw away any sensor line
+-- with a digit in it, so every one of those lost its name.
+test("a machine named with a number keeps its name", function()
+  oc.components = {}
+  local gtlib = require("ocgt")
+  check(gtlib.looksLikeName("\194\1679EBF1\194\167r"), "EBF1 was not taken as a name")
+  check(gtlib.looksLikeName("\194\1679S3\194\167r"), "S3 was not taken as a name")
+  check(gtlib.looksLikeName("\194\1679Super Tank\194\167r"), "a plain name was lost")
+
+  -- and a reading is still not a name, coloured or not
+  check(not gtlib.looksLikeName("Progress: \194\167a0\194\167r s / \194\167e0\194\167r s"),
+    "a coloured reading was taken as a name")
+  check(not gtlib.looksLikeName("Average input: 0 EU/t"),
+    "an uncoloured reading was taken as a name")
+  check(not gtlib.looksLikeName("  "), "blank text was taken as a name")
+end)

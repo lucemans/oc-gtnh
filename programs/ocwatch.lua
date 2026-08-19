@@ -18,7 +18,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.13.0"
+local VERSION = "0.14.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -117,13 +117,6 @@ local function entryName(entry)
     or entry.address
 end
 
-local function colorOf(gauge)
-  if gauge.colorCode and core.MC_COLORS[gauge.colorCode] then
-    return core.MC_COLORS[gauge.colorCode]
-  end
-  return OK_COLOR
-end
-
 -------------------------------------------------------------------------------
 -- alerts
 
@@ -215,6 +208,41 @@ end
 -- whether the lamps and sirens are showing trouble, so they are only set on a
 -- change rather than on every refresh
 local alarmShown = nil
+
+-- What each gauge read last time, and when, so the dashboard can say which way
+-- it is going and how fast.
+--
+-- This is a rate of change, not a throughput. A tank draining shows exactly how
+-- fast it is draining. A pipe carrying a steady flow shows nearly nothing,
+-- because what goes in also comes out: for the flow itself, a GregTech pipe has
+-- to be read through an adapter of its own, where its sensor reports the
+-- amounts the way a cable reports amperage.
+local history = {}
+
+local function rateOf(key, value, at)
+  local was = history[key]
+  history[key] = { value = value, at = at }
+  if not was then
+    return nil
+  end
+  local seconds = at - was.at
+  if seconds <= 0 then
+    return nil
+  end
+  return (value - was.value) / seconds
+end
+
+local function rateText(rate, unit)
+  if not rate or math.abs(rate) < 1 then
+    return nil
+  end
+  local sign = "+"
+  if rate < 0 then
+    sign = "-"
+  end
+  return sign .. core.comma(math.floor(math.abs(rate) + 0.5))
+    .. " " .. (unit ~= "" and unit or "") .. "/s"
+end
 
 local notices = {}
 
@@ -348,7 +376,7 @@ local function render(cards)
     write(x, y, "[", DIM, BG)
     local cursor = x + 1
     if filled > 0 then
-      write(cursor, y, string.rep(FULL_BLOCK, filled), colorOf(gauge), BG)
+      write(cursor, y, string.rep(FULL_BLOCK, filled), core.gaugeColor(gauge, OK_COLOR), BG)
       cursor = cursor + filled
     end
     if width - filled > 0 then
@@ -365,6 +393,10 @@ local function render(cards)
     -- becomes a lie about how much the tank holds
     if isLocal then
       text = text .. "   of " .. gauge.maximum
+    end
+    local moving = rateText(gauge.rate, gauge.unit)
+    if moving then
+      text = text .. "   " .. moving
     end
     write(cursor, y, fit(text, math.max(0, W - cursor)), FG, BG)
   end
@@ -431,6 +463,19 @@ local function sample()
   for _, card in ipairs(cards) do
     byAddress[keyOf(card.entry.address, card.entry.side)] = card.readings
   end
+  local now = computer.uptime()
+  for _, card in ipairs(cards) do
+    local ordinal = 0
+    for _, reading in ipairs(card.readings) do
+      if reading.kind == "gauge" then
+        ordinal = ordinal + 1
+        reading.rate = rateOf(
+          keyOf(card.entry.address, card.entry.side) .. "#" .. ordinal,
+          reading.value, now)
+      end
+    end
+  end
+
   checkAlerts(byAddress)
 
   local alarmed = false
@@ -598,23 +643,58 @@ local function menu(title, rows, buttons)
   end
 end
 
+local function holdsWhat(readings)
+  local gauge = readings[1]
+  if not gauge then
+    return "empty"
+  end
+  return gauge.label .. "  " .. gauge.current .. " / " .. gauge.maximum
+    .. " " .. gauge.unit
+end
+
+-- What this computer can watch, which is not the same as what it can see. A
+-- transposer is a way of reaching blocks that have no component of their own,
+-- so each of its faces that holds a tank is listed in its own right rather than
+-- the transposer being listed and then asked about.
+--
+-- Named things come first, because a name is what anybody is looking for and
+-- everything else is an address.
 local function chooseComponent(only)
+  term.clear()
+  paint.forget()
+  print("looking at what is attached")
+
   local rows = {}
   for address, kind in component.list() do
     if not only or only(address, kind) then
-      rows[#rows + 1] = {
-        address = address,
-        kind = kind,
-        text = string.format("%-18s %s  %s", kind, address:sub(1, 8),
-          gt.displayName(address, config) or lp.displayName(address) or ""),
-      }
+      if tank.isReader(kind) then
+        for _, side in ipairs(tank.sides(address)) do
+          local look = tank.inspect(address, side, config)
+          rows[#rows + 1] = {
+            address = address, kind = kind, side = side, named = true,
+            text = string.format("%-24s %-14s %s  %s", look.name, kind,
+              address:sub(1, 8), holdsWhat(look.readings)),
+          }
+        end
+      else
+        local name = gt.displayName(address, config) or lp.displayName(address)
+        rows[#rows + 1] = {
+          address = address, kind = kind, named = name ~= nil,
+          text = string.format("%-24s %-14s %s", name or "", kind,
+            address:sub(1, 8)),
+        }
+      end
     end
   end
+
   table.sort(rows, function(a, b)
+    if a.named ~= b.named then
+      return a.named
+    end
     return a.text < b.text
   end)
 
-  local row, code = menu("attached components", rows,
+  local row, code = menu("what this computer can watch", rows,
     { { label = "choose", code = keyboard.keys.enter },
       { label = "cancel", code = keyboard.keys.q } })
   if not row or code ~= keyboard.keys.enter then
@@ -630,40 +710,6 @@ local function watched(address, side)
     end
   end
   return false
-end
-
--- A transposer is not itself worth watching: what is worth watching is the tank
--- on one of its six faces, which is how a Railcraft tank gets onto the
--- dashboard at all, having no component of its own.
-local function chooseSide(address)
-  term.clear()
-  print("looking for tanks around it")
-  local sides = tank.sides(address)
-  if #sides == 0 then
-    print("no tank on any side of it")
-    os.sleep(2)
-    return nil
-  end
-
-  local rows = {}
-  for _, side in ipairs(sides) do
-    local look = tank.inspect(address, side, config)
-    local holds = "empty"
-    if look.readings[1] then
-      holds = look.readings[1].label .. "  " .. look.readings[1].current
-        .. " / " .. look.readings[1].maximum .. " L"
-    end
-    rows[#rows + 1] = { side = side,
-      text = string.format("%-6s %s", tank.sideName(side), holds) }
-  end
-
-  local row, code = menu("which face is the tank on", rows,
-    { { label = "choose", code = keyboard.keys.enter },
-      { label = "cancel", code = keyboard.keys.q } })
-  if not row or code ~= keyboard.keys.enter then
-    return nil
-  end
-  return row.side
 end
 
 local function readingsOf(address, side)
@@ -883,14 +929,8 @@ local function addAlert()
     return
   end
 
-  local side = nil
-  if tank.isReader(chosen.kind) then
-    side = chooseSide(chosen.address)
-    if not side then
-      return
-    end
-  end
-
+  -- the picker already said which face, if it was a face
+  local side = chosen.side
   local readings = readingsOf(chosen.address, side)
   local gauges = gaugesOf(readings)
   if #gauges == 0 then
@@ -937,14 +977,7 @@ local function addMachine()
     return
   end
 
-  local side = nil
-  if tank.isReader(chosen.kind) then
-    side = chooseSide(chosen.address)
-    if not side then
-      return
-    end
-  end
-
+  local side = chosen.side
   if watched(chosen.address, side) then
     print("already watched")
     os.sleep(1)

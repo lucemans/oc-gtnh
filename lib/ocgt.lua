@@ -5,7 +5,7 @@ local core = require("oclib")
 
 local gt = {}
 
-gt.VERSION = "0.6.0"
+gt.VERSION = "0.7.0"
 
 local SECTION = core.SECTION
 
@@ -30,14 +30,22 @@ function gt.sensorOf(address, methods)
   return lines
 end
 
--- a tank and a battery buffer open their sensor text with a coloured display
--- name, but a multiblock such as a blast furnace opens straight into readings
+-- A tank and a battery buffer open their sensor text with a coloured display
+-- name, but a multiblock such as a blast furnace opens straight into readings.
+--
+-- A reading is either coloured, which the first test catches, or it is a label
+-- followed by a number, which the second one does. Rejecting anything with a
+-- digit in it was the older rule and it lost every machine somebody had named
+-- S1 or EBF2.
 function gt.looksLikeName(raw)
   if raw:find(SECTION .. "a", 1, true) and raw:find(SECTION .. "e", 1, true) then
     return false
   end
   local plain = core.strip(raw)
-  return plain:match("%S") ~= nil and plain:match("%d") == nil
+  if plain:match("%a") == nil then
+    return false
+  end
+  return plain:match(":%s*%-?[%d,]") == nil
 end
 
 function gt.prettyName(name)
