@@ -6,7 +6,7 @@ lib/occomputronics.lua 0.3.0:4885
 lib/ocsecurity.lua 0.1.0:2180
 lib/ocnotify.lua 0.1.0:6080
 lib/ocnet.lua 0.7.0:7690
-programs/ocup.lua 0.17.0:20330
+programs/ocup.lua 0.18.0:21294
 programs/ocdebug.lua 0.10.0:11779
 programs/ocdump.lua 0.7.0:6863
 programs/ocwatch.lua 0.18.0:43491

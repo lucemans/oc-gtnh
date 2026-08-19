@@ -14,7 +14,7 @@ local keyboard = require("keyboard")
 local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.17.0"
+local VERSION = "0.18.0"
 
 -- read here rather than through oclib: on a fresh computer ocup arrives alone
 -- and there is no /lib yet for it to require
@@ -550,7 +550,17 @@ end
 local _, below = term.getCursor()
 local firstRow = below - #lines
 
+-- What each row already says, so a row that has not changed is left alone. The
+-- second pass repainting every line is what made the whole table appear to
+-- rewrite itself at the end of a run.
+local drawn = {}
+
 local function repaint(line, text, color)
+  local key = text .. "\1" .. tostring(color)
+  if drawn[line] == key then
+    return
+  end
+  drawn[line] = key
   term.setCursor(1, firstRow + line - 1)
   term.clearLine()
   write(text, color)
@@ -591,7 +601,19 @@ for _, file in ipairs(FILES) do
         break
       end
       file.contents = contents
-      repaint(file.line, rowText(file, "fetched"), DIM)
+
+      -- What this file is going to do is known the moment it arrives, so the
+      -- row says it now rather than at the end. Writing still waits until every
+      -- file is here, since a download that fails halfway would otherwise leave
+      -- programs newer than the library they require.
+      local version, status, color = describe(file.existing, contents)
+      file.version, file.status, file.color = version, status, color
+      if status == "up to date" then
+        repaint(file.line, rowText(file, status, version), color)
+      else
+        repaint(file.line, rowText(file, "ready", version), CYAN)
+      end
+
       done = done + 1
       showBar("fetching")
     end
@@ -636,7 +658,8 @@ for _, file in ipairs(FILES) do
     local ok, writeReason = writeFile(file.target, file.contents)
     if ok then
       forget(file.target)
-      version, status, color = describe(file.existing, file.contents)
+      -- the row already says what this is; only the word changes
+      version, status, color = file.version, file.status, file.color
     else
       version, status, color = file.version, "failed  " .. writeReason, RED
       failed = failed + 1
@@ -656,6 +679,6 @@ if failed > 0 then
   paint(WHITE)
   return 1
 end
-showBar(total .. " files ready"
+showBar(total .. " files in place"
   .. (removed > 0 and ", " .. removed .. " removed" or ""), GREEN)
 paint(WHITE)

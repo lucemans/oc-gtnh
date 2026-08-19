@@ -210,7 +210,7 @@ test("ocup installs missing programs", function()
   local out = oc.printed()
   check(contains(out, "ocup v"), "no version banner")
   check(contains(out, "installed"), "did not report a fresh install")
-  check(contains(out, "6 files ready"), "no success summary")
+  check(contains(out, "6 files in place"), "no success summary")
   check(oc.files["/bin/ocdump.lua"] == program("0.1.0"), "ocdump.lua not written to /bin")
   check(oc.files["/lib/ocgt.lua"] ~= nil, "library not written to /lib")
   if show then
@@ -4095,4 +4095,53 @@ test("a pipe can count only what leaves it", function()
   -- all, while counting what left says how much steam the pipe carried
   local row = oc.frame():match("[^\n]*Steam[^\n]*") or ""
   check(row:find("%-%d[%d,]* L/s") ~= nil, "no usage on a pipe that carried steam: " .. row)
+end)
+
+-- The version change is known the moment a file arrives, so the row says it
+-- then rather than every row changing at once when the run finishes.
+test("ocup shows what a file will do as soon as it has it", function()
+  oc.components = { INTERNET }
+  oc.files["/bin/ocup.lua"] = program(declaredVersion("programs/ocup.lua"))
+  oc.files["/bin/ocdebug.lua"] = program("0.1.0")
+  oc.files["/bin/ocdump.lua"] = program("0.1.0")
+  oc.files["/lib/oclib.lua"] = program("0.1.0")
+  oc.files["/lib/ocgt.lua"] = program("0.1.0")
+  oc.files["/lib/oclogistics.lua"] = program("0.1.0")
+  oc.respond = serveProgram({
+    ["versions.txt"] = VERSIONED,
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+
+  oc.run("ocup")
+  local out = oc.printed()
+  local ready = out:find("v0%.1%.0 %-> v0%.2%.0%s+ready")
+  local updated = out:find("v0%.1%.0 %-> v0%.2%.0%s+updated")
+  check(ready ~= nil, "the version change only appeared at the end")
+  check(updated ~= nil, "never said it had installed it")
+  check(ready < updated, "said it was installed before it had it")
+end)
+
+test("ocup leaves alone the rows that do not change", function()
+  oc.components = { INTERNET }
+  oc.files["/bin/ocup.lua"] = program(declaredVersion("programs/ocup.lua"))
+  oc.files["/bin/ocdebug.lua"] = program("0.2.0")
+  oc.files["/bin/ocdump.lua"] = program("0.1.0")
+  oc.files["/lib/oclib.lua"] = program("0.1.0")
+  oc.files["/lib/ocgt.lua"] = program("0.1.0")
+  oc.files["/lib/oclogistics.lua"] = program("0.1.0")
+  oc.respond = serveProgram({ ["versions.txt"] = VERSIONED })
+
+  oc.run("ocup")
+  local said = 0
+  for _ in oc.printed():gmatch("up to date") do
+    said = said + 1
+  end
+  -- six files, each saying it once: repainting them all again at the end is
+  -- what made the whole table appear to rewrite itself
+  check(said == 6, "wrote 'up to date' " .. said .. " times for six files")
 end)
