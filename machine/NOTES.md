@@ -440,3 +440,33 @@ have drifted apart.
 
 A manifest line with no version still works and means "always fetch this", which
 is what an older manifest does.
+
+## Two files, so an older ocup keeps working
+
+`ocup` before v0.15.0 reads a manifest line with `^%s*(%S+)%s*$`: one path, and
+nothing else on the line. Putting the version beside the path made every line
+unreadable, the manifest look empty, and the program stop, and an ocup that
+cannot read the manifest cannot update itself out of the problem. Every computer
+on the old version had to be fixed by hand.
+
+So the format is two files:
+
+- `manifest.txt` — one path a line and nothing else, for good
+- `versions.txt` — the same paths with the version each file declares
+
+`ocup` asks for `versions.txt` and falls back to `manifest.txt` when it is not
+there, so a current one costs two requests and an old one keeps working.
+Generate both with `nix develop -c lua machine/manifest.lua`; checks fail if the
+two drift apart, or if a manifest line ever gains a second word.
+
+## What ran the computer out of memory
+
+`ocitems` used to call every readable method on a pipe's proxy and follow
+whatever came back. A basic pipe survived that, since it only offers filters and
+a default route. A **request** pipe does not: its proxy reaches the item network,
+and building that inside a computer with a few hundred kilobytes of memory ends
+the computer.
+
+Nothing is called on its own now. The program lists what a proxy offers and
+calls one method when asked, describing the answer and dropping it rather than
+keeping it. Free memory is on screen while you do it.

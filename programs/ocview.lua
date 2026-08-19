@@ -11,11 +11,13 @@ local computer = require("computer")
 local core = require("oclib")
 local event = require("event")
 local net = require("ocnet")
+local ct = require("occomputronics")
+local notify = require("ocnotify")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.8.0"
+local VERSION = "0.9.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -69,6 +71,9 @@ local write = paint.write
 -- card means one satellite stays one entry however many copies land.
 local satellites = {}
 local order = {}
+
+-- whether the lamps here are already showing trouble
+local shownTripped = nil
 local seen = { heard = 0, unreadable = 0 }
 local started = computer.uptime()
 
@@ -355,6 +360,16 @@ local function render()
       if alert.tripped then
         tripped = tripped + 1
       end
+    end
+  end
+
+  -- A lamp beside the tablet says from across the room what the screen says up
+  -- close, and this screen is watching the whole base rather than one computer.
+  -- Set only on a change, since it is a call into the world.
+  if tripped > 0 ~= shownTripped then
+    shownTripped = tripped > 0
+    if notify.usable(config, notify.find("lamp")) then
+      ct.lamps(notify.lampColor(config, shownTripped))
     end
   end
 

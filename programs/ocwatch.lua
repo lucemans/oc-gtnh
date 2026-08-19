@@ -19,7 +19,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.16.1"
+local VERSION = "0.17.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -211,19 +211,35 @@ local alarmShown = nil
 -- because what goes in also comes out: for the flow itself, a GregTech pipe has
 -- to be read through an adapter of its own, where its sensor reports the
 -- amounts the way a cable reports amperage.
+-- Measured across this many seconds rather than between two refreshes. A
+-- reading taken every two seconds jumps about far too much to read: what a
+-- fluid is doing over half a minute is the thing worth knowing.
+local RATE_SECONDS = 30
+local RATE_LEAST = 10
+
 local history = {}
 
 local function rateOf(key, value, at)
-  local was = history[key]
-  history[key] = { value = value, at = at }
-  if not was then
+  local samples = history[key]
+  if not samples then
+    samples = {}
+    history[key] = samples
+  end
+  samples[#samples + 1] = { value = value, at = at }
+
+  -- everything older than the window is no longer part of the average
+  while samples[2] and at - samples[1].at > RATE_SECONDS do
+    table.remove(samples, 1)
+  end
+
+  local oldest = samples[1]
+  local seconds = at - oldest.at
+  -- a span of one refresh says almost nothing, so nothing is said until there
+  -- is enough of one to mean something
+  if seconds < RATE_LEAST then
     return nil
   end
-  local seconds = at - was.at
-  if seconds <= 0 then
-    return nil
-  end
-  return (value - was.value) / seconds
+  return (value - oldest.value) / seconds
 end
 
 local function rateText(rate, unit)

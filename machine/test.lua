@@ -453,6 +453,11 @@ test("ocup falls back to the branch when the commit cannot be resolved", functio
     if url:find("api.github.com", 1, true) then
       return 403, "Forbidden", "rate limited"
     end
+    -- and an older repository has no versions.txt, so the plain manifest is
+    -- what it falls back to
+    if url:find("versions.txt", 1, true) then
+      return 404, "Not Found", "404: Not Found"
+    end
     if url:find("manifest.txt", 1, true) then
       return 200, "OK", "programs/ocdebug.lua"
     end
@@ -3226,7 +3231,10 @@ say("all checks passed")
 -------------------------------------------------------------------------------
 -- ocitems
 
-test("ocitems walks a pipe and shows what it answers", function()
+-- Calling everything and following whatever came back is what a basic pipe
+-- survived and a request pipe did not: it reaches the whole item network and
+-- runs the computer out of memory. Nothing is called until it is asked for.
+test("ocitems lists what a pipe offers without calling any of it", function()
   local written = { value = false }
   oc.width, oc.height = 160, 30
   oc.reset()
@@ -3238,15 +3246,34 @@ test("ocitems walks a pipe and shows what it answers", function()
   local frame = oc.frame()
   check(contains(frame, "Logistics Pipe #42"), "did not name the pipe by its router")
   check(contains(frame, "getRouterId"), "did not list the pipe's methods")
-  check(contains(frame, "42"), "did not read a value back")
-  -- which methods a fork of the mod offers is not known in advance, so a proxy
-  -- that answers with another proxy has to be walked into
-  check(contains(frame, "isDefaultRoute"), "did not walk into the nested proxy")
-  -- and nothing that changes the world may be called to find out what it does
+  check(contains(frame, "sendMessage"), "hid a method that changes something")
   check(written.value == false, "called a method that writes")
+  -- the router id is read to name the pipe, and nothing else is
+  local called = 0
+  for _, method in ipairs(oc.invoked) do
+    if method == "getPipe" then
+      called = called + 1
+    end
+  end
+  check(called <= 2, "read the pipe " .. called .. " times just to list it")
   if show then
     say(frame)
   end
+end)
+
+test("ocitems calls one method when it is asked to", function()
+  local written = { value = false }
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  oc.components = { logisticsPipe(written) }
+
+  -- getLogisticsModule sorts first, and answers with another proxy to go into
+  oc.push("key_down", "keyboard", 0, 0x1C)
+
+  oc.run("ocitems")
+  local frame = oc.frame()
+  check(contains(frame, "isDefaultRoute"), "did not go into the proxy it was given")
+  check(written.value == false, "called a method that writes")
 end)
 
 test("ocitems says so when no pipe is attached", function()
@@ -3336,9 +3363,9 @@ test("a gauge says which way it is going and how fast", function()
     alerts = {},
   })
 
-  -- A rate needs two readings and the time between them. The fake clock only
-  -- moves when an event is pulled, so this is how two seconds pass.
-  for _ = 1, 50 do
+  -- A rate is averaged across half a minute, and the fake clock only moves when
+  -- an event is pulled, so this is how that half minute passes.
+  for _ = 1, 400 do
     oc.push("nothing in particular")
   end
   oc.run("ocwatch")
@@ -3704,7 +3731,7 @@ test("ocup does not fetch a file whose version it already has", function()
   oc.files["/lib/ocgt.lua"] = program("0.1.0")
   oc.files["/lib/oclogistics.lua"] = program("0.1.0")
   oc.respond = serveProgram({
-    ["manifest.txt"] = VERSIONED,
+    ["versions.txt"] = VERSIONED,
     ["programs/ocup.lua"] = program("0.3.0"),
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
@@ -3729,7 +3756,7 @@ test("ocup fetches the one file whose version moved", function()
   oc.files["/lib/ocgt.lua"] = program("0.1.0")
   oc.files["/lib/oclogistics.lua"] = program("0.1.0")
   oc.respond = serveProgram({
-    ["manifest.txt"] = VERSIONED,
+    ["versions.txt"] = VERSIONED,
     ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
     ["programs/ocdebug.lua"] = program("0.2.0"),
     ["programs/ocdump.lua"] = program("0.1.0"),
@@ -3753,9 +3780,9 @@ test("ocup still fetches everything when the manifest names no versions", functi
   check(fetched():find("ocdebug%.lua") ~= nil, "skipped a file it could not compare")
 end)
 
-test("the manifest says the version every file declares", function()
+test("versions.txt says the version every file declares", function()
   local wrong = {}
-  for line in io.lines("manifest.txt") do
+  for line in io.lines("versions.txt") do
     local path, stated = line:match("^%s*(%S+)%s+(%S+)%s*$")
     if not path then
       wrong[#wrong + 1] = "no version on: " .. line
@@ -3770,4 +3797,94 @@ test("the manifest says the version every file declares", function()
   -- ocup trusts this to decide what to download, so a stale line here means a
   -- file that never updates. Run: nix develop -c lua machine/manifest.lua
   check(#wrong == 0, table.concat(wrong, "; "))
+end)
+
+-- An older ocup takes one path a line and skips any line with more on it, so a
+-- version put beside the path made every line unreadable and the manifest look
+-- empty. An ocup that cannot read the manifest cannot update itself out of it.
+test("manifest.txt stays readable by an ocup that knows nothing of versions", function()
+  local lines = 0
+  for line in io.lines("manifest.txt") do
+    lines = lines + 1
+    local only = line:match("^%s*(%S+)%s*$")
+    check(only ~= nil, "a line an older ocup would skip: " .. line)
+  end
+  check(lines > 0, "the manifest is empty")
+end)
+
+test("manifest.txt and versions.txt name the same files", function()
+  local paths, versioned = {}, {}
+  for line in io.lines("manifest.txt") do
+    local path = line:match("^%s*(%S+)%s*$")
+    if path then
+      paths[#paths + 1] = path
+    end
+  end
+  for line in io.lines("versions.txt") do
+    local path = line:match("^%s*(%S+)%s+%S+%s*$")
+    if path then
+      versioned[#versioned + 1] = path
+    end
+  end
+  check(table.concat(paths, ",") == table.concat(versioned, ","),
+    "the two lists have drifted apart: run nix develop -c lua machine/manifest.lua")
+end)
+
+test("a rate is averaged over long enough to be readable", function()
+  oc.width, oc.height = 140, 30
+  oc.reset()
+  local level = 19200
+  local pipe = {
+    address = "5150000e-0000-0000-0000-000000000002",
+    kind = "transposer",
+    methods = { getTankCount = "f", getFluidInTank = "f" },
+    values = {
+      getTankCount = function(side)
+        if side == 3 then
+          return 1
+        end
+        return 0
+      end,
+      getFluidInTank = function(side)
+        if side ~= 3 then
+          return {}
+        end
+        level = level - 100
+        return { { name = "steam", label = "Steam",
+          amount = level, capacity = 19200 } }
+      end,
+    },
+  }
+  oc.components = { pipe }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = pipe.address, side = 3, hidden = {} } },
+    alerts = {},
+  })
+
+  -- a handful of seconds is not enough of a span to say anything with
+  for _ = 1, 60 do
+    oc.push("nothing in particular")
+  end
+  oc.run("ocwatch")
+  check(oc.frame():find("L/s") == nil,
+    "put a rate on screen before it had enough readings to mean one")
+end)
+
+test("ocview lights a lamp when a satellite reports a tripped alert", function()
+  oc.width, oc.height = 120, 30
+  oc.reset()
+  local colors = {}
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem, lampBlock(colors) }
+  local payload = require("serialization").serialize({
+    cards = {},
+    alerts = { { name = "diesel low", tripped = true } },
+  })
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
+    "boiler-room", payload)
+
+  oc.run("ocview", "--once")
+  -- the screen is watching the whole base, so the lamp beside it should say so
+  check(#colors > 0 and colors[#colors] == 31 * 1024,
+    "the lamp ended " .. tostring(colors[#colors]) .. ", not red")
 end)

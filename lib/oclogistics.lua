@@ -88,43 +88,41 @@ function lp.methods(proxy)
   return names
 end
 
--- Logistics Pipes is a moving target: a pack forks it, and which methods a pipe
--- offers depends on which pipe it is. So rather than name them in advance, every
--- method that only reads is called and shown, and anything that answers with
--- another proxy is walked into.
+-- What one proxy offers, without calling anything.
 --
--- Returns a flat list of { depth, name, text, proxy }, deep first, bounded so a
--- proxy that refers back to itself cannot run away with the program.
-function lp.walk(proxy, depth, seen, out)
-  depth = depth or 0
-  seen = seen or {}
-  out = out or {}
-
-  if depth > 3 or seen[proxy] then
-    return out
-  end
-  seen[proxy] = true
-
+-- Calling every readable method and walking into whatever came back is what a
+-- basic pipe survived and a request pipe did not: it reaches the whole item
+-- network, and building that in a computer with a few hundred kilobytes of
+-- memory runs the machine out of it. Nothing here calls into the world; the
+-- program asks for one method at a time and the answer is bounded when it
+-- arrives.
+function lp.offers(proxy)
+  local out = {}
   for _, name in ipairs(lp.methods(proxy)) do
-    if core.isReadable(name) then
-      local value, reason = lp.invoke(proxy, name)
-      if type(value) == "table" and lp.methods(value)[1] then
-        out[#out + 1] = { depth = depth, name = name, text = "", proxy = value }
-        lp.walk(value, depth + 1, seen, out)
-      else
-        out[#out + 1] = {
-          depth = depth,
-          name = name,
-          text = value == nil and ("- " .. tostring(reason or "no answer"))
-            or core.formatValue(value),
-        }
-      end
-    else
-      out[#out + 1] = { depth = depth, name = name, text = "", callable = true }
-    end
+    out[#out + 1] = { name = name, readable = core.isReadable(name) }
+  end
+  return out
+end
+
+-- Calls one readable method and describes what came back, without keeping it.
+--
+-- Whatever the call built is dropped as soon as it has been described, because
+-- what a request pipe answers with can be larger than the computer running the
+-- question. Returns the description, and the proxy when the answer was one, so
+-- the caller can decide whether to go into it.
+function lp.read(proxy, name)
+  if not core.isReadable(name) then
+    return nil, nil, "changes something, so it is not called"
   end
 
-  return out
+  local value, reason = lp.invoke(proxy, name)
+  if value == nil then
+    return nil, nil, tostring(reason or "no answer")
+  end
+  if type(value) == "table" and lp.methods(value)[1] then
+    return "a proxy, with " .. #lp.methods(value) .. " methods", value
+  end
+  return core.formatValue(value)
 end
 
 return lp

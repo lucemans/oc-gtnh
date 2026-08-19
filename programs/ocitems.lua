@@ -1,12 +1,17 @@
--- ocitems: everything a Logistics Pipe will tell you about itself.
+-- ocitems: look through what a Logistics Pipe will tell you, one call at a time.
 --
---   ocitems   pick a pipe on the left, read what it answers on the right
+--   ocitems   pick a pipe on the left, open its methods on the right
 --
--- Logistics Pipes hands over a proxy rather than data, and which methods that
--- proxy carries depends on which pipe it is and on which fork of the mod a pack
--- ships. So nothing is named in advance: every method that only reads is
--- called, anything that answers with another proxy is walked into, and the
--- whole tree is drawn. What a pipe cannot answer says so rather than vanishing.
+-- Logistics Pipes hands over a proxy rather than data, and which methods it
+-- carries depends on which pipe it is and on which fork of the mod a pack
+-- ships. Nothing is named in advance, so this lists what a pipe offers and
+-- calls one method when you ask it to.
+--
+-- Nothing is called on its own. Reading everything and following whatever came
+-- back is what a basic pipe survived and a request pipe did not: it reaches the
+-- whole item network, and building that inside a computer with a few hundred
+-- kilobytes of memory runs the machine out of it. Free memory is on screen for
+-- the same reason.
 
 local component = require("component")
 local computer = require("computer")
@@ -17,10 +22,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.1.0"
-
--- walking a pipe is many calls into the world, so it is not done on a timer
-local REFRESH_SECONDS = 10
+local VERSION = "0.2.0"
 
 local gpu = component.gpu
 local paint = core.painter(gpu)
@@ -60,31 +62,104 @@ end
 
 local pipes = lp.pipes()
 local selected = 1
-local scroll = 0
-local rows = {}
-local read = 0
 
-local function inspect()
-  local address = pipes[selected]
+-- named once: asking a pipe its router id reaches into the world, and doing that
+-- for every pipe on every redraw is a call a frame for nothing
+local names = {}
+for _, address in ipairs(pipes) do
+  names[address] = lp.displayName(address) or address:sub(1, 8)
+end
+
+-- where in the proxy tree we are: the pipe itself, then whatever was opened
+local path = {}
+local rows = {}
+local cursor = 1
+local scroll = 0
+local note = nil
+
+local function here()
+  return path[#path] and path[#path].proxy or nil
+end
+
+local function look()
   rows = {}
-  read = 0
-  if not address then
+  cursor = 1
+  scroll = 0
+  local proxy = here()
+  if not proxy then
     return
   end
+  for _, entry in ipairs(lp.offers(proxy)) do
+    rows[#rows + 1] = { name = entry.name, readable = entry.readable }
+  end
+end
 
+local function openPipe(index)
+  if index < 1 then
+    index = 1
+  end
+  if index > #pipes then
+    index = #pipes
+  end
+  selected = index
+  note = nil
+  path = {}
+
+  local address = pipes[selected]
+  if not address then
+    look()
+    return
+  end
   local proxy = lp.pipe(address)
   if not proxy then
-    rows = { { depth = 0, name = "getPipe", text = "- answered nothing" } }
+    note = "getPipe answered nothing"
+    look()
+    return
+  end
+  path = { { name = names[address], proxy = proxy } }
+  look()
+end
+
+-- one method, called because somebody asked for it
+local function ask()
+  local row = rows[cursor]
+  local proxy = here()
+  if not row or not proxy then
     return
   end
 
-  rows = lp.walk(proxy)
-  read = computer.uptime()
+  local text, deeper, reason = lp.read(proxy, row.name)
+  if deeper then
+    path[#path + 1] = { name = row.name, proxy = deeper }
+    note = nil
+    look()
+    return
+  end
+
+  row.text = text or ("- " .. tostring(reason))
+  row.failed = text == nil
+end
+
+local function back()
+  if #path > 1 then
+    table.remove(path)
+    look()
+  end
+end
+
+local function trail()
+  local parts = {}
+  for _, step in ipairs(path) do
+    parts[#parts + 1] = step.name
+  end
+  return table.concat(parts, "  >  ")
 end
 
 local function render()
   paint.write(1, 1, fit("  ocitems v" .. VERSION .. "    " .. #pipes
-    .. (#pipes == 1 and " pipe" or " pipes") .. " attached", W), FG, BAR)
+    .. (#pipes == 1 and " pipe" or " pipes") .. " attached", W - 22), FG, BAR)
+  paint.write(math.max(1, W - 21), 1,
+    fit(math.floor(computer.freeMemory() / 1024) .. " KB free", 22), DIM, BAR)
 
   for row = TOP, BOTTOM do
     paint.write(LIST_W + 1, row, PIPE, DIM, BG)
@@ -93,80 +168,63 @@ local function render()
   for index, address in ipairs(pipes) do
     local row = TOP + index - 1
     if row <= BOTTOM then
-      local name = lp.displayName(address) or address:sub(1, 8)
-      paint.write(1, row, fit("  " .. name, LIST_W),
+      paint.write(1, row, fit("  " .. names[address], LIST_W),
         FG, index == selected and SELECTED or BG)
     end
   end
 
-  for line = 0, ROWS - 1 do
-    local entry = rows[scroll + line + 1]
-    local row = TOP + line
-    if not entry then
-      paint.write(DETAIL_X, row, fit("", DETAIL_W), FG, BG)
-    else
-      local indent = string.rep("  ", entry.depth)
-      local name = indent .. entry.name
-      paint.write(DETAIL_X, row, fit(name, DETAIL_W), entry.proxy and DIM or FG, BG)
+  paint.write(DETAIL_X, TOP, fit(trail(), DETAIL_W), DIM, BG)
 
-      local space = DETAIL_W - unicode.len(name) - 2
-      local text = entry.text
-      if entry.proxy then
-        text = "and what it answers, below"
-      elseif entry.callable then
-        text = "does something, so it is left alone"
+  for line = 0, ROWS - 3 do
+    local row = rows[scroll + line + 1]
+    local y = TOP + 2 + line
+    if not row then
+      paint.write(DETAIL_X, y, fit("", DETAIL_W), FG, BG)
+    else
+      local shown = scroll + line + 1 == cursor
+      paint.write(DETAIL_X, y, fit("  " .. row.name, DETAIL_W),
+        row.readable and FG or DIM, shown and SELECTED or BG)
+
+      local text = row.text
+      if not text and not row.readable then
+        text = "changes something, so it is left alone"
       end
-      if text ~= "" and space >= 6 then
-        local shown = unicode.sub(text, 1, space)
-        local color = VALUE
-        if entry.proxy or entry.callable then
-          color = DIM
-        elseif text:sub(1, 1) == "-" then
-          color = FAILED
+      if text then
+        local space = DETAIL_W - unicode.len(row.name) - 4
+        if space >= 6 then
+          local cut = unicode.sub(text, 1, space)
+          paint.write(DETAIL_X + DETAIL_W - unicode.len(cut), y, cut,
+            row.failed and FAILED or VALUE, shown and SELECTED or BG)
         end
-        paint.write(DETAIL_X + DETAIL_W - unicode.len(shown), row, shown, color, BG)
       end
     end
   end
 
-  -- after the detail rows, which blank the whole column as they go
   if #pipes == 0 then
     paint.write(3, TOP, fit("none", LIST_W - 2), DIM, BG)
-    paint.write(DETAIL_X, TOP,
-      fit("no Logistics Pipe attached", DETAIL_W), DIM, BG)
-    paint.write(DETAIL_X, TOP + 2,
-      fit("A pipe reaches a computer through an adapter placed against it.",
-        DETAIL_W), DIM, BG)
+    paint.write(DETAIL_X, TOP, fit("no Logistics Pipe attached", DETAIL_W), DIM, BG)
+  elseif note then
+    paint.write(DETAIL_X, TOP + 2, fit(note, DETAIL_W), FAILED, BG)
   end
 
-  local age = ""
-  if read > 0 then
-    age = "   read " .. math.floor(computer.uptime() - read) .. "s ago"
-  end
-  paint.write(1, H, fit("  [click/up/down] pick a pipe   [pgup/pgdn] scroll"
-    .. "   [r] read again   [q] quit" .. age, W), FG, BAR)
+  paint.write(1, H, fit("  [enter] call it   [backspace] back   [up/down] move"
+    .. "   [r] read the pipe again   [q] quit", W), FG, BAR)
   paint.flush(W, H, BG, FG)
 end
 
-local function select(index)
-  if index < 1 then
-    index = 1
+local function move(delta)
+  cursor = cursor + delta
+  if cursor < 1 then
+    cursor = 1
   end
-  if index > #pipes then
-    index = #pipes
+  if cursor > #rows then
+    cursor = #rows
   end
-  if index ~= selected or #rows == 0 then
-    selected = index
-    scroll = 0
-    inspect()
+  if cursor < scroll + 1 then
+    scroll = cursor - 1
   end
-end
-
-local function scrollBy(delta)
-  scroll = scroll + delta
-  local most = math.max(0, #rows - ROWS)
-  if scroll > most then
-    scroll = most
+  if cursor > scroll + ROWS - 2 then
+    scroll = cursor - ROWS + 2
   end
   if scroll < 0 then
     scroll = 0
@@ -178,17 +236,15 @@ end
 term.clear()
 term.setCursorBlink(false)
 paint.forget()
-inspect()
+openPipe(1)
 
 while true do
   render()
-  local packed = table.pack(event.pull(REFRESH_SECONDS))
+  local packed = table.pack(event.pull())
   local name = packed[1]
 
   if name == "interrupted" then
     break
-  elseif name == nil then
-    inspect()
   elseif name == "screen_resized" then
     layout()
   elseif name == "key_down" then
@@ -196,26 +252,39 @@ while true do
     if code == keyboard.keys.q then
       break
     elseif code == keyboard.keys.r then
-      inspect()
+      openPipe(selected)
+    elseif code == keyboard.keys.enter then
+      ask()
+    elseif code == keyboard.keys.back then
+      back()
     elseif code == keyboard.keys.up then
-      select(selected - 1)
+      move(-1)
     elseif code == keyboard.keys.down then
-      select(selected + 1)
+      move(1)
     elseif code == keyboard.keys.pageUp then
-      scrollBy(-ROWS)
+      move(-(ROWS - 2))
     elseif code == keyboard.keys.pageDown then
-      scrollBy(ROWS)
+      move(ROWS - 2)
     end
   elseif name == "touch" then
     local column, row = packed[3], packed[4]
     if column <= LIST_W and row >= TOP and row <= BOTTOM then
-      select(row - TOP + 1)
+      openPipe(row - TOP + 1)
+    elseif row >= TOP + 2 then
+      local index = scroll + row - TOP - 1
+      if rows[index] then
+        if index == cursor then
+          ask()
+        else
+          cursor = index
+        end
+      end
     end
   elseif name == "scroll" then
-    if packed[3] <= LIST_W then
-      select(selected - packed[5])
+    if packed[5] > 0 then
+      move(-1)
     else
-      scrollBy(-packed[5] * 3)
+      move(1)
     end
   end
 end

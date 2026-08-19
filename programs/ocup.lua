@@ -14,7 +14,7 @@ local keyboard = require("keyboard")
 local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.14.0"
+local VERSION = "0.15.0"
 
 -- read here rather than through oclib: on a fresh computer ocup arrives alone
 -- and there is no /lib yet for it to require
@@ -25,6 +25,7 @@ local COMMIT_URL = "https://api.github.com/repos/" .. REPO .. "/commits/master"
 local RAW_URL = "https://raw.githubusercontent.com/" .. REPO .. "/"
 local BRANCH = "refs/heads/master"
 local MANIFEST = "manifest.txt"
+local VERSIONS = "versions.txt"
 local SELF = "programs/ocup.lua"
 
 -- the folder a file lives in decides where it installs
@@ -261,10 +262,19 @@ end
 
 term.clearLine()
 write("  fetching manifest", DIM)
-local manifestText, manifestReason = download(urlFor(MANIFEST))
+
+-- versions.txt lists the same paths with the version each file declares, which
+-- is what lets a file that has not changed go unfetched. manifest.txt is the
+-- same list without the versions, kept because an older ocup skips any line
+-- with more than a path on it and would read a versioned one as empty.
+local manifestText = download(urlFor(VERSIONS))
+local manifestReason
+if not manifestText then
+  manifestText, manifestReason = download(urlFor(MANIFEST))
+end
 if not manifestText then
   term.clearLine()
-  write("  manifest failed: " .. manifestReason .. "\n", RED)
+  write("  manifest failed: " .. tostring(manifestReason) .. "\n", RED)
   paint(WHITE)
   return 1
 end
