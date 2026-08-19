@@ -23,7 +23,7 @@ local lp = require("oclogistics")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -39,19 +39,28 @@ local ROOM = 1100 * 1024
 local gpu = component.gpu
 local paint = core.painter(gpu)
 
--- a count, then the name beside it: four of those across a 160-wide screen
+-- a count, then the name beside it: three of those and a panel across a
+-- 160-wide screen
 local NARROWEST = 34
 local COUNT_W = 10
+local PANEL_W = 34
+-- how many risers, and how many fallers, are worth a look
+local MOVERS = 6
 
-local W, H, TOP, BOTTOM, ROWS, COLUMNS, COLUMN_W
+local W, H, TOP, BOTTOM, ROWS, COLUMNS, COLUMN_W, PANEL_X
 
 local function layout()
   W, H = core.viewport(gpu)
   TOP = 3
   BOTTOM = H - 1
   ROWS = BOTTOM - TOP + 1
-  COLUMNS = math.max(1, math.floor(W / NARROWEST))
-  COLUMN_W = math.floor(W / COLUMNS)
+
+  -- the panel only earns its place while a column of items is still left
+  local grid = W - PANEL_W
+  PANEL_X = grid >= NARROWEST and grid + 1 or nil
+  grid = PANEL_X and grid or W
+  COLUMNS = math.max(1, math.floor(grid / NARROWEST))
+  COLUMN_W = math.floor(grid / COLUMNS)
   paint.forget()
 end
 
@@ -81,6 +90,7 @@ local function right(text, width)
 end
 
 local items, total, note = {}, 0, nil
+local movers = {}
 local scroll = 0
 local cursor = 1
 local proxy, builder
@@ -158,28 +168,19 @@ local function scan()
   writeCache()
 end
 
--- A few items, between draws. The pass runs on round after round: the counts on
--- screen are never older than one way round the list, and the order is only
--- settled at the end of a pass, so rows do not jump about while it is going on.
+-- A few items, between draws. The pass runs on round after round, and the order
+-- is only settled at the end of one, so rows do not jump about while it is
+-- going on.
 local function count()
   if not builder or not items[1] then
     return
   end
-  for _ = 1, PER_DRAW do
-    local item = items[cursor]
-    if item and not item.tagged then
-      local amount = lp.count(proxy, builder, item.itemId, item.itemData)
-      if amount then
-        item.amount = amount
-      end
-    end
-    cursor = cursor + 1
-    if cursor > #items then
-      cursor = 1
-      order()
-      writeCache()
-      return
-    end
+  local finished
+  cursor, finished = lp.sweep(proxy, builder, items, cursor, PER_DRAW)
+  if finished then
+    order()
+    movers = lp.movers(items, MOVERS)
+    writeCache()
   end
 end
 
@@ -198,8 +199,19 @@ local function render()
           VALUE, BG)
         paint.write(x + COUNT_W + 1, TOP + row,
           fit(item.name, COLUMN_W - COUNT_W - 2), FG, BG)
-      else
-        paint.write(x, TOP + row, fit("", COLUMN_W), FG, BG)
+      end
+    end
+  end
+
+  if PANEL_X then
+    paint.write(PANEL_X, TOP, fit("  changing, a minute", PANEL_W), DIM, BAR)
+    for rank, item in ipairs(movers) do
+      local y = TOP + rank
+      if y <= BOTTOM then
+        paint.write(PANEL_X, y, right((item.rate > 0 and "+" or "")
+          .. core.comma(item.rate), COUNT_W), item.rate > 0 and VALUE or FAILED, BG)
+        paint.write(PANEL_X + COUNT_W + 1, y,
+          fit(item.name, PANEL_W - COUNT_W - 2), FG, BG)
       end
     end
   end

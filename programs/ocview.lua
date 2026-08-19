@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.10.0"
+local VERSION = "0.11.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -248,6 +248,14 @@ local function planBlocks()
       for _, alert in ipairs(alerts) do
         rows[#rows + 1] = { kind = "alert", alert = alert }
       end
+      -- what the item network is doing, from a satellite that watches one. The
+      -- alerts view is for what is wrong, and a stock moving is not that.
+      if mode ~= "alerts" and (answer.items or {})[1] then
+        rows[#rows + 1] = { kind = "heading", text = "changing, a minute" }
+        for _, item in ipairs(answer.items) do
+          rows[#rows + 1] = { kind = "item", item = item }
+        end
+      end
       for _, card in ipairs(shown) do
         if mode == "columns" and not card.compact then
           -- in this view a machine is its gauges, with its own name on each,
@@ -319,6 +327,15 @@ local function drawRow(row, x, y, width)
       color = ALARM
     end
     write(x + 1, y, fit(mark .. "  " .. tostring(row.alert.name), width - 1), color, BG)
+  elseif row.kind == "heading" then
+    write(x + 1, y, fit(row.text, width - 1), DIM, BG)
+  elseif row.kind == "item" then
+    local rate = row.item.rate or 0
+    local said = (rate > 0 and "+" or "") .. core.comma(rate)
+    write(x + 1, y, string.rep(" ", math.max(0, 9 - unicode.len(said))) .. said,
+      rate > 0 and OK_COLOR or ALARM, BG)
+    write(x + 11, y, fit(tostring(row.item.name), math.max(0, width - 11)),
+      FG, BG)
   elseif row.kind == "name" then
     write(x + 1, y, fit(row.card.name or "?", width - 13), FG, BG)
     if row.card.status then

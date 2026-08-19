@@ -15,9 +15,17 @@ local component = require("component")
 local core = require("oclib")
 local event = require("event")
 local keyboard = require("keyboard")
+local lp = require("oclogistics")
 local net = require("ocnet")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
+
+-- how many items are counted between two questions, and how long the loop
+-- listens before it goes back to counting. One count is a server tick.
+local PER_TURN = 10
+local REST = 0.05
+-- how many risers, and how many fallers, are worth sending
+local MOVERS = 6
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999
@@ -45,14 +53,25 @@ if not modem then
   return 1
 end
 
+-- A satellite with a request pipe also watches the item network, since nothing
+-- else here is using the time between questions. What travels is only what is
+-- moving; the list itself is far too large to send and nobody asked for it.
+local proxy = lp.requestPipe()
+local builder = proxy and lp.builder(proxy)
+local items = proxy and lp.available(proxy) or {}
+local cursor, movers = 1, {}
+
 say("ocserve v" .. VERSION .. "   port " .. core.PORT, WHITE)
 say("  serving " .. #net.machines(config) .. " machines", DIM)
 say("  wireless " .. tostring(modem.isWireless()), DIM)
+if builder then
+  say("  counting " .. #items .. " items", DIM)
+end
 say("  [q] to stop", DIM)
 say("")
 
 while true do
-  local name, _, remote, port, _, request = event.pull(once and 5 or nil)
+  local name, _, remote, port, _, request = event.pull(once and 5 or REST)
 
   if name == "interrupted" then
     break
@@ -61,10 +80,16 @@ while true do
   elseif name == "modem_message" then
     -- read on demand: nothing else here is looking at these machines, so there
     -- is no earlier reading to answer from
-    local report = net.report(config, net.machines(config))
+    local report = net.report(config, net.machines(config), movers)
     local sent = net.answer(modem, port, remote, request, config, report)
     if sent then
       say("  answered " .. sent, GREEN)
+    end
+  elseif name == nil and builder and items[1] then
+    local finished
+    cursor, finished = lp.sweep(proxy, builder, items, cursor, PER_TURN)
+    if finished then
+      movers = lp.movers(items, MOVERS)
     end
   end
 

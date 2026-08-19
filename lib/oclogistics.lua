@@ -6,11 +6,12 @@
 -- {name = "...", proxy = <the proxy>}, callable through a __call metamethod.
 
 local component = require("component")
+local computer = require("computer")
 local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.6.0"
+lp.VERSION = "0.7.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -84,11 +85,20 @@ function lp.requestPipe()
   return nil
 end
 
--- How many items are named. Measured rather than chosen: a network of 1,592
--- items costs about 950 KB to ask for, on a computer that has 1.4 MB, and every
--- name read costs a further 600 bytes that does not come back while the program
--- runs. 250 names leave the screen enough to draw with.
-local MOST = 250
+-- What a name costs while a scan is running: about 1.4 KB, of which 600 bytes
+-- is the identifier that is kept and the rest is the pairs the collector has
+-- not got to yet.
+local NAME = 1400
+-- what is left alone for the program to draw with afterwards
+local SPARE = 150 * 1024
+
+-- How many items can be named, asked after the list has arrived so the answer
+-- is what is left rather than what there was. A computer with 1.4 MB names
+-- about 220 of them; a server with 3.8 MB names the whole network. Nothing is
+-- tuned per machine, because the machine already knows.
+local function most()
+  return math.max(50, math.floor((computer.freeMemory() - SPARE) / NAME))
+end
 
 -- Everything the network holds, the most plentiful first.
 --
@@ -101,13 +111,14 @@ local MOST = 250
 -- what they free is the room the names go into. There is no collectgarbage on
 -- this machine, so memory comes back only under the pressure of asking for
 -- more, and asking for the whole list twice in one run ends the computer.
-function lp.available(proxy, most)
+function lp.available(proxy, howMany)
   local list = lp.invoke(proxy, "getAvailableItems")
   if type(list) ~= "table" then
     return nil, "getAvailableItems answered nothing"
   end
 
   local total = #list
+  local wanted = math.min(howMany or most(), total)
   local items = {}
 
   -- one pcall around the whole scan rather than one a call: three thousand of
@@ -121,7 +132,6 @@ function lp.available(proxy, most)
 
     table.sort(order, function(a, b) return amounts[a] > amounts[b] end)
 
-    local wanted = math.min(most or MOST, total)
     local named = {}
     for rank = 1, wanted do
       named[order[rank]] = true
@@ -181,6 +191,81 @@ function lp.count(proxy, builder, itemId, itemData)
   end
   local amount = lp.invoke(proxy, "getItemAmount", id)
   return type(amount) == "number" and amount or nil
+end
+
+-- what a rate is measured over
+local MINUTE = 60
+
+-- Takes one reading of an item and works out which way it is going.
+--
+-- The reading is compared with the one that opened the window rather than with
+-- the reading before it: a pass round the list takes about a quarter of a
+-- minute, and a difference over a quarter of a minute is mostly noise. The rate
+-- only changes when a window closes, so a figure on screen is what happened
+-- over the last minute rather than what happened in the last moment.
+function lp.mark(item, amount, now)
+  item.amount = amount
+  if not item.when then
+    item.was, item.when = amount, now
+    return
+  end
+  local since = now - item.when
+  if since >= MINUTE then
+    item.rate = math.floor((amount - item.was) / since * MINUTE + 0.5)
+    item.was, item.when = amount, now
+  end
+end
+
+-- Counts a few items, carrying on from wherever the last call stopped, and says
+-- where it stopped this time and whether that was the end of a pass. One count
+-- is a server tick, so a program does a few of these between draws instead of
+-- the whole list at once.
+function lp.sweep(proxy, builder, items, from, many)
+  local now = computer.uptime()
+  local cursor = from
+  for _ = 1, many do
+    local item = items[cursor]
+    if not item then
+      return 1, true
+    end
+    -- a tagged item cannot be counted this way; only a full read counts it
+    if not item.tagged then
+      local amount = lp.count(proxy, builder, item.itemId, item.itemData)
+      if amount then
+        lp.mark(item, amount, now)
+      end
+    end
+    cursor = cursor + 1
+    if cursor > #items then
+      return 1, true
+    end
+  end
+  return cursor, false
+end
+
+-- The few items whose count is moving, the ones going up first and the ones
+-- going down last. Everything standing still says nothing and is left out, so a
+-- short list is the whole of what is happening rather than the top of it.
+function lp.movers(items, ends)
+  local moving = {}
+  for _, item in ipairs(items) do
+    if item.rate and item.rate ~= 0 then
+      moving[#moving + 1] = item
+    end
+  end
+  table.sort(moving, function(a, b) return a.rate > b.rate end)
+
+  if #moving <= ends * 2 then
+    return moving
+  end
+  local few = {}
+  for rank = 1, ends do
+    few[#few + 1] = moving[rank]
+  end
+  for rank = #moving - ends + 1, #moving do
+    few[#few + 1] = moving[rank]
+  end
+  return few
 end
 
 return lp

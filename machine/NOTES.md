@@ -574,6 +574,39 @@ and then never counted this way — only a full read counts them. In a list sort
 by how many there are, 5 of the top 250 were tagged, which is what you would
 expect of things you own exactly one of.
 
+## How many items a machine can hold
+
+A name does not cost a fixed amount, because most of what it costs is pairs the
+collector has not reached yet, and how fast it reaches them depends on how much
+room it has. Measured on the same network from two machines:
+
+| machine | free | named | cost a name |
+| --- | --- | --- | --- |
+| computer, 1.4 MB | 458 KB after the list | 250 | ~1.4 KB |
+| server, 3.8 MB | 2.6 MB after the list | 1,163 | ~370 bytes |
+
+So the number is worked out rather than chosen: what is free once the list has
+arrived, less what the screen needs, divided by the dearer of the two figures.
+It is asked **after** the list is in memory, which is the only moment that says
+what there is to work with. The small machine lands on about 220, the server on
+1,163 of 1,592, and neither is tuned by hand. The server's worst moment left
+1,748 KB free, which came back to 3,302 KB as soon as it did any work.
+
+## A rate over a quarter of a minute is noise
+
+A pass round the list takes a count a tick, so about 16 seconds for 250 items
+and a minute for 1,163. Comparing a reading with the one before it therefore
+measures a quarter of a minute, or less, and small movements drown in it.
+
+A window is a minute instead: the reading that opened it is kept, and when a
+minute has gone by the difference becomes the rate and a new window opens. What
+is on screen is then what happened over the last minute rather than what happened
+between the last two passes, and it changes once a minute rather than constantly.
+
+Only items that are moving are worth a place. Everything else is standing still
+and says nothing, so the few that are moving are the whole of what is happening
+rather than the top of a long list.
+
 ## A manifest line has to stay readable by what is already installed
 
 This has now gone wrong twice, the same way both times. A new column went into

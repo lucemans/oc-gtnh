@@ -14,7 +14,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.7.0"
+net.VERSION = "0.8.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -117,8 +117,14 @@ end
 
 -- What travels over the wire. Gauges arrive already rescaled and already
 -- formatted, so the asking machine never turns "42,000" back into a number.
-function net.report(config, cards)
-  local report = { cards = {}, alerts = {} }
+function net.report(config, cards, movers)
+  local report = { cards = {}, alerts = {}, items = {} }
+
+  -- what the item network is doing, if this computer is watching one. Only the
+  -- few that are moving travel; the list itself is thousands long.
+  for _, item in ipairs(movers or {}) do
+    report.items[#report.items + 1] = { name = item.name, rate = item.rate }
+  end
 
   for _, card in ipairs(cards) do
     local out = {
@@ -216,6 +222,7 @@ function net.decode(port, remote, kind, host, payload)
     address = remote,
     cards = report.cards,
     alerts = report.alerts or {},
+    items = report.items or {},
   }
 end
 

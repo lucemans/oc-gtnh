@@ -3342,24 +3342,76 @@ end)
 
 -- Reading the whole network already costs most of the memory the computer has,
 -- and every name read costs more that does not come back. Naming everything is
--- what ended the computer.
-test("ocitems names only the items it will show", function()
+-- what ended the computer, so how many are named is what is left over divided
+-- by what one costs, and a bigger machine simply holds more.
+test("ocitems names as many items as the memory allows, and no more", function()
   oc.width, oc.height = 160, 30
-  oc.reset()
   local stock = {}
   for index = 1, 4000 do
     stock[index] = { name = "thing " .. index, amount = index }
   end
-  local tally = { names = 0 }
-  oc.components = { requestPipe(stock, tally) }
 
-  local ok, reason = oc.run("ocitems")
-  check(ok, "ocitems crashed: " .. tostring(reason))
-  check(tally.names <= 250, "read " .. tally.names .. " names of 4000")
+  local named = {}
+  for _, free in ipairs({ 600 * 1024, 3400 * 1024 }) do
+    oc.reset()
+    local tally = {}
+    oc.components = { requestPipe(stock, tally) }
+    oc.freeMemory = free
 
-  local frame = oc.frame()
-  check(contains(frame, "4,000 items in the network"), "lost the count")
-  check(contains(frame, "thing 4000"), "did not name the one there is most of")
+    local ok, reason = oc.run("ocitems")
+    check(ok, "ocitems crashed: " .. tostring(reason))
+    named[#named + 1] = tally.names
+    check(tally.names < 4000, "named the whole network: " .. tally.names)
+
+    local frame = oc.frame()
+    check(contains(frame, "4,000 items in the network"), "lost the count")
+    check(contains(frame, "thing 4000"), "did not name the one there is most of")
+  end
+
+  check(named[2] > named[1] * 2, "a machine with room for more named "
+    .. named[2] .. " against " .. named[1])
+end)
+
+-- A rate over a quarter of a minute is mostly noise, so a window is a minute
+-- and nothing is claimed until one has closed.
+test("an item says which way it is going, once a minute has passed", function()
+  local lplib = require("oclogistics")
+  local item = {}
+
+  lplib.mark(item, 100, 1000)
+  check(item.rate == nil, "claimed a rate from one reading")
+  lplib.mark(item, 400, 1030)
+  check(item.rate == nil, "claimed a rate from half a minute")
+  check(item.amount == 400, "did not keep the count itself current")
+
+  lplib.mark(item, 700, 1060)
+  check(item.rate == 600, "made the minute " .. tostring(item.rate) .. ", not 600")
+
+  -- and the next window is measured from here, not from where it all began
+  lplib.mark(item, 700, 1120)
+  check(item.rate == 0, "went on reporting a rate that had stopped")
+end)
+
+test("only what is moving is worth a place, gains first", function()
+  local lplib = require("oclogistics")
+  local items = {}
+  for index = 1, 20 do
+    items[index] = { name = "up " .. index, rate = index }
+  end
+  for index = 1, 20 do
+    items[#items + 1] = { name = "down " .. index, rate = -index }
+  end
+  items[#items + 1] = { name = "still", rate = 0 }
+  items[#items + 1] = { name = "never counted" }
+
+  local few = lplib.movers(items, 3)
+  check(#few == 6, "kept " .. #few .. " of them, not six")
+  check(few[1].name == "up 20", "did not put the biggest gain first")
+  check(few[6].name == "down 20", "did not put the biggest loss last")
+  for _, item in ipairs(few) do
+    check(item.name ~= "still" and item.name ~= "never counted",
+      "made room for " .. item.name .. ", which is not moving")
+  end
 end)
 
 -- Reading the whole network is the one expensive thing this program can do, so
@@ -4261,6 +4313,33 @@ test("ocup leaves alone the rows that do not change", function()
   -- six files, each saying it once: repainting them all again at the end is
   -- what made the whole table appear to rewrite itself
   check(said == 6, "wrote 'up to date' " .. said .. " times for six files")
+end)
+
+-------------------------------------------------------------------------------
+-- what the item network is doing, on somebody else's screen
+
+test("a satellite sends what is moving, and ocview shows it", function()
+  local netlib = require("ocnet")
+  local report = netlib.report({}, {}, {
+    { name = "Redstone", rate = 1240 },
+    { name = "Iron Ingot", rate = -820 },
+  })
+  check(#report.items == 2, "carried " .. #report.items .. " items, not two")
+  check(report.items[1].name == "Redstone", "lost the name")
+
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
+    "item-server", require("serialization").serialize(report))
+
+  oc.run("ocview", "--once")
+  local frame = oc.screen()
+  check(contains(frame, "changing, a minute"), "did not say what the list is")
+  check(contains(frame, "+1,240"), "did not show a rising stock")
+  check(contains(frame, "-820"), "did not show a falling one")
+  check(contains(frame, "Redstone"), "did not name the item")
 end)
 
 -------------------------------------------------------------------------------
