@@ -471,9 +471,56 @@ a default route. A **request** pipe does not: its proxy reaches the item network
 and building that inside a computer with a few hundred kilobytes of memory ends
 the computer.
 
-Nothing is called on its own now. The program lists what a proxy offers and
-calls one method when asked, describing the answer and dropping it rather than
-keeping it. Free memory is on screen while you do it.
+## What a request pipe answers
+
+A request pipe offers everything a basic one does and four more:
+
+```
+getAvailableItems   getCraftableItems   getItemAmount   makeRequest
+```
+
+`getAvailableItems()` answers with one entry an item, and the entry is a proxy
+rather than data: a `Pair` of `logisticspipes.utils.item.ItemIdentifier` and
+`java.lang.Integer`.
+
+| call | answers |
+| --- | --- |
+| `pair.getValue2()` | the count, as a number |
+| `pair.getValue1()` | the ItemIdentifier, another proxy |
+| `id.getName()` | `Cobblestone`, the name a person reads |
+| `id.getIdName()` | `chisel:cobblestone` |
+| `id.getModName()` | `chisel` |
+| `id.getId()`, `id.getData()` | `2014`, `15` |
+
+`tostring` on an ItemIdentifier gives `ItemIdentifier: chisel:Cobblestone,
+2014:15`, which looks like a free name and is not: it costs more than the call
+does. `tostring` on the Pair raises `java.lang.StackOverflowError`, and
+`getLP().identify(pair)` answers nil.
+
+### What each part of it costs
+
+Measured on a live network of 1,592 items, on a computer with 1.4 MB free:
+
+| step | time | memory |
+| --- | --- | --- |
+| `getAvailableItems()` | — | **950 KB**, two thirds of the computer |
+| all 1,592 `getValue2()` | 0.05 s | 200 KB |
+| one `getValue1().getName()` | 6 ms | ~600 bytes |
+
+So the counts are nearly free and the names are not. Naming all 1,592 needs
+about a megabyte that is not there, and asking for the whole list a second time
+in one run ends the computer: it blue-screens on the second call.
+
+**There is no `collectgarbage`.** It is not in the sandbox, so memory comes back
+only under the pressure of asking for more, and never at the moment you drop
+something. Dropping the whole list and printing free memory shows no change at
+all; allocating hard afterwards recovers a few hundred kilobytes.
+
+That is what shapes `lp.available`: read every count, settle the order from the
+counts, drop the pairs nobody will name, and only then read the names of the 250
+that will be shown. Dropping the other 1,342 first is what leaves room for those
+250. The whole scan takes 1.6 seconds and ends with about 110 KB free, which
+climbs back to roughly 350 KB once the screen starts drawing.
 
 ## A manifest line has to stay readable by what is already installed
 

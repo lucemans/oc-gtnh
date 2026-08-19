@@ -3236,52 +3236,105 @@ say("all checks passed")
 -------------------------------------------------------------------------------
 -- ocitems
 
--- Calling everything and following whatever came back is what a basic pipe
--- survived and a request pipe did not: it reaches the whole item network and
--- runs the computer out of memory. Nothing is called until it is asked for.
-test("ocitems lists what a pipe offers without calling any of it", function()
-  local written = { value = false }
+-- shaped like a real request pipe: getAvailableItems answers with one Pair an
+-- item, whose getValue2 is the count and whose getValue1 is the ItemIdentifier
+-- the name has to be read from
+local function requestPipe(stock, tally)
+  local stacks = {}
+  for index, entry in ipairs(stock) do
+    stacks[index] = {
+      type = "userdata",
+      getValue2 = proxyMethod("getValue2", entry.amount),
+      getValue1 = setmetatable({ name = "getValue1" }, {
+        __call = function()
+          if tally then
+            tally.names = tally.names + 1
+          end
+          return { getName = proxyMethod("getName", entry.name) }
+        end,
+        __tostring = function()
+          return "function():getValue1"
+        end,
+      }),
+    }
+  end
+
+  return {
+    address = "96cdfbc3-11fa-462f-adf2-2599720fbb33",
+    kind = "logisticspipe",
+    methods = { getPipe = "function():table" },
+    values = {
+      getPipe = function()
+        return {
+          type = "userdata",
+          getRouterId = proxyMethod("getRouterId", 7),
+          getAvailableItems = proxyMethod("getAvailableItems", stacks),
+        }
+      end,
+    },
+  }
+end
+
+test("ocitems lists the network with the most plentiful first", function()
   oc.width, oc.height = 160, 30
   oc.reset()
-  oc.components = { logisticsPipe(written) }
+  oc.components = { requestPipe({
+    { name = "Nickel Ingot", amount = 2182 },
+    { name = "Cobblestone", amount = 22742 },
+    { name = "Redstone", amount = 4094 },
+  }) }
 
   local ok, reason = oc.run("ocitems")
   check(ok, "ocitems crashed: " .. tostring(reason))
 
   local frame = oc.frame()
-  check(contains(frame, "Logistics Pipe #42"), "did not name the pipe by its router")
-  check(contains(frame, "getRouterId"), "did not list the pipe's methods")
-  check(contains(frame, "sendMessage"), "hid a method that changes something")
-  check(written.value == false, "called a method that writes")
-  -- the router id is read to name the pipe, and nothing else is
-  local called = 0
-  for _, method in ipairs(oc.invoked) do
-    if method == "getPipe" then
-      called = called + 1
-    end
-  end
-  check(called <= 2, "read the pipe " .. called .. " times just to list it")
+  check(contains(frame, "Cobblestone"), "did not name what is in the network")
+  check(contains(frame, "22,742"), "did not group a count into something readable")
+  check(contains(frame, "3 items in the network"), "did not say how many there are")
+
+  local most, next = frame:find("Cobblestone"), frame:find("Redstone")
+  check(most and next and most < next, "did not put the most plentiful first")
   if show then
     say(frame)
   end
 end)
 
-test("ocitems calls one method when it is asked to", function()
+-- Reading the whole network already costs most of the memory the computer has,
+-- and every name read costs more that does not come back. Naming everything is
+-- what ended the computer.
+test("ocitems names only the items it will show", function()
+  oc.width, oc.height = 160, 30
+  oc.reset()
+  local stock = {}
+  for index = 1, 4000 do
+    stock[index] = { name = "thing " .. index, amount = index }
+  end
+  local tally = { names = 0 }
+  oc.components = { requestPipe(stock, tally) }
+
+  local ok, reason = oc.run("ocitems")
+  check(ok, "ocitems crashed: " .. tostring(reason))
+  check(tally.names <= 250, "read " .. tally.names .. " names of 4000")
+
+  local frame = oc.frame()
+  check(contains(frame, "4,000 items in the network"), "lost the count")
+  check(contains(frame, "thing 4000"), "did not name the one there is most of")
+end)
+
+test("ocitems tells a basic pipe from the request pipe it needs", function()
   local written = { value = false }
   oc.width, oc.height = 160, 30
   oc.reset()
   oc.components = { logisticsPipe(written) }
 
-  -- getLogisticsModule sorts first, and answers with another proxy to go into
-  oc.push("key_down", "keyboard", 0, 0x1C)
-
   oc.run("ocitems")
-  local frame = oc.frame()
-  check(contains(frame, "isDefaultRoute"), "did not go into the proxy it was given")
+  check(contains(oc.frame(), "no request pipe attached"),
+    "took a pipe that cannot see the network for one that can")
   check(written.value == false, "called a method that writes")
 end)
 
 test("ocitems says so when no pipe is attached", function()
+  oc.reset()
   oc.components = {}
   oc.run("ocitems")
   check(contains(oc.frame(), "no Logistics Pipe attached"), "did not say the list was empty")
@@ -3961,57 +4014,6 @@ test("versions.txt keeps to one word after the path", function()
     check(path ~= nil and rest ~= nil,
       "an older ocup cannot read this line: " .. line)
   end
-end)
-
--- getAvailableItems answers with a list, whose keys are numbers. Taking those
--- for method names put a number where a name was expected and ended the program.
-test("ocitems reads a list answer instead of taking it for methods", function()
-  oc.width, oc.height = 160, 30
-  oc.reset()
-  local requestPipe = {
-    address = "96cdfbc3-11fa-462f-adf2-2599720fbb33",
-    kind = "logisticspipe",
-    methods = { getPipe = "function():table" },
-    values = {
-      getPipe = function()
-        return {
-          getRouterId = proxyMethod("getRouterId", 7),
-          getAvailableItems = proxyMethod("getAvailableItems", {
-            { name = "minecraft:iron_ingot", amount = 4096 },
-            { name = "minecraft:gold_ingot", amount = 128 },
-          }),
-        }
-      end,
-    },
-  }
-  oc.components = { requestPipe }
-
-  -- down onto getAvailableItems, then call it
-  oc.push("key_down", "keyboard", 0, 0x1C)
-
-  local ok, reason = oc.run("ocitems")
-  check(ok, "ocitems crashed: " .. tostring(reason))
-
-  local frame = oc.frame()
-  check(contains(frame, "2 entries"), "did not say how many came back")
-  check(contains(frame, "iron_ingot"), "did not show what is in the list")
-  check(contains(frame, "4096"), "did not show how many of it there are")
-end)
-
-test("a list is bounded so it cannot be larger than the computer", function()
-  oc.components = {}
-  local lplib = require("oclogistics")
-  local many = {}
-  for index = 1, 4000 do
-    many[index] = { name = "thing " .. index, amount = index }
-  end
-  local proxy = { getAvailableItems = proxyMethod("getAvailableItems", many) }
-
-  local answer = lplib.read(proxy, "getAvailableItems")
-  check(answer.kind == "list", "did not read it as a list")
-  check(answer.total == 4000, "lost the count: " .. tostring(answer.total))
-  -- everything a base owns, formatted and kept, is what ended the computer
-  check(#answer.rows <= 250, "kept " .. #answer.rows .. " rows of it")
 end)
 
 -- A bar says how full something is. Where the alert on it sits says how full it

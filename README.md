@@ -16,7 +16,7 @@ https://ocdoc.cil.li/api:internet
 | `ockeypad`  | a PIN lock on an OpenSecurity keypad                                   |
 | `ocmkfs`    | flashes a floppy with the programs you pick, for a computer with no net |
 | `ocsweeper` | minesweeper, up to 21x21                                               |
-| `ocitems`   | everything a Logistics Pipe will tell you about itself                 |
+| `ocitems`   | everything the Logistics Pipes network holds, the most of it first     |
 
 ## occonnect
 
@@ -51,7 +51,7 @@ The libraries install to `/lib`, each knowing about one thing:
 | --- | --- |
 | `oclib` | component access, describing any value, colour codes, the painter, configuration |
 | `ocgt` | GregTech: sensor text, gauges, machine names, machine status |
-| `oclogistics` | Logistics Pipes: the `getPipe` proxy and router identity |
+| `oclogistics` | Logistics Pipes: the `getPipe` proxy, router identity, and what the network holds |
 | `octank` | a fluid tank read through a transposer, by which side it sits on |
 | `ocsecurity` | OpenSecurity: the alarm, which is its own loudspeaker |
 | `ocnotify` | every way this base can say something happened, and which are wanted |
@@ -104,6 +104,13 @@ exposes nothing and an MFU has nothing to bind to. A transposer, or an adapter
 with a tank controller upgrade, reads any such tank by side. A watched entry
 therefore carries a `side` as well as an address, since one transposer can have
 a different tank on each of its six faces.
+
+`ocitems` reads the whole item network once and lists it, the most plentiful
+first. Asking a request pipe what it has costs about 950 KB on a computer with
+1.4 MB, and every item name read costs a further 600 bytes that does not come
+back, so the counts are read for everything and only the 250 items that reach
+the screen are ever named. Asking a second time in one run runs the computer out
+of memory, so there is no refresh key: quit and start it again.
 
 Each program carries a `VERSION` constant. `ocup` compares the installed copy
 against the downloaded one and reports `v0.2.0 -> v0.3.0` when it changes, so

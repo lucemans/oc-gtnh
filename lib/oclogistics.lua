@@ -10,7 +10,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.4.0"
+lp.VERSION = "0.5.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -72,78 +72,78 @@ function lp.pipes()
   return found
 end
 
--- Only the named fields. A proxy's methods have names; what a request pipe
--- answers with is a list, and its keys are numbers. Taking those for methods is
--- what made a number arrive where a method name was expected.
-function lp.methods(proxy)
-  local names = {}
-  if type(proxy) ~= "table" then
-    return names
-  end
-  for name, entry in pairs(proxy) do
-    if type(name) == "string" and type(entry) == "table" and name ~= "proxy" then
-      names[#names + 1] = name
+-- A request pipe is the one that can see the whole network; a basic pipe knows
+-- only its own filters and answers no getAvailableItems.
+function lp.requestPipe()
+  for _, address in ipairs(lp.pipes()) do
+    local proxy = lp.pipe(address)
+    if type(proxy) == "table" and type(proxy.getAvailableItems) == "table" then
+      return proxy, address
     end
   end
-  table.sort(names)
-  return names
+  return nil
 end
 
--- What one proxy offers, without calling anything.
---
--- Calling every readable method and walking into whatever came back is what a
--- basic pipe survived and a request pipe did not: it reaches the whole item
--- network, and building that in a computer with a few hundred kilobytes of
--- memory runs the machine out of it. Nothing here calls into the world; the
--- program asks for one method at a time and the answer is bounded when it
--- arrives.
-function lp.offers(proxy)
-  local out = {}
-  for _, name in ipairs(lp.methods(proxy)) do
-    out[#out + 1] = { name = name, readable = core.isReadable(name) }
-  end
-  return out
-end
-
--- how many entries of a long answer are kept, so a list of everything a base
--- owns cannot be larger than the computer asking about it
+-- How many items are named. Measured rather than chosen: a network of 1,592
+-- items costs about 950 KB to ask for, on a computer that has 1.4 MB, and every
+-- name read costs a further 600 bytes that does not come back while the program
+-- runs. 250 names leave the screen enough to draw with.
 local MOST = 250
 
--- Calls one readable method and says what came back. Three things can come
--- back, and they are not the same kind of thing at all:
+-- Everything the network holds, the most plentiful first.
 --
---   value   something to read, described in one line
---   proxy   more methods, which the caller may go into
---   list    rows of data, which is what "everything we have" looks like
+-- getAvailableItems answers with one Pair an item: getValue2 is how many there
+-- are, getValue1 the ItemIdentifier the name comes from. The counts are cheap
+-- and the names are not, so every count is read, the order is settled from
+-- them, and only the items that will be shown are ever named.
 --
--- Whatever the call built is described and then let go, because what a request
--- pipe answers with can be larger than the computer running the question.
-function lp.read(proxy, name)
-  if not core.isReadable(name) then
-    return { kind = "value", text = "changes something, so it is not called" }
+-- The pairs nobody will name are dropped before the first name is read, because
+-- what they free is the room the names go into. There is no collectgarbage on
+-- this machine, so memory comes back only under the pressure of asking for
+-- more, and asking for the whole list twice in one run ends the computer.
+function lp.available(proxy, most)
+  local list = lp.invoke(proxy, "getAvailableItems")
+  if type(list) ~= "table" then
+    return nil, "getAvailableItems answered nothing"
   end
 
-  local value, reason = lp.invoke(proxy, name)
-  if value == nil then
-    return { kind = "value", failed = true,
-      text = tostring(reason or "no answer") }
-  end
+  local total = #list
+  local items = {}
 
-  if type(value) == "table" and lp.methods(value)[1] then
-    return { kind = "proxy", proxy = value,
-      text = #lp.methods(value) .. " methods" }
-  end
-
-  if type(value) == "table" and #value > 0 then
-    local rows = {}
-    for index = 1, math.min(#value, MOST) do
-      rows[index] = core.formatValue(value[index])
+  -- one pcall around the whole scan rather than one a call: three thousand of
+  -- them would cost more memory than the names they were guarding
+  local ok, reason = pcall(function()
+    local amounts, order = {}, {}
+    for index = 1, total do
+      amounts[index] = list[index].getValue2()
+      order[index] = index
     end
-    return { kind = "list", rows = rows, total = #value,
-      text = #value .. " entries" }
-  end
 
-  return { kind = "value", text = core.formatValue(value) }
+    table.sort(order, function(a, b) return amounts[a] > amounts[b] end)
+
+    local wanted = math.min(most or MOST, total)
+    local named = {}
+    for rank = 1, wanted do
+      named[order[rank]] = true
+    end
+    for index = 1, total do
+      if not named[index] then
+        list[index] = false
+      end
+    end
+
+    for rank = 1, wanted do
+      local index = order[rank]
+      items[rank] = { name = list[index].getValue1().getName(),
+        amount = amounts[index] }
+      list[index] = false
+    end
+  end)
+
+  if not ok then
+    return nil, core.oneLine(tostring(reason))
+  end
+  return items, total
 end
 
 return lp
