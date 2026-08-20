@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.13.0"
+local VERSION = "0.14.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -218,6 +218,10 @@ local function troubled(card)
   return false
 end
 
+local function problematic(alert)
+  return alert.tripped and alert.trouble ~= false
+end
+
 -- One block of rows a satellite, built before anything knows where it lands.
 -- A satellite is the natural column: its machines belong together and its name
 -- goes at the top of them.
@@ -237,7 +241,7 @@ local function planBlocks()
 
     local alerts = {}
     for _, alert in ipairs(answer.alerts or {}) do
-      if mode ~= "alerts" or alert.tripped then
+      if mode ~= "alerts" or problematic(alert) then
         alerts[#alerts + 1] = alert
       end
     end
@@ -332,7 +336,7 @@ local function drawRow(row, x, y, width)
   elseif row.kind == "alert" then
     local mark = "ok"
     local color = DIM
-    if row.alert.tripped then
+    if problematic(row.alert) then
       mark = "!!"
       color = ALARM
     end
@@ -417,7 +421,7 @@ local function render()
   for _, address in ipairs(order) do
     machines = machines + #satellites[address].cards
     for _, alert in ipairs(satellites[address].alerts or {}) do
-      if alert.tripped then
+      if problematic(alert) then
         tripped = tripped + 1
       end
     end

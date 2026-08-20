@@ -1463,6 +1463,24 @@ test("ocview asks and draws what comes back", function()
   end
 end)
 
+test("ocview keeps a non-problem alert out of the alarm count", function()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({ view = "alerts" })
+  local payload = require("serialization").serialize({
+    cards = { { name = "Steam Tank", status = "idle", gauges = {} } },
+    alerts = { { name = "steamfull", tripped = true, trouble = false } },
+  })
+  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
+    "boiler-room", payload)
+
+  oc.run("ocview", "--once")
+  local frame = oc.screen()
+  check(contains(frame, "all clear"), "treated a non-problem alert as trouble")
+  check(not contains(frame, "ALERTS TRIPPED"), "counted a non-problem alert")
+  check(not contains(frame, "steamfull"), "showed a non-problem alert in alerts view")
+end)
+
 test("ocview collects every satellite, not just the quickest", function()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
@@ -1544,6 +1562,16 @@ test("an answer is read from a single message", function()
   local old = require("serialization").serialize({ { name = "EBF1", gauges = {} } })
   local none, why = net.decode(PORT, "bb000000", "ocstatus!", "boiler-room", old)
   check(none == nil and why == "unreadable", "took an old payload as current")
+end)
+
+test("the network report preserves whether a tripped alert is trouble", function()
+  oc.components = {}
+  local net = require("ocnet")
+  local report = net.report({ alerts = {
+    { name = "steamfull", tripped = true, trouble = false },
+  } }, {})
+  check(report.alerts[1].tripped == true, "lost the tripped state")
+  check(report.alerts[1].trouble == false, "lost the non-problem mode")
 end)
 
 test("ocview says so when nothing answers", function()

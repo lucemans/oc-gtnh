@@ -15,7 +15,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.11.0"
+net.VERSION = "0.12.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -189,6 +189,7 @@ function net.report(config, cards, movers, fluids)
     report.alerts[#report.alerts + 1] = {
       name = alert.name,
       tripped = alert.tripped or false,
+      trouble = alert.trouble ~= false,
     }
   end
 

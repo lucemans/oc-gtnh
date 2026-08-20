@@ -6,7 +6,7 @@ lib/octank.lua 0.2.0:4249
 lib/occomputronics.lua 0.3.0:4885
 lib/ocsecurity.lua 0.1.0:2180
 lib/ocnotify.lua 0.1.0:6080
-lib/ocnet.lua 0.11.0:9024
+lib/ocnet.lua 0.12.0:9064
 programs/ocup.lua 0.18.0:21294
 programs/ocdebug.lua 0.11.0:12038
 programs/ocdump.lua 0.7.0:6863
@@ -18,5 +18,5 @@ programs/ockeypad.lua 0.1.0:5309
 programs/ocmkfs.lua 0.4.0:9774
 programs/ocglass.lua 0.3.0:10845
 programs/ocserve.lua 0.5.0:4070
-programs/ocview.lua 0.13.0:18202
+programs/ocview.lua 0.14.0:18495
 programs/ocping.lua 0.1.0:3405
