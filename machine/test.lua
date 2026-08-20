@@ -5674,6 +5674,267 @@ test("a satellite sends what is moving, and ocview shows it", function()
 end)
 
 -------------------------------------------------------------------------------
+-- GTP/1, the telemetry wire
+--
+-- The whole coupling to the telemetry service is the format of these bytes, so
+-- what is asserted here is the bytes rather than our idea of them.
+
+local function gtpOf(modem)
+  local out = {}
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 5) == "GTP1:" then
+      out[#out + 1] = {
+        dest = packet.dest,
+        port = packet.port,
+        message = require("serialization").unserialize(packet.data:sub(6)),
+        bytes = #packet.data,
+      }
+    end
+  end
+  return out
+end
+
+-- Checked here rather than by asking the library whether it likes its own
+-- output. A part at a time, because a Lua pattern cannot repeat a group.
+local function wellNamed(name)
+  if type(name) ~= "string" or name == "" then
+    return false
+  end
+  if name:sub(1, 1) == "." or name:sub(-1) == "." or name:find("%.%.") then
+    return false
+  end
+  for part in name:gmatch("[^%.]+") do
+    if not part:find("^[a-z][a-z0-9_]*$") then
+      return false
+    end
+  end
+  return true
+end
+
+local function sampleNamed(message, name)
+  for _, each in ipairs(message.data) do
+    if each.name == name then
+      return each
+    end
+  end
+  return nil
+end
+
+test("a reading goes out as GTP on port 2000", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+    telemetry = { host = "ovw-core-obs-01" },
+  })
+  startMinitel("ovw-pwr-steam-col-01")
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  oc.pump()
+
+  local sent = gtpOf(modem)
+  check(#sent > 0, "nothing went to the telemetry service")
+  local first = sent[1]
+  check(first and first.dest == "ovw-core-obs-01", "sent it to the wrong machine")
+  check(first and first.port == 2000, "sent it on port " .. tostring(first and first.port))
+  check(first and first.message.type == "metrics", "not a metrics message")
+  check(first and first.message.interval == 10, "no interval on the message")
+  check(first and first.message.id ~= nil, "no message id")
+  check(first and type(first.message.data) == "table", "no samples")
+end)
+
+test("a tank becomes a fluid metric, with the fluid as a label", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+  })
+  startMinitel("ovw-pwr-steam-col-01")
+
+  oc.run("ocwatch")
+  oc.pump()
+
+  local message = gtpOf(modem)[1] and gtpOf(modem)[1].message
+  check(message ~= nil, "nothing went out")
+
+  local amount = message and sampleNamed(message, "fluid.amount_liters")
+  check(amount ~= nil, "the tank did not become fluid.amount_liters")
+  -- our own numbers are grouped with commas for a screen, and a metric value
+  -- must be a finite number and nothing else
+  check(amount and type(amount.value) == "number",
+    "sent " .. type(amount and amount.value) .. " rather than a number")
+  check(amount and amount.kind == "gauge", "not marked as a gauge")
+  check(amount and amount.labels and amount.labels.fluid ~= nil,
+    "did not say which fluid it is")
+  check(amount and amount.labels and amount.labels.machine ~= nil,
+    "did not say which machine it is on")
+
+  local ratio = message and sampleNamed(message, "fluid.fill_ratio")
+  check(ratio ~= nil, "no fill ratio")
+  -- the specification wants 0 to 1 where our screen wants 0 to 100
+  check(ratio and ratio.value >= 0 and ratio.value <= 1,
+    "sent a percentage where a ratio was asked for: " .. tostring(ratio and ratio.value))
+end)
+
+test("every metric name and label is one the specification allows", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = { { name = "Diesel Low!", tripped = true } },
+  })
+  startMinitel("ovw-pwr-steam-col-01")
+
+  oc.run("ocwatch")
+  oc.pump()
+
+  local seen = 0
+  for _, packet in ipairs(gtpOf(modem)) do
+    check(packet.bytes <= 6144, "a message is " .. packet.bytes .. " bytes")
+    for _, each in ipairs(packet.message.data) do
+      seen = seen + 1
+      check(wellNamed(each.name), "bad metric name: " .. each.name)
+      check(each.kind == "gauge" or each.kind == "counter",
+        "bad kind on " .. each.name .. ": " .. tostring(each.kind))
+      check(type(each.value) == "number", "non-numeric value on " .. each.name)
+      for key, value in pairs(each.labels or {}) do
+        check(key:find("^[a-z][a-z0-9_]*$") ~= nil, "bad label key: " .. key)
+        check(tostring(value):find("%s") == nil,
+          "a space in a label value: " .. key .. "=" .. tostring(value))
+        -- the telemetry service works these out from the sender, and a client
+        -- claiming them would report under somebody else's identity
+        check(key ~= "host" and key ~= "site" and key ~= "area",
+          "claimed a label the server owns: " .. key)
+      end
+    end
+  end
+  check(seen > 0, "checked nothing")
+end)
+
+test("an alert becomes a number, because a metric value cannot be a boolean", function()
+  oc.components = {}
+  local gtp = require("ocgtp")
+  local samples = gtp.samples({ alerts = {
+    { name = "diesel low", tripped = true },
+    { name = "steam full", tripped = false },
+  } })
+  local on, off
+  for _, each in ipairs(samples) do
+    if each.name == "alert.tripped" and each.labels.alert == "diesel-low" then
+      on = each
+    end
+    if each.name == "alert.tripped" and each.labels.alert == "steam-full" then
+      off = each
+    end
+  end
+  check(on and on.value == 1, "a tripped alert did not come out as 1")
+  check(off and off.value == 0, "a clear alert did not come out as 0")
+end)
+
+test("a unit nobody recognises is left alone rather than guessed at", function()
+  oc.components = {}
+  local gtp = require("ocgtp")
+  local samples = gtp.samples({ cards = { {
+    name = "Odd Machine",
+    gauges = { { label = "Whatsits", current = "12", maximum = "20",
+      unit = "wat", percent = 60 } },
+  } } })
+  for _, each in ipairs(samples) do
+    check(each.name:find("^telemetry%.") ~= nil,
+      "invented a series out of a unit it did not know: " .. each.name)
+  end
+end)
+
+test("no item ever becomes a label", function()
+  oc.components = {}
+  local gtp = require("ocgtp")
+  -- a base holds thousands of item names and each one as a label value is a
+  -- series of its own, which is the one mistake the specification names twice
+  local samples = gtp.samples({})
+  for _, each in ipairs(samples) do
+    check(each.name:find("^inventory%.") == nil, "sent an inventory metric")
+    check((each.labels or {}).item == nil, "put an item into a label")
+  end
+end)
+
+test("a name a metric cannot carry is refused and counted", function()
+  oc.components = {}
+  local gtp = require("ocgtp")
+  check(gtp.validName("fluid.amount_liters") == true, "refused a good name")
+  check(gtp.validName("energy.stored_eu") == true, "refused a good name")
+  check(gtp.validName("Fluid.Amount") == false, "took capitals")
+  check(gtp.validName("fluid.tank-01.amount") == false, "took a hyphen")
+  check(gtp.validName("fluid..amount") == false, "took an empty component")
+  check(gtp.validName("1fluid.amount") == false, "took a leading digit")
+
+  check(gtp.validLabel("fluid") == true, "refused a good label")
+  check(gtp.validLabel("host") == false, "took a label the server owns")
+  check(gtp.validLabel("site") == false, "took a label the server owns")
+  check(gtp.validLabel("area") == false, "took a label the server owns")
+end)
+
+test("a batch too big for one packet is split into whole messages", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem }
+  startMinitel("ovw-pwr-steam-col-01")
+  local gtp = require("ocgtp")
+  local minitel = require("minitel")
+
+  local fluids = {}
+  for index = 1, 400 do
+    fluids[index] = { name = "fluid-number-" .. index, amount = index * 1000 }
+  end
+  gtp.send(minitel, gtp.settings({}), gtp.samples({ fluids = fluids }))
+  oc.pump(8)
+
+  local sent = gtpOf(modem)
+  check(#sent > 1, "sent " .. #sent .. " messages, so nothing was split")
+  for _, packet in ipairs(sent) do
+    check(packet.bytes <= 6144, "a split message is still " .. packet.bytes .. " bytes")
+    check(packet.message ~= nil and packet.message.type == "metrics",
+      "a split message is not a whole one")
+    check(packet.message and #packet.message.data > 0, "sent an empty message")
+  end
+end)
+
+test("telemetry can be switched off, and says nothing when it is", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+    telemetry = { on = false },
+  })
+  startMinitel("ovw-pwr-steam-col-01")
+
+  oc.run("ocwatch")
+  oc.pump()
+  check(#gtpOf(modem) == 0, "sent telemetry with it switched off")
+end)
+
+test("a machine name becomes something a label can hold", function()
+  oc.components = {}
+  local gtp = require("ocgtp")
+  check(gtp.slug("Super Tank") == "super-tank", "got " .. gtp.slug("Super Tank"))
+  check(gtp.slug("Bio Diesel") == "bio-diesel", "got " .. gtp.slug("Bio Diesel"))
+  check(gtp.slug("EBF #1") == "ebf-1", "got " .. gtp.slug("EBF #1"))
+  check(gtp.slug("") == "", "invented a name out of nothing")
+end)
+
+test("a reading grouped for a screen becomes a number for a metric", function()
+  oc.components = {}
+  local gtp = require("ocgtp")
+  check(gtp.number("42,000") == 42000, "did not strip the grouping")
+  check(gtp.number(42000) == 42000, "changed a number that was already one")
+  check(gtp.number("nonsense") == nil, "took something that is not a number")
+  check(gtp.number(0 / 0) == nil, "took a value that is not a finite number")
+  check(gtp.number(math.huge) == nil, "took an infinite value")
+end)
+
+-------------------------------------------------------------------------------
 -- The summary belongs at the end. It once sat in the middle, where every check
 -- written after it could fail without the run failing with it.
 

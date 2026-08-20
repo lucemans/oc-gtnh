@@ -28,6 +28,7 @@ local event = require("event")
 local keyboard = require("keyboard")
 local lp = require("oclogistics")
 local net = require("ocnet")
+local gtp = require("ocgtp")
 local term = require("term")
 local unicode = require("unicode")
 
@@ -135,6 +136,8 @@ local lastRead, lastCount, lastFluids = 0, 0, 0
 local proxy, builder, minitel
 -- questions arrive whenever they arrive, and are answered by the loop
 local pending = {}
+-- when this machine next tells the telemetry service what it can see
+local telemetryDue = 0
 
 -------------------------------------------------------------------------------
 -- what was written down last time
@@ -461,6 +464,13 @@ while true do
   end
 
   if name == nil then
+    -- what this machine can see of the fluid network, for whoever collects it.
+    -- The clock is checked before reading, because reading every machine costs
+    -- a server tick each and this loop turns over constantly.
+    if gtp.wanted(minitel, config) and computer.uptime() >= telemetryDue then
+      telemetryDue = gtp.submit(minitel, config,
+        net.report(config, net.machines(config), movers, fluids))
+    end
     changed = refresh()
   elseif name == "interrupted" then
     break

@@ -694,6 +694,9 @@ function oc.install()
   package.preload["ocnotify"] = function()
     return dofile("lib/ocnotify.lua")
   end
+  package.preload["ocgtp"] = function()
+    return dofile("lib/ocgtp.lua")
+  end
   package.preload["ocnet"] = function()
     return dofile("lib/ocnet.lua")
   end

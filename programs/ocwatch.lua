@@ -16,6 +16,7 @@ local tank = require("octank")
 local ct = require("occomputronics")
 local sec = require("ocsecurity")
 local notify = require("ocnotify")
+local gtp = require("ocgtp")
 local sh = require("sh")
 local keyboard = require("keyboard")
 local term = require("term")
@@ -1269,6 +1270,7 @@ local function editNetwork()
   local at = 1
   while true do
     local peers = net.peers(config)
+    local telemetry = gtp.settings(config)
     local rows = {
       { what = "hostname",
         text = string.format("%-12s %s", "hostname", net.hostname(config)) },
@@ -1276,6 +1278,10 @@ local function editNetwork()
         text = string.format("%-12s %s", "gateway",
           config.gateway ~= nil and config.gateway ~= "" and config.gateway
           or "whoever answers, for ocup on a machine with no internet card") },
+      { what = "telemetry",
+        text = string.format("%-12s %s", "telemetry",
+          telemetry.on and (telemetry.host .. " every " .. telemetry.interval .. "s")
+          or "off") },
       { heading = true, text = "SATELLITES" },
     }
     for index, host in ipairs(peers) do
@@ -1325,6 +1331,21 @@ local function editNetwork()
     elseif row and code == keyboard.keys.enter and row.what == "gateway" then
       config.gateway = prompt("machine ocup fetches through, blank to ask around",
         config.gateway)
+      save()
+    elseif row and code == keyboard.keys.enter and row.what == "telemetry" then
+      local host = prompt("machine collecting metrics, blank to stop sending",
+        telemetry.host)
+      if host == nil or host == "" then
+        gtp.set(config, "on", false)
+      else
+        gtp.set(config, "on", true)
+        gtp.set(config, "host", host)
+        local seconds = tonumber(prompt("seconds between readings sent",
+          telemetry.interval))
+        if seconds and seconds > 0 then
+          gtp.set(config, "interval", seconds)
+        end
+      end
       save()
     end
   end
@@ -1468,6 +1489,8 @@ end
 -- answered by the loop. Drawing from inside a listener would redraw the screen
 -- halfway through reading a machine.
 local pending = {}
+-- when this machine next tells the telemetry service what it can see
+local telemetryDue = 0
 local heard = net.listen(function(from, port, data)
   pending[#pending + 1] = { from = from, port = port, data = data }
 end)
@@ -1494,6 +1517,11 @@ local due = 0
 local function refresh()
   cards = sample()
   latest = net.report(config, cards)
+  -- the same numbers the dashboard just drew, said the other way round for
+  -- whoever is collecting them, on a slower clock of its own
+  if gtp.wanted(minitel, config) and computer.uptime() >= telemetryDue then
+    telemetryDue = gtp.submit(minitel, config, latest)
+  end
   render(cards)
   due = computer.uptime() + REFRESH_SECONDS
 end

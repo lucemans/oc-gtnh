@@ -18,6 +18,7 @@ local event = require("event")
 local keyboard = require("keyboard")
 local lp = require("oclogistics")
 local net = require("ocnet")
+local gtp = require("ocgtp")
 
 local VERSION = "0.6.0"
 
@@ -55,6 +56,8 @@ local once = arguments[1] == "--once"
 -- items, so it is put here and answered by the loop below rather than from
 -- inside whatever event.pull happened to be running.
 local pending = {}
+-- when this machine next tells the telemetry service what it can see
+local telemetryDue = 0
 local heard = net.listen(function(from, port, data)
   pending[#pending + 1] = { from = from, port = port, data = data }
 end)
@@ -129,6 +132,15 @@ while true do
   end
 
   if name == nil and not answered then
+    -- Nobody is looking at this machine's screen, so this is the only way what
+    -- it watches reaches anybody. The clock is checked before reading, because
+    -- reading every machine costs a server tick each and this loop turns over
+    -- constantly.
+    if gtp.wanted(minitel, config) and computer.uptime() >= telemetryDue then
+      telemetryDue = gtp.submit(minitel, config,
+        net.report(config, net.machines(config), movers, fluids))
+    end
+
     if fluidProxy and computer.uptime() - readAt >= FLUIDS then
       readFluids()
     end
