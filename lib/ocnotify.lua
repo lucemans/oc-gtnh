@@ -6,16 +6,23 @@
 -- same time, and which of them a base wants is a matter of taste and of where
 -- the person happens to be standing.
 --
--- Two kinds of thing happen here:
+-- Three kinds of thing happen here:
 --
 --   an event      something occurred just now, said once: a chat line, a
 --                 spoken phrase, a figure on a note block, a beep
 --   a state       something is wrong and still is, held until it is not: a
 --                 lamp colour, a siren
+--   a record      something is written down whether or not anybody is here to
+--                 hear it: a syslog line, kept and relayed to a collector
 --
 -- Holding a state is why every channel is asked on every change rather than
 -- only when trouble starts: an alarm that is never told the trouble ended goes
 -- on sounding.
+--
+-- A record is asked separately, because it is the only one that is not about
+-- somebody standing in a room. An alert that switches the fuel over is nobody's
+-- emergency and says nothing aloud, and it is exactly what you want written
+-- down when you come back and ask what happened.
 --
 -- What each channel is worth doing is stored under `notify` in the shared
 -- configuration, so ocwatch's editor can turn one off without knowing what it
@@ -28,16 +35,18 @@
 --     lamp = { on = true, tripped = "ff0000", clear = "00ff00" },
 --     siren = { on = false, sound = "klaxon2" },
 --     beep = { on = true },
+--     syslog = { on = true },
 --   }
 
 local computer = require("computer")
 local core = require("oclib")
 local ct = require("occomputronics")
 local sec = require("ocsecurity")
+local serialization = require("serialization")
 
 local notify = {}
 
-notify.VERSION = "0.1.0"
+notify.VERSION = "0.2.0"
 
 -- Every channel, in the order they are offered and asked. Each says what it
 -- needs, so the editor can tell a channel that is switched off from one that
@@ -78,7 +87,18 @@ notify.CHANNELS = {
     what = "the computer's own beep",
     kind = "event",
   },
+  {
+    name = "syslog",
+    what = "a line in the log, kept and sent to a collector",
+    kind = "record",
+  },
 }
+
+-- RFC 5424 severities, which is what a syslog packet carries and what a
+-- collector filters on.
+notify.ERROR = 3
+notify.NOTICE = 5
+notify.INFO = 6
 
 function notify.find(name)
   for _, channel in ipairs(notify.CHANNELS) do
@@ -190,6 +210,55 @@ function notify.event(config, text, urgent)
   end
 
   return used
+end
+
+-- Writes something down. A record is not a way of telling somebody in the room,
+-- which is why it is not one of the channels notify.event asks: a lamp and a
+-- siren are for trouble, and a log is for everything that happened, including
+-- the switchovers that are nobody's emergency.
+--
+-- Nothing here needs a collector to be running. syslogd writes to this machine
+-- as well as relaying, and with no daemon at all the event is simply not
+-- listened to.
+function notify.record(config, text, level, service)
+  if not notify.settings(config, "syslog").on then
+    return false
+  end
+  local ok, syslog = pcall(require, "syslog")
+  if not ok then
+    return false
+  end
+  return pcall(syslog, text, level or notify.INFO, service or "ocwatch")
+end
+
+-- where a machine keeps its own copy of the records, whatever else it does
+notify.LOG = "/home/ocgt.log"
+
+-- Which machine keeps the base's log, written out as syslogd's own settings.
+-- One name settles every machine's part in it: the collector receives and does
+-- not relay, and everybody else relays to the collector. A machine still writes
+-- its own copy either way, so a satellite that loses the network loses nothing.
+--
+-- syslogd reads this at start, so it wants "rc syslogd reload" afterwards.
+function notify.collect(config, here)
+  local collector = notify.settings(config, "syslog").collector or ""
+  local file, reason = io.open("/etc/syslogd.cfg", "w")
+  if not file then
+    return false, tostring(reason)
+  end
+  file:write(serialization.serialize({
+    destination = notify.LOG,
+    write = true,
+    minlevel = notify.INFO,
+    -- a record printed over a dashboard is a record that broke the screen
+    displevel = -1,
+    beeplevel = -1,
+    relay = collector ~= "" and collector ~= here,
+    relayhost = collector,
+    receive = collector ~= "" and collector == here,
+  }))
+  file:close()
+  return true
 end
 
 -- Holds, or stops holding, the fact that something is wrong. Called on every

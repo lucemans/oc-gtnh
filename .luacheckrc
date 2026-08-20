@@ -12,3 +12,14 @@ std = "lua53+openos"
 files["machine/oc.lua"] = {
   globals = { "print", "io", "os", "_OSVERSION" },
 }
+
+-- Minitel is vendored rather than written here, and it sets the globals `rc`
+-- looks for a service to define. Linting it reports on somebody else's
+-- repository every time we lint ours.
+exclude_files = {
+  "lib/minitel.lua",
+  "lib/syslog.lua",
+  "etc/minitel.lua",
+  "etc/syslogd.lua",
+  "etc/fserv.lua",
+}

@@ -488,6 +488,100 @@ test("ocup reports a failed download", function()
   check(oc.files["/bin/ocup.lua"] == nil, "wrote a file despite the 404")
 end)
 
+-- Installing a daemon does not run it, and neither the hostname nor the list of
+-- services is a file the manifest would ever name.
+
+local DAEMON_MANIFEST = table.concat({
+  "lib/oclib.lua",
+  "lib/minitel.lua",
+  "etc/minitel.lua",
+  "programs/ocup.lua",
+}, "\n")
+
+local function serveDaemons()
+  return serveProgram({
+    ["manifest.txt"] = DAEMON_MANIFEST,
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/minitel.lua"] = program("minitel-c679ae36"),
+    ["etc/minitel.lua"] = program("minitel-c679ae36"),
+  })
+end
+
+test("ocup installs a daemon into /etc/rc.d", function()
+  oc.components = { INTERNET }
+  oc.respond = serveDaemons()
+
+  local ok, reason = oc.run("ocup")
+  check(ok, "ocup crashed: " .. tostring(reason))
+  check(oc.files["/etc/rc.d/minitel.lua"] ~= nil,
+    "the daemon did not reach /etc/rc.d")
+  check(oc.files["/lib/minitel.lua"] ~= nil, "the library did not reach /lib")
+end)
+
+test("ocup enables the daemons it installed", function()
+  oc.components = { INTERNET }
+  oc.respond = serveDaemons()
+
+  oc.run("ocup")
+
+  local cfg = oc.files["/etc/rc.cfg"] or ""
+  check(contains(cfg, "minitel"), "installed a daemon and never enabled it")
+  check(contains(oc.printed(), "enabled minitel"), "did not say what it enabled")
+  check(contains(oc.printed(), "rc minitel start"), "did not say how to start it")
+end)
+
+test("ocup leaves a service somebody else enabled alone", function()
+  oc.components = { INTERNET }
+  oc.respond = serveDaemons()
+  oc.files["/etc/rc.cfg"] = 'enabled = {"minitel","ocsomething"}\n'
+
+  oc.run("ocup")
+
+  local cfg = oc.files["/etc/rc.cfg"] or ""
+  check(contains(cfg, "ocsomething"), "threw away a service it did not install")
+  local _, twice = cfg:gsub("minitel", "")
+  check(twice == 1, "enabled minitel a second time, " .. twice .. " mentions")
+end)
+
+test("ocup names a machine that has no name yet", function()
+  oc.components = { INTERNET }
+  oc.respond = serveDaemons()
+
+  oc.run("ocup")
+  check((oc.files["/etc/hostname"] or "") ~= "", "left the machine unnamed")
+  check(contains(oc.printed(), "named this machine"), "did not say it named it")
+end)
+
+test("ocup keeps a name the machine already has", function()
+  oc.components = { INTERNET }
+  oc.respond = serveDaemons()
+  oc.files["/etc/hostname"] = "boiler-room"
+
+  oc.run("ocup")
+  check(oc.files["/etc/hostname"] == "boiler-room", "renamed a machine that had a name")
+end)
+
+test("ocup will not enable a daemon that was not installed", function()
+  oc.components = { INTERNET }
+  oc.respond = serveProgram({
+    ["manifest.txt"] = "programs/ocup.lua",
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
+  })
+
+  oc.run("ocup")
+  check(not contains(oc.files["/etc/rc.cfg"] or "", "minitel"),
+    "enabled a daemon that is not on the disk")
+end)
+
+test("ocup with no internet card and no network says both", function()
+  oc.components = {}
+
+  oc.run("ocup")
+  check(contains(oc.printed(), "no internet card"), "did not say the card is missing")
+  check(contains(oc.printed(), "minitel"), "did not say what it tried instead")
+end)
+
 -------------------------------------------------------------------------------
 -- ocdebug
 
@@ -1280,8 +1374,15 @@ test("ocglass clears what it drew", function()
 end)
 
 -------------------------------------------------------------------------------
--- ocserve and ocview
+-- ocserve, ocwatch and ocview over Minitel
+--
+-- These run the real Minitel daemon out of etc/minitel.lua, so what is asserted
+-- on is a packet that went through real routing rather than one this file made
+-- up. The other machine is a modem_message pushed in by hand, which is exactly
+-- what a card hearing one off the wire raises.
 
+-- A packet is six modem parts, so every argument is kept rather than the first
+-- few named ones.
 local function fakeModem(address, wireless)
   local sent = {}
   return {
@@ -1320,90 +1421,217 @@ local function fakeModem(address, wireless)
       maxPacketSize = function()
         return 8192
       end,
-      -- a status reply carries the satellite's name before its payload, so all
-      -- five are kept: capturing four silently recorded the name as the payload
-      send = function(to, port, kind, host, payload)
-        sent[#sent + 1] = { to = to, port = port, kind = kind,
-          host = host, payload = payload }
+      send = function(to, port, ...)
+        sent[#sent + 1] = { to = to, port = port, parts = table.pack(...) }
         return true
       end,
-      broadcast = function(port, kind)
-        sent[#sent + 1] = { to = "*", port = port, kind = kind }
+      broadcast = function(port, ...)
+        sent[#sent + 1] = { to = "*", port = port, parts = table.pack(...) }
         return true
       end,
     },
   }
 end
 
+-- the virtual port ocnet talks on, and the physical one Minitel itself uses
 local PORT = 4021
+local WIRE = 4096
+
+-- Starts the real daemon, named. It reads /etc/hostname once, here.
+local function startMinitel(hostname)
+  oc.files["/etc/hostname"] = hostname
+  local daemon, why = oc.service("etc/minitel.lua")
+  check(daemon ~= nil, "the minitel daemon would not load: " .. tostring(why))
+  if daemon then
+    daemon.start()
+  end
+  return daemon
+end
+
+-- One packet arriving off the wire, from a machine that is not this one. Packet
+-- ids are counted rather than random, so a rerun sends the same thing twice and
+-- the daemon's duplicate cache can be tested on purpose.
+local delivered = 0
+local function deliver(modem, card, dest, sender, data, id)
+  delivered = delivered + 1
+  oc.push("modem_message", modem.address, card, WIRE, 12,
+    id or ("packet-" .. delivered), 0, dest, sender, PORT, data)
+end
+
+-- What this machine put on the wire, read back as Minitel packets rather than
+-- as modem arguments.
+local function outbound(modem)
+  local out = {}
+  for _, packet in ipairs(modem.sent) do
+    local parts = packet.parts
+    if parts and parts.n >= 6 then
+      out[#out + 1] = { to = packet.to, dest = parts[3], sender = parts[4],
+        port = parts[5], data = parts[6] }
+    end
+  end
+  return out
+end
+
+local function firstReply(modem)
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 10) == "ocstatus!\n" then
+      return packet
+    end
+  end
+  return nil
+end
+
+local function satellite(address, wireless)
+  local modem = fakeModem(address, wireless ~= false)
+  oc.components = { modem, SUPER_TANK }
+  return modem
+end
 
 test("ocserve answers a status request", function()
-  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
-  oc.components = { modem, SUPER_TANK }
-  -- localAddress, remoteAddress, port, distance, then the payload
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus?")
+  local modem = satellite("aa000000-0000-0000-0000-000000000001")
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "ocstatus?")
 
   local ok, reason = oc.run("ocserve", "--once")
   check(ok, "ocserve crashed: " .. tostring(reason))
-  check(#modem.sent == 1, "expected exactly one reply, got " .. #modem.sent)
+  -- the answer is queued by the daemon and only put on the wire by its timer
+  oc.pump()
 
-  local reply = modem.sent[1]
-  check(reply and reply.to == "bb000000", "did not answer the asker directly")
-  check(reply and reply.kind == "ocstatus!", "wrong reply marker")
+  local reply = firstReply(modem)
+  check(reply ~= nil, "no answer went out")
+  check(reply and reply.dest == "tablet", "did not answer the asker")
+  check(reply and reply.sender == "boiler-room", "did not sign the answer")
+  check(reply and reply.port == PORT, "answered on the wrong port")
 
-  local report = reply and require("serialization").unserialize(reply.payload)
-  local cards = report and report.cards
-  check(type(cards) == "table" and #cards > 0, "sent no machines")
-  check(cards and cards[1].name == "Super Tank", "did not name the machine")
-  check(cards and #cards[1].gauges > 0, "sent no readings")
-  -- the tablet should not have to parse "42,000" back into a number
-  check(cards and type(cards[1].gauges[1].percent) == "number", "no percentage sent")
-  check(report and type(report.alerts) == "table", "sent no alert list")
+  local report = reply and require("serialization").unserialize(reply.data:sub(11))
+  check(report ~= nil, "the answer did not unserialize")
+  check(report and #report.cards == 1, "sent no machines")
+  check(report and report.cards[1].name == "Super Tank", "did not name the machine")
+  check(report and #report.cards[1].gauges == 1, "sent no readings")
+  check(report and report.cards[1].gauges[1].percent ~= nil, "no percentage sent")
+  check(report and report.address ~= nil, "sent no address to tell a name clash by")
 end)
 
 test("ocserve raises a wireless card off zero strength", function()
-  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
-  oc.components = { modem, SUPER_TANK }
+  local modem = satellite("aa000000-0000-0000-0000-000000000001")
+  startMinitel("boiler-room")
 
   oc.run("ocserve", "--once")
-  -- a wireless card sits at zero range until told otherwise, which looks
-  -- exactly like a card that does not work
   check(modem.sent.strength ~= nil and modem.sent.strength > 0, "never set the strength")
 end)
 
 test("ocserve ignores traffic that is not its own", function()
-  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", false)
-  oc.components = { modem, SUPER_TANK }
-  oc.push("modem_message", modem.address, "bb000000", PORT, 0, "something else")
+  local modem = satellite("aa000000-0000-0000-0000-000000000001", false)
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "something else")
 
   oc.run("ocserve", "--once")
-  check(#modem.sent == 0, "answered a message it should have ignored")
+  oc.pump()
+  check(firstReply(modem) == nil, "answered a message it should have ignored")
 end)
 
--- A satellite runs ocwatch, not ocserve, so this is the path that actually
--- answers the main computer. It is easy to break without noticing: the dashboard
--- keeps working while the network half goes quiet.
+test("a packet for somebody else is passed on rather than answered", function()
+  local modem = satellite("aa000000-0000-0000-0000-000000000001")
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "tank-farm", "tablet", "ocstatus?")
+
+  oc.run("ocserve", "--once")
+  oc.pump()
+
+  check(firstReply(modem) == nil, "answered a question addressed to another machine")
+  local forwarded = nil
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.dest == "tank-farm" then
+      forwarded = packet
+    end
+  end
+  check(forwarded ~= nil, "did not pass the packet on: the mesh does not route")
+  check(forwarded and forwarded.sender == "tablet", "rewrote the sender while routing")
+end)
+
+test("the same packet arriving twice is answered once", function()
+  local modem = satellite("aa000000-0000-0000-0000-000000000001")
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "ocstatus?", "one-packet")
+  deliver(modem, "cc000000", "boiler-room", "tablet", "ocstatus?", "one-packet")
+
+  oc.run("ocserve", "--once")
+  oc.pump()
+
+  local replies = 0
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 10) == "ocstatus!\n" then
+      replies = replies + 1
+    end
+  end
+  check(replies == 1, "answered a repeat of the same packet, got " .. replies)
+end)
+
+test("a broadcast question is answered as well as a directed one", function()
+  local modem = satellite("aa000000-0000-0000-0000-000000000001")
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "~", "tablet", "ocstatus?")
+
+  oc.run("ocserve", "--once")
+  oc.pump()
+  check(firstReply(modem) ~= nil, "a broadcast question went unanswered")
+end)
+
 test("ocwatch answers a status request while it is watching", function()
   local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
   oc.components = { modem, SUPER_TANK }
   oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
-    hostname = "satellite",
-    watch = { { address = SUPER_TANK.address, hidden = {} } },
+    watch = { { address = SUPER_TANK.address } },
     alerts = {},
   })
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus?")
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "ocstatus?")
 
   local ok, reason = oc.run("ocwatch")
   check(ok, "ocwatch crashed: " .. tostring(reason))
-  check(#modem.sent == 1, "expected one reply, got " .. #modem.sent)
+  oc.pump()
 
-  local reply = modem.sent[1]
-  check(reply and reply.to == "bb000000", "did not answer the asker directly")
-  check(reply and reply.kind == "ocstatus!", "wrong reply marker")
+  local reply = firstReply(modem)
+  check(reply ~= nil, "no answer went out")
+  check(reply and reply.dest == "tablet", "did not answer the asker")
   check(contains(oc.frame(), "served"), "did not say it served the request")
 end)
 
-test("ocping answers a ping", function()
+test("ocwatch says so when the daemon is not running", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+  })
+
+  oc.run("ocwatch")
+  check(contains(oc.frame(), "minitel daemon is not running"),
+    "a dashboard off the network never said so")
+end)
+
+test("ocping times a packet to a named machine", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000004", true)
+  oc.components = { modem }
+  startMinitel("tablet")
+
+  -- the far end acknowledges: type 2, carrying the id of what it answers
+  oc.push("net_ack", "whatever-id")
+
+  oc.run("ocping", "boiler-room")
+  check(contains(oc.printed(), "boiler-room"), "never named what it was pinging")
+  check(contains(oc.printed(), "minitel   running"), "did not report the daemon")
+end)
+
+test("ocping says plainly when nothing answers on the bare modem", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000004", true)
+  oc.components = { modem }
+
+  oc.run("ocping", "--l2")
+  check(contains(oc.printed(), "nothing heard"), "did not report the silence")
+end)
+
+test("ocping answers a ping on the bare modem", function()
   local modem = fakeModem("aa000000-0000-0000-0000-000000000004", true)
   oc.components = { modem }
   oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocping?")
@@ -1412,7 +1640,7 @@ test("ocping answers a ping", function()
   check(ok, "ocping crashed: " .. tostring(reason))
   local pong
   for _, packet in ipairs(modem.sent) do
-    if packet.kind == "ocping!" then
+    if packet.parts and packet.parts[1] == "ocping!" then
       pong = packet
     end
   end
@@ -1420,13 +1648,10 @@ test("ocping answers a ping", function()
   check(pong and pong.to == "bb000000", "answered somebody else")
 end)
 
-test("ocping says plainly when nothing answers", function()
-  local modem = fakeModem("aa000000-0000-0000-0000-000000000004", true)
-  oc.components = { modem }
-
-  oc.run("ocping")
-  check(contains(oc.printed(), "nothing heard"), "did not report the silence")
-end)
+-- What a satellite says, as ocview would hear it.
+local function answerOf(report)
+  return "ocstatus!\n" .. require("serialization").serialize(report)
+end
 
 test("ocview asks and draws what comes back", function()
   -- wide enough for the name of the reading as well as its numbers
@@ -1434,7 +1659,10 @@ test("ocview asks and draws what comes back", function()
   oc.reset()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
-  local payload = require("serialization").serialize({
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "satellite-1", answerOf({
+    address = "aa000000-0000-0000-0000-000000000001",
     cards = {
       {
         name = "Super Tank",
@@ -1444,123 +1672,200 @@ test("ocview asks and draws what comes back", function()
       },
     },
     alerts = { { name = "diesel low", tripped = true } },
-  })
-  -- the reply now names the satellite, so several can be told apart
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!", "satellite-1", payload)
+  }))
 
   local ok, reason = oc.run("ocview", "--once")
   check(ok, "ocview crashed: " .. tostring(reason))
 
-  local frame = oc.screen()
-  check(contains(frame, "Super Tank"), "did not show the machine")
-  check(contains(frame, "42,000 / 4,000,000 L"), "did not show the reading")
-  check(contains(frame, "Bio Diesel"), "did not label the gauge")
-  -- a tripped alert is the reason to be looking at this screen at all
-  check(contains(frame, "diesel low"), "did not show the alert")
-  check(modem.sent[1] and modem.sent[1].kind == "ocstatus?", "never asked")
-  if show then
-    say(frame)
+  local shown = oc.screen()
+  check(contains(shown, "Super Tank"), "did not show the machine")
+  check(contains(shown, "42,000"), "did not show the reading")
+  check(contains(shown, "Bio Diesel"), "did not label the gauge")
+  check(contains(shown, "diesel low"), "did not show the alert")
+  check(contains(shown, "satellite-1"), "did not name the satellite")
+
+  local asked = false
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "ocstatus?" and packet.dest == "~" then
+      asked = true
+    end
   end
+  check(asked, "never broadcast the question")
+end)
+
+test("ocview remembers a satellite so the next question is routed to it", function()
+  oc.width, oc.height = 120, 30
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "satellite-1", answerOf({
+    address = "aa000000-0000-0000-0000-000000000001",
+    cards = { { name = "EBF1", gauges = {} } },
+    alerts = {},
+  }))
+
+  oc.run("ocview", "--once")
+
+  local kept = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "{}")
+  check(kept and kept.peers ~= nil, "wrote down no satellites at all")
+  check(kept and kept.peers and kept.peers[1] == "satellite-1",
+    "did not remember the satellite that answered")
+end)
+
+test("ocview asks a remembered satellite by name, which a broadcast cannot reach", function()
+  oc.width, oc.height = 120, 30
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    peers = { "tank-farm" },
+  })
+  startMinitel("tablet")
+
+  oc.run("ocview", "--once")
+
+  local byName = false
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "ocstatus?" and packet.dest == "tank-farm" then
+      byName = true
+    end
+  end
+  check(byName, "never asked the remembered satellite by name")
+end)
+
+test("ocview says which remembered satellite has gone quiet", function()
+  oc.width, oc.height = 120, 30
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    peers = { "satellite-1", "tank-farm" },
+  })
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "satellite-1", answerOf({
+    cards = { { name = "EBF1", gauges = {} } },
+    alerts = {},
+  }))
+
+  oc.run("ocview", "--once")
+  check(contains(oc.screen(), "tank-farm"), "never named the satellite that said nothing")
+end)
+
+test("ocview says so when two machines answer to one name", function()
+  oc.width, oc.height = 120, 30
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  startMinitel("tablet")
+
+  for _, address in ipairs({ "aa000000", "dd000000" }) do
+    deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
+      address = address,
+      cards = { { name = "EBF1", gauges = {} } },
+      alerts = {},
+    }))
+  end
+
+  oc.run("ocview", "--once")
+  check(contains(oc.screen(), "both called boiler-room"),
+    "two machines under one name looked like one machine")
 end)
 
 test("ocview keeps a non-problem alert out of the alarm count", function()
+  oc.width, oc.height = 120, 30
+  oc.reset()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
-  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({ view = "alerts" })
-  local payload = require("serialization").serialize({
-    cards = { { name = "Steam Tank", status = "idle", gauges = {} } },
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "satellite-1", answerOf({
+    cards = { { name = "Super Tank", gauges = {} } },
     alerts = { { name = "steamfull", tripped = true, trouble = false } },
-  })
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
-    "boiler-room", payload)
+  }))
 
   oc.run("ocview", "--once")
-  local frame = oc.screen()
-  check(contains(frame, "all clear"), "treated a non-problem alert as trouble")
-  check(not contains(frame, "ALERTS TRIPPED"), "counted a non-problem alert")
-  check(not contains(frame, "steamfull"), "showed a non-problem alert in alerts view")
+  check(not contains(oc.screen(), "1 alarm"), "treated a non-problem alert as trouble")
 end)
 
 test("ocview collects every satellite, not just the quickest", function()
+  oc.width, oc.height = 160, 40
+  oc.reset()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
-  local serialize = require("serialization").serialize
+  startMinitel("tablet")
 
-  local first = serialize({
-    cards = { { name = "EBF1", status = "working", gauges = {} } }, alerts = {} })
-  local second = serialize({
-    cards = { { name = "Super Tank", status = "idle", gauges = {} } }, alerts = {} })
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!", "boiler-room", first)
-  oc.push("modem_message", modem.address, "dd000000", PORT, 40, "ocstatus!", "tank-farm", second)
+  deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
+    cards = { { name = "Boiler One", gauges = {} } },
+    alerts = {},
+  }))
+  deliver(modem, "dd000000", "tablet", "tank-farm", answerOf({
+    cards = { { name = "Creosote Tank", gauges = {} } },
+    alerts = {},
+  }))
 
   oc.run("ocview", "--once")
-  local frame = oc.screen()
 
-  -- taking the first answer would have hidden the second satellite entirely
-  check(contains(frame, "EBF1"), "lost the first satellite's machines")
-  check(contains(frame, "Super Tank"), "lost the second satellite's machines")
-  check(contains(frame, "boiler-room"), "did not name the first satellite")
-  check(contains(frame, "tank-farm"), "did not name the second satellite")
-  check(contains(frame, "2 satellites"), "did not count the satellites")
-  if show then
-    say(frame)
-  end
+  local shown = oc.screen()
+  check(contains(shown, "Boiler One"), "lost the first satellite's machines")
+  check(contains(shown, "Creosote Tank"), "lost the second satellite's machines")
+  check(contains(shown, "boiler-room"), "did not name the first satellite")
+  check(contains(shown, "tank-farm"), "did not name the second satellite")
+  check(contains(shown, "2 satellites"), "did not count the satellites")
 end)
 
--- A relay repeats what it forwards, so a satellite hears the same question over
--- several paths and answers each copy, and every answer comes back over several
--- paths as well. One card is one satellite however many copies arrive.
 test("ocview shows one satellite once however often it answers", function()
+  oc.width, oc.height = 160, 40
+  oc.reset()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
-  local serialize = require("serialization").serialize
+  startMinitel("tablet")
 
-  local payload = serialize({
-    cards = { { name = "EBF1", status = "working", gauges = {} } }, alerts = {} })
-  for _ = 1, 4 do
-    oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
-      "boiler-room", payload)
+  -- a relay repeats what it forwards, so the same answer arrives more than once
+  for _ = 1, 3 do
+    deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
+      cards = { { name = "Boiler One", gauges = {} } },
+      alerts = {},
+    }))
   end
-  local other = serialize({
-    cards = { { name = "Super Tank", status = "idle", gauges = {} } }, alerts = {} })
-  oc.push("modem_message", modem.address, "dd000000", PORT, 40, "ocstatus!",
-    "tank-farm", other)
+  deliver(modem, "dd000000", "tablet", "tank-farm", answerOf({
+    cards = { { name = "Creosote Tank", gauges = {} } },
+    alerts = {},
+  }))
 
   oc.run("ocview", "--once")
-  local frame = oc.screen()
 
-  check(contains(frame, "2 satellites"), "counted the repeats as satellites")
-  check(contains(frame, "2 machines"), "counted the repeats as machines")
-  check(contains(frame, "tank-farm"), "lost the satellite that answered once")
-  if show then
-    say(frame)
-  end
+  local shown = oc.screen()
+  check(contains(shown, "2 satellites"), "counted the repeats as satellites")
+  check(contains(shown, "2 machines"), "counted the repeats as machines")
+  check(contains(shown, "Creosote Tank"), "lost the satellite that answered once")
 end)
 
--- Waiting a whole window out inside the ask is what made a tablet ignore the
--- keyboard for seconds and kept its screen a round behind. Answers are read one
--- at a time now, from whatever loop the program already runs.
-test("an answer is read from a single message", function()
+test("an answer is read from one packet", function()
   oc.components = {}
   local net = require("ocnet")
-  local payload = require("serialization").serialize({
+  local payload = answerOf({
     cards = { { name = "EBF1", gauges = {} } },
     alerts = { { name = "diesel low", tripped = true } },
   })
 
-  local answer = net.decode(PORT, "bb000000", "ocstatus!", "boiler-room", payload)
+  local answer = net.decode(PORT, "boiler-room", payload)
   check(answer ~= nil, "did not read the answer")
   check(answer and answer.host == "boiler-room", "lost the satellite name")
   check(answer and #answer.cards == 1, "lost the machines")
   check(answer and answer.alerts[1].tripped == true, "lost the alerts")
 
-  check(net.decode(PORT, "bb000000", "ocstatus?", nil, nil) == nil, "read a question as an answer")
-  check(net.decode(9999, "bb000000", "ocstatus!", "x", payload) == nil, "read the wrong port")
+  check(net.decode(PORT, "boiler-room", "ocstatus?") == nil, "read a question as an answer")
+  check(net.decode(9999, "boiler-room", payload) == nil, "read the wrong port")
 
   -- a satellite on an older ocwatch sends a bare list, which is a version
   -- mismatch rather than an answer with no machines in it
-  local old = require("serialization").serialize({ { name = "EBF1", gauges = {} } })
-  local none, why = net.decode(PORT, "bb000000", "ocstatus!", "boiler-room", old)
+  local old = "ocstatus!\n" .. require("serialization").serialize({
+    { name = "EBF1", gauges = {} },
+  })
+  local none, why = net.decode(PORT, "boiler-room", old)
   check(none == nil and why == "unreadable", "took an old payload as current")
 end)
 
@@ -1574,12 +1879,170 @@ test("the network report preserves whether a tripped alert is trouble", function
   check(report.alerts[1].trouble == false, "lost the non-problem mode")
 end)
 
+test("a satellite is not remembered under its own name", function()
+  oc.components = {}
+  local net = require("ocnet")
+  oc.files["/etc/hostname"] = "tablet"
+  local config = {}
+  check(net.remember(config, "tablet") == false, "remembered itself as a satellite")
+  check(net.remember(config, "boiler-room") == true, "did not remember a satellite")
+  check(net.remember(config, "boiler-room") == false, "remembered the same one twice")
+  check(net.forget(config, "boiler-room") == true, "could not forget a satellite")
+  check(#net.peers(config) == 0, "forgetting left it in the list")
+end)
+
 test("ocview says so when nothing answers", function()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  startMinitel("tablet")
+
+  oc.run("ocview", "--once")
+  check(contains(oc.screen(), "no answer"), "did not report the silence")
+end)
+
+test("ocview says so when the daemon is not running", function()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
 
   oc.run("ocview", "--once")
-  check(contains(oc.screen(), "no answer"), "did not report the silence")
+  check(contains(oc.printed(), "minitel daemon is not running"),
+    "did not say why it could not ask")
+end)
+
+-- Fetching through another machine, which is the whole point of P10: one
+-- internet card serves a base. The far end is scripted into the modem, so what
+-- runs here is the real Minitel stream client against a real FRequest exchange.
+
+local function gatewayModem(address, here, there, body)
+  local sent = {}
+  local streamPort = 40001
+  local closer = "end-of-stream"
+  local replies = 0
+
+  local function inward(kind, port, data)
+    replies = replies + 1
+    oc.push("modem_message", address, "ff000000", WIRE, 12,
+      "gw-" .. replies, kind, here, there, port, data)
+  end
+
+  local function outward(parts)
+    local id, kind = parts[1], parts[2]
+    local dest, port, data = parts[3], parts[5], parts[6]
+    if dest ~= there then
+      return
+    end
+    -- a reliable packet is acknowledged, or the sender gives up on it
+    if kind == 1 then
+      inward(2, port, id)
+    end
+    if data == "openstream" then
+      inward(0, port, tostring(streamPort))
+      inward(0, streamPort, closer)
+    elseif port == streamPort and data ~= closer and data:sub(1, 1) == "t" then
+      sent.asked = data
+      inward(0, streamPort, "y" .. body)
+      inward(0, streamPort, closer)
+    end
+  end
+
+  return {
+    address = address,
+    kind = "modem",
+    sent = sent,
+    methods = {
+      open = "", close = "", isOpen = "", isWireless = "", getStrength = "",
+      send = "", broadcast = "", setStrength = "", maxPacketSize = "",
+    },
+    values = {
+      open = function() return true end,
+      close = function() return true end,
+      isOpen = function() return true end,
+      isWireless = function() return true end,
+      setStrength = function(value) sent.strength = value return value end,
+      getStrength = function() return sent.strength or 0 end,
+      maxPacketSize = function() return 8192 end,
+      send = function(to, port, ...)
+        local parts = table.pack(...)
+        sent[#sent + 1] = { to = to, port = port, parts = parts }
+        outward(parts)
+        return true
+      end,
+      broadcast = function(port, ...)
+        local parts = table.pack(...)
+        sent[#sent + 1] = { to = "*", port = port, parts = parts }
+        outward(parts)
+        return true
+      end,
+    },
+  }
+end
+
+test("ocup fetches through a machine that has the internet card", function()
+  local modem = gatewayModem("aa000000-0000-0000-0000-000000000009",
+    "satellite", "gateway", program("0.9.0"))
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    gateway = "gateway",
+  })
+  startMinitel("satellite")
+
+  local ok, reason = oc.run("ocup")
+  check(ok, "ocup crashed: " .. tostring(reason))
+  check(contains(oc.printed(), "fetching through gateway"),
+    "did not say it was going through the gateway")
+  check(modem.sent.asked ~= nil, "asked the gateway for nothing")
+  check(modem.sent.asked and modem.sent.asked:find("/https/", 1, true) ~= nil,
+    "did not ask for the file as a proxied URL: " .. tostring(modem.sent.asked))
+end)
+
+test("ocup asks around for a gateway when none is configured", function()
+  local modem = gatewayModem("aa000000-0000-0000-0000-000000000009",
+    "satellite", "gateway", program("0.9.0"))
+  oc.components = { modem }
+  startMinitel("satellite")
+
+  oc.run("ocup")
+  local asked = false
+  for _, packet in ipairs(modem.sent) do
+    if packet.parts and packet.parts[6] == "ocgateway?" then
+      asked = true
+    end
+  end
+  check(asked, "never asked who can reach the internet")
+  check(contains(oc.printed(), "nobody answered as a gateway"),
+    "did not say that nothing answered")
+end)
+
+test("a machine with an internet card answers as the gateway", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, INTERNET, SUPER_TANK }
+  startMinitel("main")
+  deliver(modem, "bb000000", "~", "satellite", "ocgateway?")
+
+  oc.run("ocserve", "--once")
+  oc.pump()
+
+  local answered = false
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "ocgateway!" and packet.dest == "satellite" then
+      answered = true
+    end
+  end
+  check(answered, "a machine with an internet card kept quiet")
+end)
+
+test("a machine with no internet card does not answer as the gateway", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "~", "satellite", "ocgateway?")
+
+  oc.run("ocserve", "--once")
+  oc.pump()
+
+  for _, packet in ipairs(outbound(modem)) do
+    check(packet.data ~= "ocgateway!", "offered to fetch with no card to fetch by")
+  end
 end)
 
 -------------------------------------------------------------------------------
@@ -2420,6 +2883,126 @@ test("an alert that does not count as trouble reddens nothing", function()
   check(#said == 0, "spoke for an alert that is not trouble")
   -- the lamp is still set, to the colour that means all is well
   check(colors[#colors] == GREEN_LAMP, "reddened the lamp for an alert that is not trouble")
+end)
+
+-- An alert that is not trouble says nothing and holds nothing, so nothing
+-- anywhere shows it happened. That is what the log is for, and it runs the real
+-- syslog daemon rather than watching for the event that feeds it.
+
+local function startSyslog(destination)
+  oc.files["/etc/syslogd.cfg"] = require("serialization").serialize({
+    destination = destination,
+    write = true,
+    minlevel = 6,
+    displevel = -1,
+  })
+  local logd, why = oc.service("etc/syslogd.lua")
+  check(logd ~= nil, "the syslog daemon would not load: " .. tostring(why))
+  if logd then
+    logd.start()
+  end
+  return logd
+end
+
+local function alertConfig(tank, extra)
+  local alert = {
+    name = "diesel low",
+    address = tank.address,
+    label = "Bio Diesel",
+    below = 50000,
+    above = 200000,
+  }
+  for key, value in pairs(extra or {}) do
+    alert[key] = value
+  end
+  return require("serialization").serialize({
+    watch = { { address = tank.address, hidden = {} } },
+    alerts = { alert },
+  })
+end
+
+test("a tripped alert is written down", function()
+  local tank = tankAt("100")
+  oc.components = { tank }
+  oc.files["/etc/ocgt.cfg"] = alertConfig(tank)
+  startSyslog("/home/ocgt.log")
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+
+  local log = oc.files["/home/ocgt.log"] or ""
+  check(contains(log, "diesel low"), "the alert never reached the log")
+  check(contains(log, "ocwatch"), "the log does not say what wrote the line")
+  -- tab separated: service, level, message. Trouble is an error.
+  check(contains(log, "\t3\t"), "did not log trouble at the error level")
+end)
+
+test("an alert that is not trouble is written down anyway", function()
+  local said = {}
+  local tank = tankAt("100")
+  oc.components = { tank, speechBox(said) }
+  oc.files["/etc/ocgt.cfg"] = alertConfig(tank, { trouble = false })
+  startSyslog("/home/ocgt.log")
+
+  oc.run("ocwatch")
+
+  check(#said == 0, "spoke for an alert that is not trouble")
+  local log = oc.files["/home/ocgt.log"] or ""
+  check(contains(log, "diesel low"),
+    "a switchover said nothing and was written nowhere")
+  check(contains(log, "\t6\t"), "did not log a switchover at the info level")
+end)
+
+test("the log can be switched off like any other channel", function()
+  local tank = tankAt("100")
+  oc.components = { tank }
+  local config = require("serialization").unserialize(alertConfig(tank))
+  config.notify = { syslog = { on = false } }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize(config)
+  startSyslog("/home/ocgt.log")
+
+  oc.run("ocwatch")
+  check((oc.files["/home/ocgt.log"] or "") == "", "logged with the channel off")
+end)
+
+test("a record goes nowhere quietly when no daemon is listening", function()
+  oc.components = {}
+  local notify = require("ocnotify")
+  local ok = notify.record({}, "nobody is listening", notify.NOTICE)
+  check(ok == true, "raising a record without a collector was an error")
+end)
+
+test("one name settles every machine's part in the log", function()
+  oc.components = {}
+  local notify = require("ocnotify")
+  local serialize = require("serialization")
+  local config = {}
+
+  notify.set(config, "syslog", "collector", "main")
+  check(notify.collect(config, "boiler-room") == true, "could not write the settings")
+  local sending = serialize.unserialize(oc.files["/etc/syslogd.cfg"])
+  check(sending.relay == true, "a satellite is not sending its records on")
+  check(sending.relayhost == "main", "a satellite is sending them nowhere")
+  check(sending.receive == false, "a satellite is collecting other machines' records")
+  check(sending.write == true, "a satellite keeps no copy of its own")
+
+  check(notify.collect(config, "main") == true, "could not write the settings")
+  local collector = serialize.unserialize(oc.files["/etc/syslogd.cfg"])
+  check(collector.receive == true, "the collector will not take anything in")
+  check(collector.relay == false, "the collector is relaying to itself")
+
+  -- a record printed over a dashboard is a record that broke the screen
+  check(collector.displevel < 0, "would print records over whatever is on screen")
+end)
+
+test("with no collector named, records stay on the machine that made them", function()
+  oc.components = {}
+  local notify = require("ocnotify")
+  notify.collect({}, "boiler-room")
+  local kept = require("serialization").unserialize(oc.files["/etc/syslogd.cfg"])
+  check(kept.relay == false, "sent records to nobody in particular")
+  check(kept.receive == false, "took in records nobody sends")
+  check(kept.write == true, "kept nothing at all")
 end)
 
 -- `trouble` was called `beep` and said only whether the alert made a noise
@@ -3852,12 +4435,16 @@ test("ocitems answers for the network it is watching", function()
   local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
   oc.components = { modem,
     requestPipe({ { name = "Cobblestone", amount = 22742 } }) }
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus?")
+  startMinitel("store-room")
+  deliver(modem, "bb000000", "store-room", "tablet", "ocstatus?")
 
   local ok, reason = oc.run("ocitems")
   check(ok, "ocitems crashed: " .. tostring(reason))
-  check(#modem.sent == 1, "sent " .. #modem.sent .. " answers, not one")
-  check(modem.sent[1].kind == "ocstatus!", "answered with something else")
+  oc.pump()
+
+  local reply = firstReply(modem)
+  check(reply ~= nil, "no answer went out")
+  check(reply and reply.dest == "tablet", "answered somebody else")
   check(contains(oc.frame(), "answering for it"), "did not say it is answering")
 end)
 
@@ -4173,14 +4760,13 @@ test("ocview keeps the numbers when the name of a reading will not fit", functio
   oc.reset()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
-  local payload = require("serialization").serialize({
+  startMinitel("tablet")
+  deliver(modem, "bb000000", "tablet", "satellite-1", answerOf({
     cards = { { name = "Super Tank", status = "idle", gauges = {
       { label = "Bio Diesel", current = "42,000", maximum = "4,000,000",
         unit = "L", percent = 1.05 } } } },
     alerts = {},
-  })
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
-    "satellite-1", payload)
+  }))
 
   oc.run("ocview", "--once")
   local frame = oc.screen()
@@ -4193,18 +4779,16 @@ test("ocview groups a satellite into its own column", function()
   oc.reset()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
-  local serialize = require("serialization").serialize
+  startMinitel("tablet")
   local function payload(name)
-    return serialize({
+    return answerOf({
       cards = { { name = name, gauges = { { label = "Steam", current = "1",
         maximum = "2", unit = "L", percent = 50 } } } },
       alerts = {},
     })
   end
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
-    "boiler-room", payload("EBF1"))
-  oc.push("modem_message", modem.address, "dd000000", PORT, 40, "ocstatus!",
-    "tank-farm", payload("Super Tank"))
+  deliver(modem, "bb000000", "tablet", "boiler-room", payload("EBF1"))
+  deliver(modem, "dd000000", "tablet", "tank-farm", payload("Super Tank"))
 
   oc.run("ocview", "--once")
   local frame = oc.screen()
@@ -4552,12 +5136,11 @@ test("ocview lights a lamp when a satellite reports a tripped alert", function()
   local colors = {}
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem, lampBlock(colors) }
-  local payload = require("serialization").serialize({
+  startMinitel("tablet")
+  deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
     cards = {},
     alerts = { { name = "diesel low", tripped = true } },
-  })
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
-    "boiler-room", payload)
+  }))
 
   oc.run("ocview", "--once")
   -- the screen is watching the whole base, so the lamp beside it should say so
@@ -4778,8 +5361,8 @@ test("a satellite sends what is moving, and ocview shows it", function()
   oc.reset()
   local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
   oc.components = { modem }
-  oc.push("modem_message", modem.address, "bb000000", PORT, 12, "ocstatus!",
-    "item-server", require("serialization").serialize(report))
+  startMinitel("tablet")
+  deliver(modem, "bb000000", "tablet", "item-server", answerOf(report))
 
   oc.run("ocview", "--once")
   local frame = oc.screen()

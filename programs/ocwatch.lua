@@ -20,7 +20,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.19.0"
+local VERSION = "0.20.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -393,10 +393,10 @@ local function checkAlerts(readingsByAddress)
       alert.tripped = evaluate(alert, reading.value)
       if alert.tripped ~= was then
         local said
+        local where = core.comma(reading.value) .. " " .. reading.unit
         if alert.tripped then
           notice(alert.name .. " tripped at " .. core.comma(reading.value))
-          said = announce(alert, alert.name .. " tripped at "
-            .. core.comma(reading.value) .. " " .. reading.unit, true)
+          said = announce(alert, alert.name .. " tripped at " .. where, true)
         else
           notice(alert.name .. " cleared at " .. core.comma(reading.value))
           said = announce(alert, alert.name .. " cleared", false)
@@ -404,6 +404,17 @@ local function checkAlerts(readingsByAddress)
         if said then
           notice("told the " .. said:gsub("_", " "))
         end
+
+        -- Written down whatever the alert is for. An alert that is not trouble
+        -- says nothing aloud and is the one you most want a record of, because
+        -- nothing else anywhere shows it ever happened.
+        local level = notify.INFO
+        if alert.trouble ~= false then
+          level = alert.tripped and notify.ERROR or notify.NOTICE
+        end
+        notify.record(config,
+          alert.name .. (alert.tripped and " tripped at " or " cleared at ")
+            .. where, level)
       end
       local done = act(alert, alert.tripped)
       if done then
@@ -1165,6 +1176,11 @@ local function editNotify()
           .. " when tripped, " .. (kept.clear or "00ff00") .. " when clear"
       elseif channel.name == "siren" then
         extra = "   " .. (kept.sound or "klaxon1")
+      elseif channel.name == "syslog" then
+        extra = "   kept here"
+        if kept.collector and kept.collector ~= "" then
+          extra = extra .. ", and sent to " .. kept.collector
+        end
       end
 
       rows[#rows + 1] = {
@@ -1196,6 +1212,8 @@ local function editNotify()
         notify.state(config, true)
         os.sleep(2)
         notify.state(config, false)
+      elseif row.channel.kind == "record" then
+        notify.record(config, "ocwatch test of the syslog channel", notify.NOTICE)
       else
         notify.event(config, "ocwatch test of the " .. name .. " channel", true)
       end
@@ -1217,7 +1235,89 @@ local function editNotify()
         notify.set(config, name, "sound",
           prompt("alarm sound, one of " .. table.concat(sounds, ", "),
             notify.settings(config, name).sound or "klaxon1"))
+      elseif name == "syslog" then
+        notify.set(config, name, "collector",
+          prompt("machine that keeps the base's log, blank to keep only here",
+            notify.settings(config, name).collector))
+        if notify.collect(config, net.hostname(config)) then
+          notice("reload the log daemon for it to take: rc syslogd reload")
+        end
       end
+      save()
+    end
+  end
+end
+
+-- Minitel names every packet with what it read out of /etc/hostname when its
+-- daemon started, so that file is the name and this writes it. The daemon does
+-- not read it again, which is why the screen says to restart it.
+local function writeHostname(name)
+  local file = io.open("/etc/hostname", "w")
+  if not file then
+    return false
+  end
+  file:write(name)
+  file:close()
+  return true
+end
+
+-- Who this machine is, and which satellites it should be hearing from. The list
+-- fills itself in as ocview hears from a satellite, so what is edited here is a
+-- satellite that has never been in range to be heard.
+local function editNetwork()
+  local at = 1
+  while true do
+    local peers = net.peers(config)
+    local rows = {
+      { what = "hostname",
+        text = string.format("%-12s %s", "hostname", net.hostname(config)) },
+      { what = "gateway",
+        text = string.format("%-12s %s", "gateway",
+          config.gateway ~= nil and config.gateway ~= "" and config.gateway
+          or "whoever answers, for ocup on a machine with no internet card") },
+      { heading = true, text = "SATELLITES" },
+    }
+    for index, host in ipairs(peers) do
+      rows[#rows + 1] = { what = "peer", index = index, host = host, text = host }
+    end
+    if #peers == 0 then
+      rows[#rows + 1] = { heading = true,
+        text = "  none yet; ocview records each one it hears from" }
+    end
+
+    local row, code
+    row, code, at = menu("ocwatch v" .. VERSION .. "   network", rows,
+      { { label = "change", code = keyboard.keys.enter },
+        { label = "add a satellite", code = keyboard.keys.n },
+        { label = "forget", code = keyboard.keys.d },
+        { label = "back", code = keyboard.keys.q } }, at)
+
+    if code == keyboard.keys.q then
+      save()
+      return
+    elseif code == keyboard.keys.n then
+      local host = prompt("hostname of a satellite out of range of this one")
+      if host and host ~= "" and net.remember(config, host) then
+        save()
+      end
+    elseif row and code == keyboard.keys.d and row.what == "peer" then
+      net.forget(config, row.host)
+      save()
+    elseif row and code == keyboard.keys.enter and row.what == "hostname" then
+      local name = prompt("what to call this machine on the network",
+        net.hostname(config))
+      if name and name ~= "" then
+        config.hostname = name
+        save()
+        if writeHostname(name) then
+          notice("named " .. name .. ", restart minitel for it to take: rc minitel restart")
+        else
+          notice("could not write /etc/hostname")
+        end
+      end
+    elseif row and code == keyboard.keys.enter and row.what == "gateway" then
+      config.gateway = prompt("machine ocup fetches through, blank to ask around",
+        config.gateway)
       save()
     end
   end
@@ -1289,6 +1389,7 @@ local function editor()
         { label = "new alert", code = keyboard.keys.n },
         { label = "remove", code = keyboard.keys.d },
         { label = "notifications", code = keyboard.keys.t },
+        { label = "network", code = keyboard.keys.w },
         { label = "done", code = keyboard.keys.q } }, at)
 
     -- The action is read before the row, because on a computer with nothing
@@ -1303,6 +1404,8 @@ local function editor()
       addAlert()
     elseif code == keyboard.keys.t then
       editNotify()
+    elseif code == keyboard.keys.w then
+      editNetwork()
     elseif row and row.what == "machine"
       and (code == keyboard.keys.pageUp or code == keyboard.keys.pageDown) then
       -- the order of the list is the order on the dashboard, which is how a
@@ -1351,9 +1454,22 @@ if #config.watch == 0 then
   end
 end
 
--- a satellite with a network card answers for what it watches; without one it
--- is simply a local dashboard, which is still useful
-local modem = net.modem()
+-- A satellite on the network answers for what it watches; off it, this is
+-- simply a local dashboard, which is still useful.
+--
+-- A question can land in the middle of a refresh, so it is buffered here and
+-- answered by the loop. Drawing from inside a listener would redraw the screen
+-- halfway through reading a machine.
+local pending = {}
+local heard = net.listen(function(from, port, data)
+  pending[#pending + 1] = { from = from, port = port, data = data }
+end)
+
+local minitel, offline = net.up()
+if not minitel then
+  net.deafen(heard)
+  notice(offline)
+end
 
 blank()
 term.setCursorBlink(false)
@@ -1385,26 +1501,28 @@ while true do
   end
 
   -- packed rather than unpacked into fixed names: a key event carries a code
-  -- in the fourth slot where a modem message carries a port, and reading one
+  -- in the fourth slot where other events carry something else, and reading one
   -- as the other is how a dispatch quietly stops matching
   local packed = table.pack(event.pull(wait))
   local name = packed[1]
   local code = packed[4]
 
+  -- a satellite answers for the machines it watches while it is watching them,
+  -- so one program does both rather than fighting for the terminal, and it
+  -- answers out of the reading the last refresh already took
+  while pending[1] do
+    local packet = table.remove(pending, 1)
+    local sent = net.answer(minitel, packet.port, packet.from, packet.data, latest)
+    if sent then
+      notice("served " .. sent)
+      -- drawing is cheap, and it is the only way the notice reaches the screen
+      -- before the next refresh comes round
+      render(cards)
+    end
+  end
+
   if name == "interrupted" then
     break
-  elseif name == "modem_message" then
-    -- a satellite answers for the machines it watches while it is watching
-    -- them, so one program does both rather than fighting for the terminal
-    if modem then
-      local sent = net.answer(modem, packed[4], packed[3], packed[6], config, latest)
-      if sent then
-        notice("served " .. sent)
-        -- drawing is cheap, and it is the only way the notice reaches the screen
-        -- before the next refresh comes round
-        render(cards)
-      end
-    end
   elseif name == "screen_resized" then
     layout()
     render(cards)
@@ -1424,6 +1542,7 @@ while true do
   end
 end
 
+net.deafen(heard)
 gpu.setForeground(FG)
 gpu.setBackground(BG)
 term.clear()

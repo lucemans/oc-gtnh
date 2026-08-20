@@ -7,6 +7,11 @@ lib/occomputronics.lua
 lib/ocsecurity.lua
 lib/ocnotify.lua
 lib/ocnet.lua
+lib/minitel.lua
+lib/syslog.lua
+etc/minitel.lua
+etc/syslogd.lua
+etc/fserv.lua
 programs/ocup.lua
 programs/ocdebug.lua
 programs/ocdump.lua

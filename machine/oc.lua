@@ -12,6 +12,10 @@ oc.height = 20
 local screen = {}
 local frame = {}
 
+-- how many filtered waits in a row have found nothing, which is what a hang
+-- looks like from in here
+local emptyPulls = 0
+
 function oc.reset()
   oc.files = {}
   oc.events = {}
@@ -32,6 +36,9 @@ function oc.reset()
   oc.freeMemory = 1106167
   oc.directories = {}
   oc.deviceInfo = {}
+  oc.listeners = {}
+  emptyPulls = 0
+  oc.timers = {}
   oc.output = {""}
   oc.osversion = "OpenOS 1.8.9"
   -- tests override this to script the internet card
@@ -258,6 +265,10 @@ function component.slot(address)
   return byAddress(address).slot or -1
 end
 
+function component.type(address)
+  return byAddress(address).kind
+end
+
 function component.invoke(address, method, ...)
   oc.invoked[#oc.invoked + 1] = method
   local entry = byAddress(address)
@@ -323,33 +334,141 @@ end
 function computer.getDeviceInfo()
   return oc.deviceInfo or {}
 end
+function computer.pushSignal(...)
+  oc.push(...)
+end
 
 local event = {}
+
+-- Every signal reaches every listener before anybody waiting on event.pull sees
+-- it, which is how a daemon like Minitel does its work while a program is
+-- blocked on the keyboard.
+local function dispatch(signal)
+  local handlers = oc.listeners[signal[1]]
+  for index = 1, #(handlers or {}) do
+    handlers[index](table.unpack(signal, 1, signal.n))
+  end
+end
+
+local function fireTimers()
+  local now = computer.uptime()
+  for id, timer in pairs(oc.timers) do
+    if timer.at <= now then
+      timer.times = timer.times - 1
+      timer.at = now + math.max(timer.interval, 0.05)
+      if timer.times <= 0 then
+        oc.timers[id] = nil
+      end
+      timer.fn()
+    end
+  end
+end
+
+function event.listen(name, handler)
+  oc.listeners[name] = oc.listeners[name] or {}
+  local handlers = oc.listeners[name]
+  for _, each in ipairs(handlers) do
+    if each == handler then
+      return false
+    end
+  end
+  handlers[#handlers + 1] = handler
+  return true
+end
+
+function event.ignore(name, handler)
+  for index, each in ipairs(oc.listeners[name] or {}) do
+    if each == handler then
+      table.remove(oc.listeners[name], index)
+      return true
+    end
+  end
+  return false
+end
+
+local nextTimer = 0
+
+function event.timer(interval, handler, times)
+  nextTimer = nextTimer + 1
+  oc.timers[nextTimer] = {
+    at = computer.uptime() + (tonumber(interval) or 0),
+    interval = tonumber(interval) or 0,
+    times = tonumber(times) or 1,
+    fn = handler,
+  }
+  return nextTimer
+end
+
+function event.cancel(id)
+  if oc.timers[id] then
+    oc.timers[id] = nil
+    return true
+  end
+  return false
+end
+
+-- The event system running with no program in it: signals reach their
+-- listeners and timers fire. That is what a daemon does between one program
+-- exiting and the next one starting, and a packet queued by Minitel is only
+-- put on the wire by its timer.
+function oc.pump(rounds)
+  for _ = 1, rounds or 4 do
+    fireTimers()
+    while oc.events[1] do
+      local queued = table.remove(oc.events, 1)
+      oc.elapsed = oc.elapsed + 0.05
+      dispatch(queued)
+    end
+  end
+end
+
+-- A filtered wait that never finds anything is how a program hangs. The real
+-- machine would sit there; here it has to stop, and say which event was waited
+-- for rather than run out the clock.
+local PATIENCE = 500
+
 function event.pull(timeout, filter)
+  -- the real event.pull takes the name in the first argument too, and Minitel
+  -- calls it that way
+  if type(timeout) == "string" then
+    timeout, filter = nil, timeout
+  end
+
   for y = 1, oc.height do
     frame[y] = table.concat(screen[y])
   end
   -- every frame is kept, so a test can assert that a redraw changed something
   oc.frames[#oc.frames + 1] = table.concat(frame, "\n")
 
-  -- A name filter is honoured, as the real event.pull does. Handing a filtered
-  -- wait some other event makes a program believe it heard traffic it could
-  -- never have seen.
-  for index = 1, #oc.events do
-    local queued = oc.events[index]
+  fireTimers()
+
+  -- A signal that does not match the filter is dispatched and then dropped,
+  -- as the real event.pull does. It is not kept for the next caller, which is
+  -- why a blocking library call loses the keypresses that arrive during it.
+  while oc.events[1] do
+    local queued = table.remove(oc.events, 1)
+    -- a queued event arrives promptly, but not instantly
+    oc.elapsed = oc.elapsed + 0.05
+    dispatch(queued)
     if not filter or queued[1] == filter then
-      table.remove(oc.events, index)
-      -- a queued event arrives promptly, but not instantly
-      oc.elapsed = oc.elapsed + 0.05
+      emptyPulls = 0
       return table.unpack(queued, 1, queued.n)
     end
   end
 
   -- nothing matching, so the caller's timeout elapses in full
   oc.elapsed = oc.elapsed + (tonumber(timeout) or 1)
+  fireTimers()
   if filter then
+    emptyPulls = emptyPulls + 1
+    if emptyPulls > PATIENCE then
+      emptyPulls = 0
+      error("waited " .. PATIENCE .. " times for a " .. filter
+        .. " that never came", 0)
+    end
     return nil
   end
+  emptyPulls = 0
   -- A program that works on a clock only does so between events, so a test that
   -- wants to watch it tick asks for a number of quiet waits first. Without them
   -- nothing on a timer is ever seen to happen; without a limit a test hangs.
@@ -365,7 +484,7 @@ local keyboard = {
     q = 0x10, e = 0x12, r = 0x13,
     up = 0xC8, down = 0xD0, pageUp = 0xC9, pageDown = 0xD1,
     space = 0x39, enter = 0x1C,
-    d = 0x20, m = 0x32, n = 0x31, v = 0x2F, t = 0x14, back = 0x0E,
+    d = 0x20, m = 0x32, n = 0x31, v = 0x2F, t = 0x14, w = 0x11, back = 0x0E,
   },
 }
 
@@ -577,6 +696,19 @@ function oc.install()
   package.preload["ocnet"] = function()
     return dofile("lib/ocnet.lua")
   end
+  package.preload["minitel"] = function()
+    return dofile("lib/minitel.lua")
+  end
+  package.preload["syslog"] = function()
+    return dofile("lib/syslog.lua")
+  end
+  -- syslog names the program that logged when it is not told one; nothing here
+  -- leaves it out, so this only has to exist
+  package.preload["process"] = function()
+    return { info = function()
+      return { path = "?" }
+    end }
+  end
   package.preload["component"] = function()
     return component
   end
@@ -638,8 +770,11 @@ function oc.install()
   end
 
   io.open = function(path, mode)
-    if (mode or "r"):find("w") then
-      oc.files[path] = "" -- "w" truncates, matching io.open
+    mode = mode or "r"
+    if mode:find("w") or mode:find("a") then
+      if mode:find("w") then
+        oc.files[path] = "" -- "w" truncates where "a" keeps, matching io.open
+      end
       return {
         write = function(_, text)
           oc.files[path] = (oc.files[path] or "") .. text
@@ -658,6 +793,23 @@ function oc.install()
       close = function() end,
     }, nil
   end
+end
+
+-- Loads an rc service the way OpenOS does, into an environment of its own, and
+-- hands back that environment so a test can call start and stop on it. Running
+-- the real Minitel daemon is what makes a network test test the protocol rather
+-- than our idea of it.
+function oc.service(path)
+  local env = setmetatable({}, { __index = _G })
+  local chunk, reason = loadfile(path, "t", env)
+  if not chunk then
+    return nil, reason
+  end
+  local ok, failure = pcall(chunk)
+  if not ok then
+    return nil, failure
+  end
+  return env
 end
 
 -- run a program against the current state; returns ok, error

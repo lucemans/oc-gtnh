@@ -14,7 +14,7 @@ local keyboard = require("keyboard")
 local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.18.0"
+local VERSION = "0.19.0"
 
 -- read here rather than through oclib: on a fresh computer ocup arrives alone
 -- and there is no /lib yet for it to require
@@ -29,7 +29,28 @@ local VERSIONS = "versions.txt"
 local SELF = "programs/ocup.lua"
 
 -- the folder a file lives in decides where it installs
-local DESTINATIONS = { programs = "/bin/", lib = "/lib/" }
+local DESTINATIONS = { programs = "/bin/", lib = "/lib/", etc = "/etc/rc.d/" }
+
+-- the services a machine with the daemons installed should be running
+local SERVICES = { "minitel", "syslogd" }
+-- and the one only a machine that can reach the internet is any use running
+local GATEWAY_SERVICE = "fserv"
+
+-- FRequest, which is how a machine with no internet card fetches: it asks a
+-- machine that has one to make the request and hand back what came out.
+local FREQUEST_PORT = 70
+local FREQUEST_WAIT = 20
+
+-- What the vendored daemons do when nobody has said otherwise. Both ship with a
+-- default that is no use here: syslogd writes its records to /dev/null and
+-- prints the loud ones over whatever is on the screen, and fserv will not
+-- proxy at all, which is the one thing a gateway exists to do.
+local DAEMON_CONFIG = {
+  ["/etc/syslogd.cfg"] =
+    '{destination="/home/ocgt.log",write=true,minlevel=6,displevel=-1,'
+    .. 'beeplevel=-1,relay=false,relayhost="",receive=false}',
+  ["/etc/fserv.cfg"] = '{path="/srv",port=70,looptimer=0.5,iproxy=true}',
+}
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999
@@ -89,7 +110,7 @@ end
 
 -- the component handle is used directly: the "internet" library wraps it in a
 -- table whose close field shadows the real method and is not callable
-local function download(url, headers)
+local function overInternet(url, headers)
   local handle, reason = component.internet.request(url, nil, headers)
   if not handle then
     return nil, tostring(reason)
@@ -124,6 +145,52 @@ local function download(url, headers)
       os.sleep(0)
     end
   end
+end
+
+-- Fetches through another machine on the Minitel network, which is the only way
+-- a computer with no internet card gets anything. The far end is fserv,
+-- whose proxy takes a path of scheme then host then the rest and makes the
+-- request itself. The first character that comes back is the status.
+local function overGateway(minitel, host, url)
+  local scheme, rest = url:match("^(https?)://(.+)$")
+  if not scheme then
+    return nil, "not a URL this can proxy: " .. tostring(url)
+  end
+
+  local socket, why = minitel.open(host, FREQUEST_PORT)
+  if not socket then
+    return nil, tostring(why or "no answer from " .. host)
+  end
+  socket:write("t/" .. scheme .. "/" .. rest .. "\n")
+
+  local chunks = {}
+  local quiet = computer.uptime() + FREQUEST_WAIT
+  while socket.state ~= "closed" and computer.uptime() < quiet do
+    local chunk = socket:read("*a")
+    if chunk and #chunk > 0 then
+      chunks[#chunks + 1] = chunk
+      quiet = computer.uptime() + FREQUEST_WAIT
+    else
+      -- event.pull rather than os.sleep, because the socket is filled by a
+      -- listener and only an event.pull runs one
+      event.pull(0.05)
+    end
+  end
+  local last = socket:read("*a")
+  if last and #last > 0 then
+    chunks[#chunks + 1] = last
+  end
+  socket:close()
+
+  local body = table.concat(chunks)
+  if #body == 0 then
+    return nil, "nothing came back from " .. host
+  end
+  local status, contents = body:sub(1, 1), body:sub(2)
+  if status ~= "y" then
+    return nil, host .. " said " .. status .. " " .. contents:sub(1, 40)
+  end
+  return contents
 end
 
 local function readFile(path)
@@ -232,12 +299,61 @@ local arguments = { ... }
 local reloaded = arguments[1] == "--reloaded"
 local choosing = arguments[1] == "install"
 
+write("ocup v" .. VERSION .. (reloaded and "  (reloaded)" or "") .. "\n\n", WHITE)
+
+local config = loadConfig()
+
+-- Where the files come from. An internet card fetches for itself; a machine
+-- without one asks another on the Minitel network to fetch on its behalf, which
+-- is what makes one card enough for a whole base.
+local gateway, minitel = nil, nil
+
 if not component.isAvailable("internet") then
-  io.stderr:write("ocup: no internet card installed\n")
-  return 1
+  local hasNet, ocnet = pcall(require, "ocnet")
+  local up = hasNet and ocnet.up()
+  if not up then
+    io.stderr:write("ocup: no internet card, and no minitel to fetch through\n")
+    return 1
+  end
+  minitel = up
+  -- ocnet loaded, so its own dependencies are on the disk too
+  local core = require("oclib")
+
+  gateway = config.gateway
+  if not gateway or gateway == "" then
+    term.clearLine()
+    write("  looking for a machine that can reach the internet", DIM)
+    ocnet.askGateway(minitel)
+    local until_ = computer.uptime() + 5
+    while computer.uptime() < until_ do
+      local name, from, port, data = event.pull(until_ - computer.uptime(), "net_msg")
+      if name == nil then
+        break
+      end
+      if port == core.PORT and data == ocnet.GATEWAY_REPLY then
+        gateway = from
+        break
+      end
+    end
+  end
+
+  term.clearLine()
+  if not gateway or gateway == "" then
+    write("  nobody answered as a gateway\n", RED)
+    write("  run ocwatch or ocserve on the machine with the internet card,\n", DIM)
+    write("  and rc fserv start there\n", DIM)
+    paint(WHITE)
+    return 1
+  end
+  write("  fetching through " .. gateway .. "\n", DIM)
 end
 
-write("ocup v" .. VERSION .. (reloaded and "  (reloaded)" or "") .. "\n\n", WHITE)
+local function download(url, headers)
+  if gateway then
+    return overGateway(minitel, gateway, url)
+  end
+  return overInternet(url, headers)
+end
 
 -- the API rejects a request without a User-Agent
 term.clearLine()
@@ -292,8 +408,6 @@ if #FILES == 0 then
   paint(WHITE)
   return 1
 end
-
-local config = loadConfig()
 
 -- What a computer gets before anybody has chosen: enough to look at the
 -- machines in front of it and to ask for help with them. Everything else is
@@ -681,4 +795,81 @@ if failed > 0 then
 end
 showBar(total .. " files in place"
   .. (removed > 0 and ", " .. removed .. " removed" or ""), GREEN)
+
+-------------------------------------------------------------------------------
+-- Installing a daemon does not run it. Minitel names this machine after
+-- /etc/hostname and rc starts a service because it is listed in /etc/rc.cfg,
+-- and neither file is one the file list above would ever touch.
+
+-- read and written the way rc itself does: a Lua chunk of key and value lines,
+-- evaluated into an environment of its own
+local function rcConfig()
+  local env = {}
+  local chunk = load(readFile("/etc/rc.cfg") or "", "=rc.cfg", "t", env)
+  if chunk then
+    pcall(chunk)
+  end
+  return env
+end
+
+local function saveRc(conf)
+  local settings = {}
+  for key, value in pairs(conf) do
+    settings[#settings + 1] = tostring(key) .. " = " .. serialization.serialize(value)
+  end
+  return writeFile("/etc/rc.cfg", table.concat(settings, "\n") .. "\n")
+end
+
+local named = nil
+if not (readFile("/etc/hostname") or ""):match("%S") then
+  named = config.hostname
+  if not named or named == "" then
+    named = computer.address():sub(1, 8)
+  end
+  writeFile("/etc/hostname", named)
+end
+
+local wanted = { table.unpack(SERVICES) }
+-- only a machine that can reach the internet is any use as a gateway, and one
+-- serving files it cannot fetch is a machine answering questions with nothing
+if component.isAvailable("internet") then
+  wanted[#wanted + 1] = GATEWAY_SERVICE
+end
+
+local conf = rcConfig()
+conf.enabled = conf.enabled or {}
+local already = {}
+for _, name in ipairs(conf.enabled) do
+  already[name] = true
+end
+
+local enabled = {}
+for _, name in ipairs(wanted) do
+  if not already[name] and filesystem.exists("/etc/rc.d/" .. name .. ".lua") then
+    conf.enabled[#conf.enabled + 1] = name
+    enabled[#enabled + 1] = name
+  end
+end
+if #enabled > 0 then
+  saveRc(conf)
+end
+
+-- Written once and then left alone: a settings file somebody has edited is
+-- theirs, and a daemon that is not installed here needs none.
+for path, defaults in pairs(DAEMON_CONFIG) do
+  local daemon = path:match("^/etc/(.+)%.cfg$")
+  if filesystem.exists("/etc/rc.d/" .. daemon .. ".lua") and not readFile(path) then
+    writeFile(path, defaults)
+  end
+end
+
+if named then
+  write("\n  named this machine " .. named .. "\n", CYAN)
+end
+if #enabled > 0 then
+  write((named and "" or "\n") .. "  enabled " .. table.concat(enabled, ", ")
+    .. "\n", CYAN)
+  write("  they start on the next boot, or now with:  rc "
+    .. enabled[1] .. " start\n", DIM)
+end
 paint(WHITE)

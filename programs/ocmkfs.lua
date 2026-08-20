@@ -12,9 +12,10 @@
 -- the target. So the floppy needs that file plus the tree it should copy, and
 -- nothing else: `install` does the rest.
 --
--- Everything gets copied, not just ocup. A tablet has no internet card, so a
--- floppy carrying only the updater would install a program that cannot reach
--- GitHub to fetch the rest.
+-- Everything gets copied, not just ocup: the programs, the libraries, the
+-- Minitel daemons and the file saying to run them. A machine with no internet
+-- card fetches through another machine on the network, so a floppy carrying
+-- only the updater would install a program with no way to reach anything.
 
 local component = require("component")
 local computer = require("computer")
@@ -24,14 +25,27 @@ local filesystem = require("filesystem")
 local keyboard = require("keyboard")
 local term = require("term")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
 
 local LABEL = "oc-gtnh"
--- where the installed set lives, and what belongs to this project
-local FOLDERS = { "/lib", "/bin" }
+-- Where the installed set lives, and what belongs to this project. Our own
+-- files are named for it. The vendored Minitel ones are not, so they are named
+-- here: a floppy without them installs a machine that cannot reach anything,
+-- which is the one machine a floppy is for.
+local FOLDERS = { "/lib", "/bin", "/etc/rc.d" }
 local BELONGS = "^oc.*%.lua$"
+local VENDORED = {
+  ["minitel.lua"] = true,
+  ["syslog.lua"] = true,
+  ["syslogd.lua"] = true,
+  ["fserv.lua"] = true,
+}
 -- the reason the floppy exists, so it is never left off one
 local SELF = "/bin/ocup.lua"
+-- A brand new computer has nothing enabled, so the floppy says which services
+-- to run. Written rather than merged, which is safe on the empty machine this
+-- exists for and would not be on one that had been set up already.
+local RC_CONFIG = 'enabled = {"minitel","syslogd"}\n'
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999
@@ -102,7 +116,7 @@ local function payload()
   for _, folder in ipairs(FOLDERS) do
     if filesystem.exists(folder) then
       for name in filesystem.list(folder) do
-        if name:match(BELONGS) then
+        if name:match(BELONGS) or VENDORED[name] then
           local path = folder .. "/" .. name
           local file = io.open(path, "r")
           if file then
@@ -331,6 +345,15 @@ if not ok then
   io.stderr:write("ocmkfs: could not write .prop: " .. tostring(reason) .. "\n")
   return 1
 end
+
+-- Installing the daemon does not run it, and a machine off the network cannot
+-- fetch the thing that would have enabled it.
+local enabled, why = writeTo(chosen.address, "/etc/rc.cfg", RC_CONFIG)
+if not enabled then
+  io.stderr:write("ocmkfs: could not write /etc/rc.cfg: " .. tostring(why) .. "\n")
+  return 1
+end
+say("    /etc/rc.cfg", DIM)
 
 core.setValue(chosen.address, "setLabel", LABEL)
 

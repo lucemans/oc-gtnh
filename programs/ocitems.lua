@@ -31,7 +31,7 @@ local net = require("ocnet")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.13.0"
+local VERSION = "0.14.0"
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -132,7 +132,9 @@ local movers = {}
 local scroll = 0
 local cursor = 1
 local lastRead, lastCount, lastFluids = 0, 0, 0
-local proxy, builder, modem
+local proxy, builder, minitel
+-- questions arrive whenever they arrive, and are answered by the loop
+local pending = {}
 
 -------------------------------------------------------------------------------
 -- what was written down last time
@@ -311,7 +313,7 @@ end
 local function render()
   paint.write(1, 1, fit("  ocitems v" .. VERSION .. "    "
     .. core.comma(total) .. " items in the network"
-    .. (modem and ", answering for it" or ""), W - 22), FG, BAR)
+    .. (minitel and ", answering for it" or ""), W - 22), FG, BAR)
   paint.write(math.max(1, W - 21), 1,
     fit(math.floor(computer.freeMemory() / 1024) .. " KB free", 22), DIM, BAR)
 
@@ -397,7 +399,13 @@ paint.forget()
 -- holds, so it answers for it as well as showing it. A network card is not
 -- required: without one this is a screen and nothing more.
 local config = core.loadConfig()
-modem = net.modem()
+local heard = net.listen(function(from, port, data)
+  pending[#pending + 1] = { from = from, port = port, data = data }
+end)
+minitel = net.up()
+if not minitel then
+  net.deafen(heard)
+end
 
 proxy = lp.requestPipe()
 -- A fluid request pipe is a block of its own, so a base can have one network
@@ -445,11 +453,15 @@ while true do
   local packed = table.pack(event.pull(REST))
   local name = packed[1]
 
+  while pending[1] do
+    local packet = table.remove(pending, 1)
+    local report = packet.data == net.ASK
+      and net.report(config, net.machines(config), movers, fluids) or nil
+    net.answer(minitel, packet.port, packet.from, packet.data, report)
+  end
+
   if name == nil then
     changed = refresh()
-  elseif name == "modem_message" and modem then
-    net.answer(modem, packed[4], packed[3], packed[6], config,
-      net.report(config, net.machines(config), movers, fluids))
   elseif name == "interrupted" then
     break
   elseif name == "screen_resized" then
@@ -490,6 +502,7 @@ while true do
   end
 end
 
+net.deafen(heard)
 gpu.setForeground(FG)
 gpu.setBackground(BG)
 term.clear()

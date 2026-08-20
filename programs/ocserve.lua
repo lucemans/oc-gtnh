@@ -19,7 +19,7 @@ local keyboard = require("keyboard")
 local lp = require("oclogistics")
 local net = require("ocnet")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 
 -- how many items are counted between two questions, and how long the loop
 -- listens before it goes back to counting. One count is a server tick.
@@ -51,8 +51,17 @@ local config = core.loadConfig()
 local arguments = { ... }
 local once = arguments[1] == "--once"
 
-local modem, reason = net.modem()
-if not modem then
+-- A question arrives whenever it arrives, including in the middle of counting
+-- items, so it is put here and answered by the loop below rather than from
+-- inside whatever event.pull happened to be running.
+local pending = {}
+local heard = net.listen(function(from, port, data)
+  pending[#pending + 1] = { from = from, port = port, data = data }
+end)
+
+local minitel, reason = net.up()
+if not minitel then
+  net.deafen(heard)
   io.stderr:write("ocserve: " .. reason .. "\n")
   return 1
 end
@@ -83,9 +92,9 @@ if fluidProxy then
   readFluids()
 end
 
-say("ocserve v" .. VERSION .. "   port " .. core.PORT, WHITE)
+say("ocserve v" .. VERSION .. "   " .. net.hostname(config)
+  .. " on port " .. core.PORT, WHITE)
 say("  serving " .. #net.machines(config) .. " machines", DIM)
-say("  wireless " .. tostring(modem.isWireless()), DIM)
 if builder then
   say("  counting " .. #items .. " items", DIM)
 end
@@ -96,21 +105,30 @@ say("  [q] to stop", DIM)
 say("")
 
 while true do
-  local name, _, remote, port, _, request = event.pull(once and 5 or REST)
+  local name, _, _, code = event.pull(once and 5 or REST)
 
   if name == "interrupted" then
     break
-  elseif name == "key_down" and port == keyboard.keys.q then
+  elseif name == "key_down" and code == keyboard.keys.q then
     break
-  elseif name == "modem_message" then
+  end
+
+  local answered = false
+  while pending[1] do
+    local packet = table.remove(pending, 1)
     -- read on demand: nothing else here is looking at these machines, so there
-    -- is no earlier reading to answer from
-    local report = net.report(config, net.machines(config), movers, fluids)
-    local sent = net.answer(modem, port, remote, request, config, report)
+    -- is no earlier reading to answer from, and a question that is not asking
+    -- for one costs no reads at all
+    local report = packet.data == net.ASK
+      and net.report(config, net.machines(config), movers, fluids) or nil
+    local sent = net.answer(minitel, packet.port, packet.from, packet.data, report)
     if sent then
       say("  answered " .. sent, GREEN)
+      answered = true
     end
-  elseif name == nil then
+  end
+
+  if name == nil and not answered then
     if fluidProxy and computer.uptime() - readAt >= FLUIDS then
       readFluids()
     end
@@ -127,6 +145,8 @@ while true do
     break
   end
 end
+
+net.deafen(heard)
 
 if gpu then
   gpu.setForeground(WHITE)

@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.14.0"
+local VERSION = "0.15.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -68,9 +68,8 @@ end
 local write = paint.write
 
 -- What each satellite last said, kept between rounds rather than gathered
--- inside one blocking call. A relay repeats what it forwards, so the same
--- answer arrives several times over different paths: keying on the answering
--- card means one satellite stays one entry however many copies land.
+-- inside one blocking call. Keyed on the hostname, which is what Minitel names
+-- a packet with and what everything on screen calls a satellite.
 local satellites = {}
 local order = {}
 
@@ -78,10 +77,16 @@ local order = {}
 local shownTripped = nil
 local seen = { heard = 0, unreadable = 0 }
 local started = computer.uptime()
+-- two machines answering to one name, which otherwise looks like a satellite
+-- that keeps going quiet
+local clash = nil
+-- peers learned this round are written back, so tomorrow's question reaches
+-- them by name through the mesh rather than only when they are in range
+local learned = false
 
-local function absorb(packed)
+local function absorb(from, port, data)
   seen.heard = seen.heard + 1
-  local answer, why = net.decode(packed[4], packed[3], packed[6], packed[7], packed[8])
+  local answer, why = net.decode(port, from, data)
   if not answer then
     if why then
       seen.unreadable = seen.unreadable + 1
@@ -89,19 +94,47 @@ local function absorb(packed)
     return false
   end
 
-  answer.at = computer.uptime()
-  if not satellites[answer.address] then
-    order[#order + 1] = answer.address
+  local known = satellites[answer.host]
+  if known and known.address and answer.address
+    and known.address ~= answer.address then
+    clash = answer.host
   end
-  satellites[answer.address] = answer
+
+  answer.at = computer.uptime()
+  if not known then
+    order[#order + 1] = answer.host
+  end
+  satellites[answer.host] = answer
+  if net.remember(config, answer.host) then
+    learned = true
+  end
   return true
+end
+
+-- A satellite on the peer list that has said nothing this run. It was heard
+-- from once, so its silence is news rather than a machine that was never there.
+local function missing()
+  local quiet = {}
+  for _, host in ipairs(net.peers(config)) do
+    if not satellites[host] then
+      quiet[#quiet + 1] = host
+    end
+  end
+  return quiet
 end
 
 -- Saying only "no answer" hides which half is broken. Whether anything at all
 -- arrived separates a satellite that never heard the question from one that
 -- answered with something unreadable.
 local function problem()
+  if clash then
+    return "two machines are both called " .. clash .. ": rename one of them"
+  end
   if #order > 0 then
+    local quiet = missing()
+    if #quiet > 0 then
+      return "no answer from " .. table.concat(quiet, ", ")
+    end
     return nil
   end
   if seen.unreadable > 0 then
@@ -506,8 +539,14 @@ end
 local arguments = { ... }
 local once = arguments[1] == "--once"
 
-local modem, reason = net.modem()
-if not modem then
+-- Answers arrive whenever they arrive, so they are taken in here and drawn by
+-- the loop below. A listener that drew would repaint the screen from inside
+-- whatever event.pull happened to be running.
+local heard = net.listen(absorb)
+
+local minitel, reason = net.up()
+if not minitel then
+  net.deafen(heard)
   io.stderr:write("ocview: " .. reason .. "\n")
   return 1
 end
@@ -526,8 +565,14 @@ local asked = computer.uptime() - REFRESH_SECONDS
 while true do
   local now = computer.uptime()
   if now - asked >= REFRESH_SECONDS then
-    net.ask(modem)
+    net.ask(minitel, config)
     asked = now
+  end
+  -- a satellite heard from for the first time is worth keeping, and the round
+  -- it was heard in is the only time anything here has a reason to write
+  if learned then
+    core.saveConfig(config)
+    learned = false
   end
   render()
 
@@ -542,8 +587,6 @@ while true do
 
   if name == "interrupted" then
     break
-  elseif name == "modem_message" then
-    absorb(packed)
   elseif name == "screen_resized" then
     layout()
   elseif name == "key_down" then
@@ -558,6 +601,7 @@ while true do
   end
 end
 
+net.deafen(heard)
 gpu.setForeground(FG)
 -- --once exists to be looked at, so it leaves its one screen up
 if not once then

@@ -1,12 +1,24 @@
 -- ocnet: how machines here ask each other for status.
 --
 -- One satellite watches the machines around it and answers questions about
--- them; a main computer asks every satellite in range and shows the lot. Both
--- halves live here so the question and the answer cannot drift apart.
+-- them; a main computer asks every satellite it knows of and shows the lot.
+-- Both halves live here so the question and the answer cannot drift apart.
+--
+-- It rides on Minitel, which is a daemon owning the modems and a library
+-- turning calls into signals for it. What that buys is a hostname instead of
+-- half a card address, and a satellite reachable through whatever computers
+-- sit between here and there rather than only one that is in range.
+--
+-- Nothing here waits for a packet to be acknowledged. A report is replaced by
+-- the next one within seconds, and the blocking form of a Minitel send sits in
+-- a filtered event.pull, which drops every keypress that arrives while it
+-- waits. Programs with a screen receive through net.listen for the same
+-- reason.
 
 local component = require("component")
 local computer = require("computer")
 local core = require("oclib")
+local event = require("event")
 local gt = require("ocgt")
 local lp = require("oclogistics")
 local rc = require("ocrailcraft")
@@ -15,35 +27,124 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.12.0"
+net.VERSION = "0.13.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
 
--- An access point relays other people's packets; it is not a network card and
--- offers no open, send or broadcast. Asking for a modem specifically avoids
--- mistaking one for the other.
-function net.modem()
-  if not component.isAvailable("modem") then
+-- Whoever can reach the internet, asked for by anyone who cannot. The answer
+-- is a hostname, which ocup then fetches through.
+net.GATEWAY_ASK = "ocgateway?"
+net.GATEWAY_REPLY = "ocgateway!"
+
+-- Minitel's own broadcast address. It is delivered to every node on this
+-- segment and deliberately never forwarded, so it finds what is in range and
+-- the peer list finds the rest.
+net.EVERYONE = "~"
+
+-- The word net.up sends to itself, and how long it waits for the daemon to hand
+-- it back. Deliberately not a question, so answering the loopback is not work
+-- every program does once at startup.
+local PROBE = "ocalive?"
+local ALIVE = 1
+
+-- Whether Minitel is installed and its daemon is actually running, and where
+-- packets go once it is. A packet addressed to this machine is handed straight
+-- back by the daemon, and by nothing else, so a loopback that returns is the
+-- whole proof.
+--
+-- The loopback consumes a packet, so a program that wants to hear the network
+-- calls net.listen before this rather than after: a question that arrived first
+-- would otherwise be taken as the proof and then be gone.
+function net.up()
+  local ok, minitel = pcall(require, "minitel")
+  if not ok or type(minitel) ~= "table" then
+    return nil, "minitel is not installed, run ocup"
+  end
+
+  -- a wireless card sits at zero range until told otherwise, which looks
+  -- exactly like a card that does not work. The daemon opens the ports but
+  -- leaves the strength alone.
+  local cards = 0
+  for address in component.list("modem") do
+    cards = cards + 1
+    local card = component.proxy(address)
+    if card.isWireless and card.isWireless() then
+      pcall(card.setStrength, 400)
+    end
+  end
+  if cards == 0 then
     return nil, "no network card, only a relay or nothing at all"
   end
-  local modem = component.getPrimary("modem")
-  modem.open(core.PORT)
-  -- a wireless card sits at zero range until told otherwise, which looks
-  -- exactly like a card that does not work
-  if modem.isWireless() then
-    pcall(modem.setStrength, 400)
+
+  minitel.usend(net.hostname(), core.PORT, PROBE)
+  if not event.pull(ALIVE, "net_msg") then
+    return nil, "the minitel daemon is not running, try: rc minitel start"
   end
-  return modem
+
+  return minitel
 end
 
--- what to call this machine when its readings appear on somebody else's screen
+-- What to call this machine. Minitel reads /etc/hostname when its daemon
+-- starts and names every packet with it, so that file is the truth and the
+-- configured name is what the editor writes into it.
 function net.hostname(config)
-  local name = config and config.hostname
-  if name and name ~= "" then
-    return name
+  local name = os.getenv("HOSTNAME")
+  if not name or name == "" then
+    local file = io.open("/etc/hostname", "r")
+    if file then
+      name = file:read()
+      file:close()
+    end
   end
-  return computer.address():sub(1, 8)
+  if not name or name == "" then
+    name = config and config.hostname
+  end
+  if not name or name == "" then
+    return computer.address():sub(1, 8)
+  end
+  return name
+end
+
+-- Every satellite this machine should hear from: the ones it has heard from
+-- before, which is how a peer list fills itself in, and any added by hand for
+-- a satellite that was never in range to be heard.
+function net.peers(config)
+  local out, seen = {}, {}
+  for _, host in ipairs(config and config.peers or {}) do
+    if host ~= "" and not seen[host] then
+      seen[host] = true
+      out[#out + 1] = host
+    end
+  end
+  return out
+end
+
+-- Records a satellite that answered, so the next question reaches it by name
+-- through the mesh rather than only when it happens to be in range. Returns
+-- true when the list changed and is worth saving.
+function net.remember(config, host)
+  if not config or host == "" or host == net.hostname(config) then
+    return false
+  end
+  config.peers = config.peers or {}
+  for _, each in ipairs(config.peers) do
+    if each == host then
+      return false
+    end
+  end
+  config.peers[#config.peers + 1] = host
+  return true
+end
+
+function net.forget(config, host)
+  for index, each in ipairs(config and config.peers or {}) do
+    if each == host then
+      table.remove(config.peers, index)
+      return true
+    end
+  end
+  return false
 end
 
 -- the machines this computer is responsible for: whatever ocwatch was told to
@@ -124,7 +225,15 @@ local FLUIDS = 12
 -- What travels over the wire. Gauges arrive already rescaled and already
 -- formatted, so the asking machine never turns "42,000" back into a number.
 function net.report(config, cards, movers, fluids)
-  local report = { cards = {}, alerts = {}, items = {}, fluids = {} }
+  local report = {
+    -- the card address is the only thing that tells two satellites sharing a
+    -- hostname apart, and a hostname is what everything else keys on
+    address = computer.address(),
+    cards = {},
+    alerts = {},
+    items = {},
+    fluids = {},
+  }
 
   -- What the item network is doing, if this computer is watching one. Only the
   -- few that are moving travel; the list itself is thousands long. The window
@@ -196,59 +305,117 @@ function net.report(config, cards, movers, fluids)
   return report
 end
 
+-- What one packet holds. Minitel fragments anything longer across several
+-- packets and only reassembles them inside a stream, so a report that does not
+-- fit here arrives as pieces nobody puts back together.
+local function room(minitel, to)
+  local mtu = minitel and minitel.mtu or 8192
+  return mtu - (44 + #net.hostname() + #tostring(to))
+end
+
 -- Answers one request with a report somebody else has already prepared. Returns
 -- a description of what was sent, or nil when the message was not a question
 -- this understands.
-function net.answer(modem, port, remote, request, config, report)
-  if port ~= core.PORT or request ~= net.ASK then
+function net.answer(minitel, port, from, request, report)
+  if port ~= core.PORT then
+    return nil
+  end
+
+  if request == net.GATEWAY_ASK then
+    if not component.isAvailable("internet") then
+      return nil
+    end
+    minitel.usend(from, core.PORT, net.GATEWAY_REPLY)
+    return from .. "  gateway"
+  end
+
+  if request ~= net.ASK then
     return nil
   end
 
   local payload = serialization.serialize(report)
-  local limit = modem.maxPacketSize and modem.maxPacketSize() or 8192
-  if #payload > limit then
-    -- better a short answer than a packet the card silently refuses
+  if #payload > room(minitel, from) then
+    -- better a short answer than one that arrives in pieces
     payload = serialization.serialize({
+      address = computer.address(),
       cards = { { name = "too many machines to send", gauges = {} } },
       alerts = {},
     })
   end
 
-  modem.send(remote, core.PORT, net.REPLY, net.hostname(config), payload)
-  return tostring(remote):sub(1, 8) .. "  " .. #payload .. " bytes"
+  minitel.usend(from, core.PORT, net.REPLY .. "\n" .. payload)
+  return from .. "  " .. #payload .. " bytes"
 end
 
--- Puts the question to everyone in range. The answers come back as ordinary
--- modem messages, which the asker reads in its own event loop through decode:
--- blocking here until a window ran out was what made a tablet ignore the
--- keyboard for seconds at a time.
-function net.ask(modem)
-  return modem.broadcast(core.PORT, net.ASK)
+-- Puts the question to everyone in range, and by name to every satellite this
+-- machine has heard from before. A broadcast is never forwarded, so the peer
+-- list is the only thing that crosses the mesh.
+function net.ask(minitel, config)
+  minitel.usend(net.EVERYONE, core.PORT, net.ASK)
+  local here = net.hostname(config)
+  for _, host in ipairs(net.peers(config)) do
+    if host ~= here then
+      minitel.usend(host, core.PORT, net.ASK)
+    end
+  end
 end
 
--- Reads one modem message. Returns the answer it carries, or nil, and with nil
--- a reason when the message was an answer that could not be understood. A
--- satellite still on an older ocwatch sends a bare list of machines, which
--- lands here as unreadable and is reported as a version mismatch.
-function net.decode(port, remote, kind, host, payload)
-  if port ~= core.PORT or kind ~= net.REPLY then
+-- Asks whoever can reach the internet to say so. Answered by any machine
+-- running ocwatch or ocserve that has an internet card.
+function net.askGateway(minitel)
+  minitel.usend(net.EVERYONE, core.PORT, net.GATEWAY_ASK)
+end
+
+-- Reads one message off the network. Returns the answer it carries, or nil, and
+-- with nil a reason when the message was an answer that could not be
+-- understood. A satellite still on the old raw broadcast is not heard at all,
+-- which is what a version this far apart looks like.
+function net.decode(port, from, data)
+  if port ~= core.PORT or type(data) ~= "string" then
+    return nil
+  end
+  local body = data:match("^" .. net.REPLY .. "\n(.*)$")
+  if not body then
     return nil
   end
 
-  local ok, report = pcall(serialization.unserialize, payload)
+  local ok, report = pcall(serialization.unserialize, body)
   if not ok or type(report) ~= "table" or type(report.cards) ~= "table" then
     return nil, "unreadable"
   end
 
   return {
-    host = host or tostring(remote):sub(1, 8),
-    address = remote,
+    host = from,
+    address = report.address,
     cards = report.cards,
     alerts = report.alerts or {},
     items = report.items or {},
     fluids = report.fluids or {},
     over = report.over,
   }
+end
+
+-- Hands every packet that arrives to one function, which is how a program with
+-- a screen hears the network without ever blocking on it. The handler is called
+-- from inside whatever event.pull the program happens to be in, so it should
+-- put the packet somewhere and return rather than draw anything.
+function net.listen(handler)
+  local function heard(_, from, port, data)
+    -- the loopback net.up sends itself is this library proving the daemon is
+    -- alive, and is nobody else's packet to see
+    if port == core.PORT and data == PROBE then
+      return
+    end
+    handler(from, port, data)
+  end
+  event.listen("net_msg", heard)
+  event.listen("net_broadcast", heard)
+  return heard
+end
+
+function net.deafen(token)
+  event.ignore("net_msg", token)
+  event.ignore("net_broadcast", token)
 end
 
 return net
