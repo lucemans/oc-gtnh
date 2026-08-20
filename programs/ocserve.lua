@@ -12,13 +12,14 @@
 -- machines with nobody looking at its screen.
 
 local component = require("component")
+local computer = require("computer")
 local core = require("oclib")
 local event = require("event")
 local keyboard = require("keyboard")
 local lp = require("oclogistics")
 local net = require("ocnet")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
 
 -- how many items are counted between two questions, and how long the loop
 -- listens before it goes back to counting. One count is a server tick.
@@ -26,6 +27,9 @@ local PER_TURN = 10
 local REST = 0.05
 -- how many risers, and how many fallers, are worth sending
 local MOVERS = 6
+-- how long between reads of the fluid network. One call answers with every name
+-- and every amount, so this is a clock rather than a memory question.
+local FLUIDS = 10
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999
@@ -61,11 +65,32 @@ local builder = proxy and lp.builder(proxy)
 local items = proxy and lp.available(proxy) or {}
 local cursor, movers = 1, {}
 
+-- The fluid network is a pipe of its own and costs one call to read whole, so
+-- unlike the items it needs no counting between questions and no memory kept
+-- back for it. The amounts travel as well as what is moving.
+local fluidProxy = lp.fluidPipe()
+local fluids, readAt = {}, 0
+
+local function readFluids()
+  readAt = computer.uptime()
+  local fresh = lp.fluids(fluidProxy)
+  if fresh then
+    fluids = lp.merge(fluids, fresh, readAt)
+  end
+end
+
+if fluidProxy then
+  readFluids()
+end
+
 say("ocserve v" .. VERSION .. "   port " .. core.PORT, WHITE)
 say("  serving " .. #net.machines(config) .. " machines", DIM)
 say("  wireless " .. tostring(modem.isWireless()), DIM)
 if builder then
   say("  counting " .. #items .. " items", DIM)
+end
+if fluidProxy then
+  say("  watching " .. #fluids .. " fluids", DIM)
 end
 say("  [q] to stop", DIM)
 say("")
@@ -80,16 +105,21 @@ while true do
   elseif name == "modem_message" then
     -- read on demand: nothing else here is looking at these machines, so there
     -- is no earlier reading to answer from
-    local report = net.report(config, net.machines(config), movers)
+    local report = net.report(config, net.machines(config), movers, fluids)
     local sent = net.answer(modem, port, remote, request, config, report)
     if sent then
       say("  answered " .. sent, GREEN)
     end
-  elseif name == nil and builder and items[1] then
-    local finished
-    cursor, finished = lp.sweep(proxy, builder, items, cursor, PER_TURN)
-    if finished then
-      movers = lp.movers(items, MOVERS)
+  elseif name == nil then
+    if fluidProxy and computer.uptime() - readAt >= FLUIDS then
+      readFluids()
+    end
+    if builder and items[1] then
+      local finished
+      cursor, finished = lp.sweep(proxy, builder, items, cursor, PER_TURN)
+      if finished then
+        movers = lp.movers(items, MOVERS)
+      end
     end
   end
 

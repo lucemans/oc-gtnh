@@ -11,8 +11,12 @@
 -- server tick each and finds nothing new, and is what a machine without that
 -- memory is left with.
 --
+-- The fluid network is a second pipe answering a different question, and it is
+-- nothing like the same job: getAvailableFluids brings every name and every
+-- amount back in one small call, so it is simply read on a clock.
+--
 -- A machine with a network card answers for what it is watching as well as
--- showing it, since it is the only one that can see the item network at all.
+-- showing it, since it is the only one that can see either network at all.
 --
 -- [r] reads the network again now. It is refused when the memory for it is not
 -- there, because asking anyway does not fail the call, it ends the computer.
@@ -27,7 +31,7 @@ local net = require("ocnet")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.12.0"
+local VERSION = "0.13.0"
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -47,6 +51,9 @@ local ROOM = lp.ROOM
 -- rather than by this.
 local COUNTED = 5
 local NAMED = 120
+-- how long between reads of the fluid network, which is one call and answers
+-- with the names as well, so nothing about the item side applies to it
+local FLUIDS = 10
 
 local gpu = component.gpu
 local paint = core.painter(gpu)
@@ -56,8 +63,16 @@ local paint = core.painter(gpu)
 local NARROWEST = 34
 local COUNT_W = 10
 local PANEL_W = 34
+-- A fluid is measured in millibuckets and a base holds millions of them, so the
+-- figure is wider than an item count and the panel it sits in is wider with it.
+local FLUID_W = 40
+local FLUID_COUNT_W = 12
 
-local W, H, TOP, BOTTOM, ROWS, COLUMNS, COLUMN_W, PANEL_X, MOVERS
+-- whether there is a fluid network here at all, which settles the layout and is
+-- known before the first draw
+local fluidProxy
+
+local W, H, TOP, BOTTOM, ROWS, COLUMNS, COLUMN_W, PANEL_X, FLUID_X, MOVERS
 
 local function layout()
   W, H = core.viewport(gpu)
@@ -65,10 +80,19 @@ local function layout()
   BOTTOM = H - 1
   ROWS = BOTTOM - TOP + 1
 
-  -- the panel only earns its place while a column of items is still left
+  -- a panel only earns its place while a column of items is still left over
   local grid = W - PANEL_W
   PANEL_X = grid >= NARROWEST and grid + 1 or nil
   grid = PANEL_X and grid or W
+
+  -- the fluids go between the items and what is moving, because both of those
+  -- are lists of what the base holds and the other panel is a list of news
+  FLUID_X = nil
+  if fluidProxy and grid - FLUID_W >= NARROWEST then
+    grid = grid - FLUID_W
+    FLUID_X = grid + 1
+  end
+
   COLUMNS = math.max(1, math.floor(grid / NARROWEST))
   COLUMN_W = math.floor(grid / COLUMNS)
   -- as many risers and fallers as the panel has room for. A short list was
@@ -103,10 +127,11 @@ local function right(text, width)
 end
 
 local items, total, note = {}, 0, nil
+local fluids = {}
 local movers = {}
 local scroll = 0
 local cursor = 1
-local lastRead, lastCount = 0, 0
+local lastRead, lastCount, lastFluids = 0, 0, 0
 local proxy, builder, modem
 
 -------------------------------------------------------------------------------
@@ -133,6 +158,7 @@ local function readCache()
       kept[#kept + 1] = {
         itemId = tonumber(itemId),
         itemData = tonumber(itemData),
+        key = itemId .. ":" .. itemData,
         amount = tonumber(amount),
         name = name,
       }
@@ -224,8 +250,28 @@ end
 -- pressure of asking for more, so a machine whose last read has not been
 -- cleared up counts instead, and the counting is what makes the next read
 -- affordable again.
+local function readFluids(now)
+  local fresh = lp.fluids(fluidProxy)
+  if not fresh then
+    return false
+  end
+  -- a read hands back new tables, and the window a rate is measured over lives
+  -- on the old ones, exactly as it does for an item
+  fluids = lp.merge(fluids, fresh, now)
+  return true
+end
+
 local function refresh()
   local now = computer.uptime()
+  local changed = false
+
+  -- The fluid network is one small call that brings the names and the amounts
+  -- back together, so none of what follows about memory applies to it and it
+  -- happens whether or not the item side can afford anything.
+  if fluidProxy and now - lastFluids >= FLUIDS then
+    lastFluids = now
+    changed = readFluids(now)
+  end
 
   -- Where a read is out of reach there is nothing else to do, so the counting
   -- runs on. Where a read is affordable the counting is worse than useless: a
@@ -236,8 +282,12 @@ local function refresh()
   -- memory that has gone, and nothing here makes the collector run on its own.
   -- Taking the figure at its word is what made a read wait for the one after
   -- it, and a change take twenty seconds to appear instead of five.
+  if not proxy then
+    return changed
+  end
+
   if computer.freeMemory() < ROOM and lp.reclaim() < ROOM then
-    return count()
+    return count() or changed
   end
 
   if now - lastRead >= NAMED then
@@ -255,7 +305,7 @@ local function refresh()
     return true
   end
 
-  return false
+  return changed
 end
 
 local function render()
@@ -274,6 +324,36 @@ local function render()
           VALUE, BG)
         paint.write(x + COUNT_W + 1, TOP + row,
           fit(item.name, COLUMN_W - COUNT_W - 2), FG, BG)
+      end
+    end
+  end
+
+  -- What the fluid network holds, most of it first. A fluid moving is shown
+  -- beside it rather than in the panel next door: an item count and a figure in
+  -- millibuckets are not the same size of number, and a row of them sorted
+  -- together says nothing.
+  if FLUID_X then
+    paint.write(FLUID_X, TOP,
+      fit("  " .. #fluids .. " fluids, mB", FLUID_W), DIM, BAR)
+    for rank = 1, ROWS - 1 do
+      local fluid = fluids[rank]
+      local y = TOP + rank
+      if fluid and y <= BOTTOM then
+        local moving = ""
+        if fluid.rate and fluid.rate ~= 0 then
+          moving = (fluid.rate > 0 and "+" or "") .. core.comma(fluid.rate)
+        end
+        local room = FLUID_W - FLUID_COUNT_W - 1
+        if moving ~= "" then
+          room = room - unicode.len(moving) - 1
+        end
+        paint.write(FLUID_X, y, right(core.comma(fluid.amount), FLUID_COUNT_W),
+          VALUE, BG)
+        paint.write(FLUID_X + FLUID_COUNT_W + 1, y, fit(fluid.name, room), FG, BG)
+        if moving ~= "" then
+          paint.write(FLUID_X + FLUID_W - unicode.len(moving), y, moving,
+            fluid.rate > 0 and VALUE or FAILED, BG)
+        end
       end
     end
   end
@@ -320,10 +400,18 @@ local config = core.loadConfig()
 modem = net.modem()
 
 proxy = lp.requestPipe()
-if not proxy then
+-- A fluid request pipe is a block of its own, so a base can have one network
+-- and not the other. Finding it is what decides whether the screen keeps room
+-- for the fluids, which is why the layout is settled again here.
+fluidProxy = lp.fluidPipe()
+layout()
+
+if not proxy and not fluidProxy then
   note = lp.pipes()[1] and "no request pipe attached"
     or "no Logistics Pipe attached"
-else
+end
+
+if proxy then
   builder = lp.builder(proxy)
 
   local kept, network = readCache()
@@ -333,6 +421,11 @@ else
     saying("reading the network, this takes a moment")
     scan()
   end
+end
+
+if fluidProxy then
+  lastFluids = computer.uptime()
+  readFluids(lastFluids)
 end
 
 -- Drawing is not free: every cell on the screen is built again to find out
@@ -356,7 +449,7 @@ while true do
     changed = refresh()
   elseif name == "modem_message" and modem then
     net.answer(modem, packed[4], packed[3], packed[6], config,
-      net.report(config, net.machines(config), movers))
+      net.report(config, net.machines(config), movers, fluids))
   elseif name == "interrupted" then
     break
   elseif name == "screen_resized" then
@@ -369,7 +462,13 @@ while true do
     if code == keyboard.keys.q then
       break
     elseif code == keyboard.keys.r then
-      if computer.freeMemory() < ROOM and lp.reclaim() < ROOM then
+      if fluidProxy then
+        lastFluids = computer.uptime()
+        readFluids(lastFluids)
+      end
+      if not proxy then
+        note = nil
+      elseif computer.freeMemory() < ROOM and lp.reclaim() < ROOM then
         note = "not enough memory to read the whole network again yet"
       else
         note = nil

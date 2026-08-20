@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.12.0"
+local VERSION = "0.13.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -257,6 +257,15 @@ local function planBlocks()
           rows[#rows + 1] = { kind = "item", item = item }
         end
       end
+      -- and what the fluid network holds. The whole stock is worth a line where
+      -- an item is only worth one while it moves: a base keeps tens of fluids,
+      -- and how much lubricant there is left is the question being asked.
+      if mode ~= "alerts" and (answer.fluids or {})[1] then
+        rows[#rows + 1] = { kind = "heading", text = "fluids, mB" }
+        for _, fluid in ipairs(answer.fluids) do
+          rows[#rows + 1] = { kind = "fluid", fluid = fluid }
+        end
+      end
       for _, card in ipairs(shown) do
         if mode == "columns" and not card.compact then
           -- in this view a machine is its gauges, with its own name on each,
@@ -337,6 +346,30 @@ local function drawRow(row, x, y, width)
       rate > 0 and OK_COLOR or ALARM, BG)
     write(x + 11, y, fit(tostring(row.item.name), math.max(0, width - 11)),
       FG, BG)
+  elseif row.kind == "fluid" then
+    -- The amount first, because that is the question, and what it is doing
+    -- against the right edge where the eye can run down it. A fluid is counted
+    -- in millibuckets, so the figure is wider than an item count.
+    local amount = core.comma(row.fluid.amount or 0)
+    write(x + 1, y, string.rep(" ", math.max(0, 12 - unicode.len(amount)))
+      .. amount, FG, BG)
+    local rate = row.fluid.rate or 0
+    local moving = ""
+    if rate ~= 0 then
+      moving = (rate > 0 and "+" or "") .. core.comma(rate)
+    end
+    -- a satellite on its own gets the whole screen for a column, and a rate
+    -- pushed to the far edge of that is a figure nobody can tie to its name
+    local span = math.min(width, 48)
+    local room = math.max(0, span - 14)
+    if moving ~= "" then
+      room = math.max(0, room - unicode.len(moving) - 1)
+    end
+    write(x + 14, y, fit(tostring(row.fluid.name), room), DIM, BG)
+    if moving ~= "" then
+      write(x + span - unicode.len(moving), y, moving,
+        rate > 0 and OK_COLOR or ALARM, BG)
+    end
   elseif row.kind == "name" then
     write(x + 1, y, fit(row.card.name or "?", width - 13), FG, BG)
     if row.card.status then

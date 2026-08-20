@@ -3771,11 +3771,11 @@ end)
 
 test("a fresh read keeps the windows a rate is being measured over", function()
   local lplib = require("oclogistics")
-  local items = { { itemId = 4, itemData = 0, name = "Cobblestone",
+  local items = { { key = "4:0", name = "Cobblestone",
     amount = 100, was = 100, when = 1000 } }
   local fresh = {
-    { itemId = 4, itemData = 0, name = "Cobblestone", amount = 700 },
-    { itemId = 9, itemData = 1, name = "Redstone", amount = 5 },
+    { key = "4:0", name = "Cobblestone", amount = 700 },
+    { key = "9:1", name = "Redstone", amount = 5 },
   }
 
   local merged = lplib.merge(items, fresh, 1180)

@@ -15,7 +15,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.10.0"
+net.VERSION = "0.11.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -116,10 +116,15 @@ function net.limitOf(entry, ordinal)
   return entry and entry.limits and entry.limits[ordinal] or nil
 end
 
+-- How many fluids travel. A base stocks tens of them where it stocks thousands
+-- of items, so the list is short enough to send nearly whole; the bound is here
+-- because a packet is 8 KB and a machine is worth more of it than a fluid.
+local FLUIDS = 12
+
 -- What travels over the wire. Gauges arrive already rescaled and already
 -- formatted, so the asking machine never turns "42,000" back into a number.
-function net.report(config, cards, movers)
-  local report = { cards = {}, alerts = {}, items = {} }
+function net.report(config, cards, movers, fluids)
+  local report = { cards = {}, alerts = {}, items = {}, fluids = {} }
 
   -- What the item network is doing, if this computer is watching one. Only the
   -- few that are moving travel; the list itself is thousands long. The window
@@ -130,6 +135,17 @@ function net.report(config, cards, movers)
   end
   if report.items[1] then
     report.over = lp.OVER
+  end
+
+  -- What the fluid network holds, if this computer is watching one. The amount
+  -- itself travels as well as what it is doing: a fluid network is short enough
+  -- for the whole stock to be news, where an item network is not.
+  for rank, fluid in ipairs(fluids or {}) do
+    if rank > FLUIDS then
+      break
+    end
+    report.fluids[rank] =
+      { name = fluid.name, amount = fluid.amount, rate = fluid.rate }
   end
 
   for _, card in ipairs(cards) do
@@ -229,6 +245,7 @@ function net.decode(port, remote, kind, host, payload)
     cards = report.cards,
     alerts = report.alerts or {},
     items = report.items or {},
+    fluids = report.fluids or {},
     over = report.over,
   }
 end

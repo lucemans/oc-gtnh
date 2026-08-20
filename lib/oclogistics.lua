@@ -11,7 +11,7 @@ local core = require("oclib")
 
 local lp = {}
 
-lp.VERSION = "0.15.0"
+lp.VERSION = "0.16.0"
 
 function lp.isPipe(address)
   return core.has(core.methodsOf(address), "getPipe")
@@ -215,12 +215,16 @@ function lp.available(proxy, howMany)
       -- A meta variant that is a real item -- wool by colour, a dust by grade --
       -- is neither damageable nor tagged, and stays.
       if id.hasTagCompound() ~= true and id.isDamageable() ~= true then
+        local itemId, itemData = id.getId(), id.getData()
         kept = kept + 1
         items[kept] = {
           name = id.getName(),
           amount = amounts[index],
-          itemId = id.getId(),
-          itemData = id.getData(),
+          itemId = itemId,
+          itemData = itemData,
+          -- what names this entry wherever a read is folded into what is
+          -- already known, which a fluid has as well and spells differently
+          key = itemId .. ":" .. itemData,
           -- where in the answer it came, which is what lets a later read be
           -- taken as counts alone
           slot = index,
@@ -265,6 +269,87 @@ function lp.count(proxy, builder, itemId, itemData)
   end
   local amount = lp.invoke(proxy, "getItemAmount", id)
   return type(amount) == "number" and amount or nil
+end
+
+-------------------------------------------------------------------------------
+-- the fluid network, which is a different pipe answering a different question
+
+-- A fluid request pipe is its own block: an item request pipe answers no
+-- getAvailableFluids and a fluid one answers no getAvailableItems, so a base
+-- with both has two pipes and a program looks for each on its own.
+function lp.fluidPipe()
+  for _, address in ipairs(lp.pipes()) do
+    local proxy = lp.pipe(address)
+    if type(proxy) == "table" and type(proxy.getAvailableFluids) == "table" then
+      return proxy, address
+    end
+  end
+  return nil
+end
+
+-- The builder that names a fluid to the network, which takes the Forge registry
+-- name rather than the two numbers an item takes.
+function lp.fluidBuilder(proxy)
+  local object = lp.invoke(proxy, "getLP")
+  if type(object) ~= "table" then
+    return nil
+  end
+  local builder = lp.invoke(object, "getFluidIdentifierBuilder")
+  return type(builder) == "table" and builder or nil
+end
+
+-- What a fluid is called on a screen, which is not what it is called in the
+-- registry: the network speaks of "molten.epoxid" and nobody else does.
+--
+-- Building an identifier and reading its name costs no server tick -- only
+-- getAvailableFluids, getFluidAmount and makeRequest are queued -- so every
+-- fluid in the network can be named on every read.
+local function shownAs(builder, registry)
+  if not builder then
+    return nil
+  end
+  lp.invoke(builder, "setFluidName", registry)
+  local id = lp.invoke(builder, "build")
+  if type(id) ~= "table" then
+    return nil
+  end
+  local name = lp.invoke(id, "getLocalizedName")
+  if type(name) ~= "string" or name == "" then
+    return nil
+  end
+  return name
+end
+
+-- Everything the fluid network holds, in millibuckets, the most of it first.
+--
+-- getAvailableFluids answers with a plain table of registry name to amount, so
+-- there is nothing to read out of it afterwards and no cheaper way to take it:
+-- one call is the whole answer. That is the opposite of the item network, where
+-- the names are nearly all of what a read costs and most reads are taken as
+-- counts alone against the names an earlier one established.
+--
+-- It is also a far shorter list. A base stocks thousands of items and tens of
+-- fluids, so none of the memory the item side spends its life managing applies
+-- here: a read is small enough to make whenever anybody wants one.
+function lp.fluids(proxy)
+  local map = lp.invoke(proxy, "getAvailableFluids")
+  if type(map) ~= "table" then
+    return nil, "getAvailableFluids answered nothing"
+  end
+
+  local builder = lp.fluidBuilder(proxy)
+  local fluids = {}
+  for registry, amount in pairs(map) do
+    if type(amount) == "number" then
+      fluids[#fluids + 1] = {
+        key = registry,
+        name = shownAs(builder, registry) or registry,
+        amount = amount,
+      }
+    end
+  end
+  table.sort(fluids, function(a, b) return a.amount > b.amount end)
+  return fluids
 end
 
 -- What a rate is measured over, and how to say so on a screen. The two belong
@@ -359,15 +444,18 @@ end
 -- program has spent minutes collecting. What is already known keeps its window
 -- and takes the new count as an ordinary reading; what is new starts a window
 -- of its own; what the network no longer has is gone.
+--
+-- Items and fluids fold the same way, since an entry of either sort carries the
+-- key that names it.
 function lp.merge(items, fresh, now)
   local known = {}
   for _, item in ipairs(items) do
-    known[item.itemId .. ":" .. item.itemData] = item
+    known[item.key] = item
   end
 
   local out = {}
   for _, entry in ipairs(fresh) do
-    local already = known[entry.itemId .. ":" .. entry.itemData]
+    local already = known[entry.key]
     if already then
       -- the position is the new one: a read is what settles where things are
       already.slot = entry.slot
