@@ -528,7 +528,23 @@ test("ocup enables the daemons it installed", function()
   local cfg = oc.files["/etc/rc.cfg"] or ""
   check(contains(cfg, "minitel"), "installed a daemon and never enabled it")
   check(contains(oc.printed(), "enabled minitel"), "did not say what it enabled")
-  check(contains(oc.printed(), "rc minitel start"), "did not say how to start it")
+
+  -- installed, enabled and not running is the state every program below has to
+  -- detect and explain, so it is worth not creating
+  check(contains(table.concat(oc.executed, " "), "rc minitel start"),
+    "enabled a daemon and left it stopped")
+  check(contains(oc.printed(), "started them"), "did not say it started them")
+end)
+
+test("ocup tells OpenOS the name it just gave the machine", function()
+  oc.components = { INTERNET }
+  oc.respond = serveDaemons()
+
+  oc.run("ocup")
+  -- OpenOS keeps its own copy per shell, so a name written and not announced is
+  -- a machine that goes on calling itself nothing
+  check(contains(table.concat(oc.executed, " "), "hostname --update"),
+    "named the machine and told nothing else about it")
 end)
 
 test("ocup leaves a service somebody else enabled alone", function()
@@ -1907,6 +1923,194 @@ test("ocview says so when the daemon is not running", function()
   oc.run("ocview", "--once")
   check(contains(oc.printed(), "minitel daemon is not running"),
     "did not say why it could not ask")
+end)
+
+-- What the base wrote down, on somebody else's screen. The records travel with
+-- the collector's own clock, because a record is stamped with the uptime of the
+-- machine that wrote it and that number means nothing anywhere else.
+
+local function logLine(at, host, service, level, message)
+  return string.format("%.2f\t%s\t%s\t%d\t%s\n", at, host, service, level, message)
+end
+
+test("the log is read newest first, with what raised each record", function()
+  oc.components = {}
+  local notify = require("ocnotify")
+  oc.files[notify.LOG] =
+    logLine(100, "boiler-room", "ocwatch", 6, "steamfull cleared at 12,000 L")
+    .. logLine(140, "tank-farm", "ocwatch", 3, "diesel low tripped at 41,000 L")
+
+  local records = notify.records(20)
+  check(records ~= nil, "found no log at all")
+  check(records and #records == 2, "read " .. #(records or {}) .. " records, not two")
+  check(records and records[1].message:find("diesel low", 1, true) ~= nil,
+    "did not put the newest first")
+  check(records and records[1].level == 3, "lost the severity")
+  check(records and records[1].host == "tank-farm", "lost which machine it came from")
+  check(records and records[2].service == "ocwatch", "lost what raised it")
+end)
+
+test("a machine with no log says so, rather than saying it is empty", function()
+  oc.components = {}
+  local notify = require("ocnotify")
+  check(notify.records(20) == nil, "an absent log read as an empty one")
+  oc.files[notify.LOG] = ""
+  check(#notify.records(20) == 0, "an empty log did not read as empty")
+end)
+
+test("only the end of a long log is read", function()
+  oc.components = {}
+  local notify = require("ocnotify")
+  local lines = {}
+  for index = 1, 400 do
+    lines[#lines + 1] = logLine(index, "boiler-room", "ocwatch", 6,
+      "record number " .. index)
+  end
+  oc.files[notify.LOG] = table.concat(lines)
+
+  local records = notify.records(5)
+  check(#records == 5, "read " .. #records .. " records, not five")
+  check(records[1].message == "record number 400", "did not read the end")
+  -- the read lands in the middle of a line, and half a line is not a record
+  for _, record in ipairs(records) do
+    check(record.message:find("^record number %d+$") ~= nil,
+      "kept a half line: " .. record.message)
+  end
+end)
+
+test("ocview shows what the collector has written down", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({ view = "log" })
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "main", "oclog!\n"
+    .. require("serialization").serialize({
+      now = 500,
+      records = {
+        { at = 440, host = "tank-farm", service = "ocwatch", level = 3,
+          message = "diesel low tripped at 41,000 L" },
+        { at = 200, host = "boiler-room", service = "ocwatch", level = 6,
+          message = "steamfull cleared at 12,000 L" },
+      },
+    }))
+
+  local ok, reason = oc.run("ocview", "--once")
+  check(ok, "ocview crashed: " .. tostring(reason))
+
+  local shown = oc.screen()
+  check(contains(shown, "diesel low tripped"), "did not show the record")
+  check(contains(shown, "tank-farm"), "did not say which machine raised it")
+  check(contains(shown, "ocwatch"), "did not say what raised it")
+  check(contains(shown, "60s"), "did not say how long ago: " .. tostring(shown:match("[^\n]*diesel[^\n]*")))
+  check(contains(shown, "2 records from main"), "did not head the view")
+  check(contains(shown, "1 of them errors"), "did not count the errors")
+end)
+
+test("ocview asks the collector for the log, and only in the log view", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    view = "log",
+    notify = { syslog = { collector = "main" } },
+  })
+  startMinitel("tablet")
+
+  oc.run("ocview", "--once")
+  local askedLog = false
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "oclog?" and packet.dest == "main" then
+      askedLog = true
+    end
+  end
+  check(askedLog, "never asked the collector for the log")
+end)
+
+test("ocview in the machine views asks for no log at all", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({ view = "columns" })
+  startMinitel("tablet")
+
+  oc.run("ocview", "--once")
+  for _, packet in ipairs(outbound(modem)) do
+    check(packet.data ~= "oclog?",
+      "fetched a screenful of history nobody was looking at")
+  end
+end)
+
+test("a satellite answers for the log it keeps", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  local notify = require("ocnotify")
+  oc.files[notify.LOG] =
+    logLine(90, "boiler-room", "ocwatch", 3, "diesel low tripped at 41,000 L")
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "oclog?")
+
+  oc.run("ocserve", "--once")
+  oc.pump()
+
+  local reply
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 7) == "oclog!\n" then
+      reply = packet
+    end
+  end
+  check(reply ~= nil, "no log answer went out")
+
+  local answer = require("ocnet").decodeLog(PORT, "boiler-room", reply.data)
+  check(answer ~= nil, "the answer could not be read back")
+  check(answer and #answer.records == 1, "sent no records")
+  check(answer and answer.now > 0, "sent no clock to read the stamps against")
+end)
+
+test("a machine with no log answers nothing rather than answering empty", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "oclog?")
+
+  oc.run("ocserve", "--once")
+  oc.pump()
+
+  for _, packet in ipairs(outbound(modem)) do
+    check(type(packet.data) ~= "string" or packet.data:sub(1, 7) ~= "oclog!\n",
+      "answered for a log it does not have")
+  end
+end)
+
+test("a machine agrees with its daemon about its own name", function()
+  oc.components = {}
+  local net = require("ocnet")
+  oc.files["/etc/hostname"] = "boiler-room"
+
+  -- OpenOS keeps its own copy per shell, from that file, at whatever moment
+  -- hostname --update last ran. Believing it over the file is how a machine
+  -- addresses its own loopback to a name that is not its own.
+  oc.env.HOSTNAME = "an-older-name"
+  local name = net.hostname({ hostname = "a-third-name" })
+
+  check(name == "boiler-room",
+    "took the shell's word over the daemon's: " .. tostring(name))
+end)
+
+test("a name a packet cannot carry is refused", function()
+  oc.components = {}
+  local net = require("ocnet")
+  check(net.validHostname("boiler-room") == true, "refused a plain name")
+  check(net.validHostname("main.2") == true, "refused a name with a dot")
+  check(net.validHostname("") == nil, "took an empty name")
+  check(net.validHostname("boiler room") == nil, "took a name with a space")
+  -- a leading tilde is how Minitel marks a broadcast
+  check(net.validHostname("~everyone") == nil, "took the broadcast marker as a name")
+  check(net.validHostname(string.rep("a", 64)) == nil, "took a name too long to send")
 end)
 
 -- Fetching through another machine, which is the whole point of P10: one

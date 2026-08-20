@@ -12,6 +12,7 @@ local event = require("event")
 local filesystem = require("filesystem")
 local keyboard = require("keyboard")
 local serialization = require("serialization")
+local sh = require("sh")
 local term = require("term")
 
 local VERSION = "0.19.0"
@@ -827,6 +828,10 @@ if not (readFile("/etc/hostname") or ""):match("%S") then
     named = computer.address():sub(1, 8)
   end
   writeFile("/etc/hostname", named)
+  -- OpenOS keeps its own copy of the name per shell, read out of that file
+  -- whenever this last ran, so without it everything else on the machine goes
+  -- on calling it nothing at all
+  pcall(sh.execute, _ENV, "hostname --update")
 end
 
 local wanted = { table.unpack(SERVICES) }
@@ -866,10 +871,16 @@ end
 if named then
   write("\n  named this machine " .. named .. "\n", CYAN)
 end
+
+-- A daemon that is installed and enabled and not running is the state every
+-- program below has to detect and explain, so it is worth not creating. rc
+-- starting one that is already going does nothing.
 if #enabled > 0 then
   write((named and "" or "\n") .. "  enabled " .. table.concat(enabled, ", ")
     .. "\n", CYAN)
-  write("  they start on the next boot, or now with:  rc "
-    .. enabled[1] .. " start\n", DIM)
+  for _, name in ipairs(enabled) do
+    pcall(sh.execute, _ENV, "rc " .. name .. " start")
+  end
+  write("  started them\n", CYAN)
 end
 paint(WHITE)

@@ -76,10 +76,39 @@ also why a program with a screen receives through `net.listen`, which registers 
 handler that buffers what arrived and returns: a listener runs inside whatever
 `event.pull` the program is already in, so nothing has to wait for the network.
 
+### Names
+
 A machine is named by `/etc/hostname`, which the daemon reads once when it
 starts, so renaming one wants `rc minitel restart`. `ocwatch --edit` has a
 network screen that writes the name, and `ocup` writes one on a machine that has
 none yet.
+
+There are three places a name can be, and only one of them is the truth:
+
+| where | who reads it | when it is written |
+| --- | --- | --- |
+| `/etc/hostname` | the Minitel daemon, at start | `ocup`, and the network screen |
+| `HOSTNAME` in the shell | OpenOS, and anything asking it | `hostname --update`, per shell |
+| `hostname` in `/etc/ocgt.cfg` | nothing, now | the network screen, as a record of what was asked for |
+
+The file is the truth, because the daemon names every packet out of it and
+nothing else gets a say. `HOSTNAME` is a copy taken whenever `hostname --update`
+last ran, so it can name something the daemon has never heard of, and believing
+it over the file is how a machine addresses its own loopback to a name that is
+not its own. Both places are written together whenever the name changes, so they
+do not drift, but the file is what gets asked.
+
+A name has to be something a packet can carry: letters, digits, dot, dash and
+underscore, starting with a letter or digit, up to 63 characters. The network
+screen refuses anything else rather than writing a name that cannot be routed
+to. A leading `~` is refused in particular, because that is how Minitel marks a
+broadcast.
+
+Minitel ships an `mtcfg` for all of this, in a package called `minitel-util`.
+Nothing here needs it. It sets the hostname, enables the service and starts it,
+and writes `/etc/minitel.cfg`, and `ocup` does the first three itself while the
+daemon writes the fourth with the defaults this base wants anyway. Running it is
+harmless; skipping it costs nothing.
 
 A Minitel broadcast is delivered to every node on the same segment and
 deliberately never forwarded, which is exactly as far as the old broadcast
@@ -110,6 +139,20 @@ Every machine keeps its own copy in `/home/ocgt.log`. Naming a collector in
 name that is receives, everybody else relays to it, and each one still keeps its
 own copy, so a satellite that loses the network loses nothing. `syslogd` reads
 its settings at start, so a change wants `rc syslogd reload`.
+
+`ocview`'s `log` view is how you read them. It asks the collector for the last
+few records and shows each one as how long ago, which machine raised it, what
+raised it, and what it said, in red for an error and grey for the routine.
+
+Only the last 4 KB of the file is ever read. It grows all week and is never
+rewritten, so reading it whole to show a screenful is how a small computer runs
+out of memory looking at its own history. Only the view that shows them fetches
+them, for the same reason: it is a screenful that barely changes, where the
+machines change every two seconds.
+
+A record is stamped with the uptime of the machine that wrote it, which means
+nothing anywhere else, so the answer carries the collector's own clock beside
+the records and the ages on screen are worked out against that.
 
 ### One internet card for the base
 
@@ -175,12 +218,17 @@ The mod-specific ones all build on `oclib` and know nothing of each other. A pro
 another mod is a new library and one more `or` rather than an edit to an
 existing one.
 
-`ocview` has three views, cycled with `v` and remembered between runs: `columns`
+`ocview` has four views, cycled with `v` and remembered between runs: `columns`
 gives every satellite its own column of one-line machines, `cards` gives one
-machine at a time with a wide bar, and `alerts` shows only what is wrong. A
+machine at a time with a wide bar, `alerts` shows only what is wrong, and `log`
+shows what the base has written down. A
 machine set to compact in `ocwatch` draws as one line with no bar wherever it is
 shown, and the order of the watch list is the order on screen, so a group of
 pipes sits under the tank they belong to.
+
+The first three are what the base is doing now. `log` is what it did while
+nobody was watching, which is the only view that answers "what happened at four
+this morning".
 
 `ocwatch --edit` is one drawn screen listing what is watched and what will fire,
 with the actions it offers as buttons along the bottom. Click a row to select
@@ -395,18 +443,18 @@ run already uses the behaviour that was just downloaded.
 `raw.githubusercontent.com` caches for five minutes, so a push is not visible
 to `ocup` immediately.
 
-That first run installs the daemons and enables them, but does not start them.
-Reboot, or start them by hand:
-
-```
-rc minitel start
-rc syslogd start
-rc fserv start        only on the machine with the internet card
-```
+That first run installs the daemons, enables them in `/etc/rc.cfg` and starts
+them, so there is no state where the network is installed and not running. It
+also names the machine if it has no name yet, after the first eight characters
+of its address, which `ocwatch --edit` then changes to something worth reading.
 
 A machine with no internet card has nothing to fetch `ocup` with in the first
 place. Flash a floppy on a machine that has one, with `ocmkfs`, then `install`
 from it there.
+
+`ocping` is what to run when something is wrong. It says whether the daemon is
+running, what this machine is called, and what it knows about where the others
+are.
 
 ## Development
 

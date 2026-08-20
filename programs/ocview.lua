@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.15.0"
+local VERSION = "0.16.0"
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -84,8 +84,63 @@ local clash = nil
 -- them by name through the mesh rather than only when they are in range
 local learned = false
 
+-- What the base has written down, and whose clock the stamps are in. Fetched
+-- only while the log view is open: it is a screenful of history that does not
+-- change quickly, and asking for it every round on every screen would cost more
+-- than the machines do.
+local log = { records = {}, now = 0, host = nil, at = nil }
+
+local function absorbLog(from, port, data)
+  local answer = net.decodeLog(port, from, data)
+  if not answer then
+    return false
+  end
+  log.records, log.now, log.host = answer.records, answer.now, answer.host
+  log.at = computer.uptime()
+  return true
+end
+
+-- Which machine to ask. The collector holds the whole base; with none named,
+-- records stay where they were raised and this machine's own are all there is.
+local function collector()
+  local named = notify.settings(config, "syslog").collector
+  if named and named ~= "" then
+    return named
+  end
+  return net.hostname(config)
+end
+
+-- Older than an error, in words, against the clock of the machine that wrote
+-- it. Its own uptime means nothing here, which is why the answer carries the
+-- collector's.
+local function ago(record)
+  local seconds = math.max(0, (log.now or 0) - (record.at or 0))
+  if seconds < 90 then
+    return math.floor(seconds) .. "s"
+  end
+  if seconds < 5400 then
+    return math.floor(seconds / 60) .. "m"
+  end
+  return math.floor(seconds / 3600) .. "h"
+end
+
+-- Error and worse is the red one. Warning and notice are worth reading and
+-- nothing more. Info and debug are the ones there are hundreds of.
+local function levelColor(level)
+  if (level or 6) <= 3 then
+    return ALARM
+  end
+  if (level or 6) <= 5 then
+    return FG
+  end
+  return DIM
+end
+
 local function absorb(from, port, data)
   seen.heard = seen.heard + 1
+  if absorbLog(from, port, data) then
+    return true
+  end
   local answer, why = net.decode(port, from, data)
   if not answer then
     if why then
@@ -212,12 +267,13 @@ end
 -- three answers to that, because which one is right depends on how much there
 -- is to show and what you are looking for.
 
-local MODES = { "columns", "cards", "alerts" }
+local MODES = { "columns", "cards", "alerts", "log" }
 
 local MODE_HELP = {
   columns = "every machine, one line each, across as many columns as fit",
   cards = "one machine at a time, roomy, with a wide bar",
   alerts = "what is wrong, and nothing that is not",
+  log = "what the base has written down, newest first",
 }
 
 local mode = config.view
@@ -475,11 +531,51 @@ local function render()
   if #order == 0 then
     heading = "  ocview v" .. VERSION .. "    no data"
   end
+  if mode == "log" then
+    local bad = 0
+    for _, record in ipairs(log.records) do
+      if (record.level or 6) <= 3 then
+        bad = bad + 1
+      end
+    end
+    heading = "  ocview v" .. VERSION .. "    " .. #log.records
+      .. " records from " .. tostring(log.host or collector())
+    if bad > 0 then
+      heading = heading .. ", " .. bad .. " of them errors"
+    end
+  end
   write(1, 1, fit(heading, W - 20), FG, BAR)
   if tripped > 0 then
     write(math.max(1, W - 19), 1, fit(tripped .. " ALERTS TRIPPED", 20), ALARM, BAR)
   else
     write(math.max(1, W - 19), 1, fit("all clear", 20), OK_COLOR, BAR)
+  end
+
+  -- The log is a list rather than a base, so it does not go through the block
+  -- and column machinery at all: no satellite owns these lines, and they are
+  -- read top to bottom rather than scanned.
+  if mode == "log" then
+    for line = 0, H - 4 do
+      local record = log.records[line + 1]
+      local y = 3 + line
+      if not record then
+        write(2, y, fit("", W - 2), FG, BG)
+      else
+        write(2, y, fit(string.format("%4s  %-12s %-9s ", ago(record),
+          tostring(record.host), tostring(record.service))
+          .. tostring(record.message), W - 2), levelColor(record.level), BG)
+      end
+    end
+    if not log.at then
+      write(3, 3, fit("asking " .. collector() .. " what it has written down",
+        W - 4), DIM, BG)
+    elseif #log.records == 0 then
+      write(3, 3, fit(log.host .. " has written nothing down yet", W - 4), DIM, BG)
+    end
+    write(1, H, fit("  [v] view: " .. mode .. "   [r] refresh   [q] quit      "
+      .. MODE_HELP[mode], W), FG, BAR)
+    paint.flush(W, H, BG, FG)
+    return
   end
 
   local blocks = planBlocks()
@@ -566,6 +662,11 @@ while true do
   local now = computer.uptime()
   if now - asked >= REFRESH_SECONDS then
     net.ask(minitel, config)
+    -- only while somebody is looking at it: the history is a screenful that
+    -- barely changes, and the machines are what the other views are for
+    if mode == "log" then
+      net.askLog(minitel, collector())
+    end
     asked = now
   end
   -- a satellite heard from for the first time is worth keeping, and the round

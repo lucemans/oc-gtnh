@@ -234,6 +234,53 @@ end
 -- where a machine keeps its own copy of the records, whatever else it does
 notify.LOG = "/home/ocgt.log"
 
+-- How much of the log is read to find the last few records. The file grows all
+-- week and is never rewritten, so reading it whole to show a dozen lines is how
+-- a small computer runs out of memory looking at its own history.
+local TAIL = 4096
+
+-- The records this machine has, newest first. On the collector that is the
+-- whole base; anywhere else it is this machine's own. Returns nil when there is
+-- no log here at all, which is a different answer from a log with nothing in it.
+--
+-- A line is what syslogd writes: the uptime of the machine that wrote it, the
+-- host it came from, the service, the severity, and the text.
+function notify.records(limit)
+  local file = io.open(notify.LOG, "r")
+  if not file then
+    return nil
+  end
+  local size = file:seek("end") or 0
+  file:seek("set", math.max(0, size - TAIL))
+  local text = file:read("*a") or ""
+  file:close()
+
+  -- the first line of a tail is whatever the read landed in the middle of
+  if size > TAIL then
+    text = text:match("\n(.*)$") or ""
+  end
+
+  local out = {}
+  for line in text:gmatch("[^\n]+") do
+    local at, host, service, level, message =
+      line:match("^([%d%.]+)\t([^\t]*)\t([^\t]*)\t(%d+)\t(.*)$")
+    if at then
+      table.insert(out, 1, {
+        at = tonumber(at),
+        host = host,
+        service = service,
+        level = tonumber(level),
+        message = message,
+      })
+    end
+  end
+
+  for _ = (limit or 20) + 1, #out do
+    table.remove(out)
+  end
+  return out
+end
+
 -- Which machine keeps the base's log, written out as syslogd's own settings.
 -- One name settles every machine's part in it: the collector receives and does
 -- not relay, and everybody else relays to the collector. A machine still writes

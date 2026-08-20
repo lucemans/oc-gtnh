@@ -37,6 +37,16 @@ net.REPLY = "ocstatus!"
 net.GATEWAY_ASK = "ocgateway?"
 net.GATEWAY_REPLY = "ocgateway!"
 
+-- What the base has written down, asked of whichever machine collects it. The
+-- answer carries the collector's own clock as well as the records, because a
+-- record is stamped with the uptime of the machine that wrote it and that
+-- number means nothing on the machine reading it.
+net.LOG_ASK = "oclog?"
+net.LOG_REPLY = "oclog!"
+
+-- how many records travel. Beyond a screenful nobody is reading them here.
+local RECORDS = 40
+
 -- Minitel's own broadcast address. It is delivered to every node on this
 -- segment and deliberately never forwarded, so it finds what is in range and
 -- the peer list finds the rest.
@@ -85,17 +95,23 @@ function net.up()
   return minitel
 end
 
--- What to call this machine. Minitel reads /etc/hostname when its daemon
--- starts and names every packet with it, so that file is the truth and the
--- configured name is what the editor writes into it.
+-- What to call this machine. The Minitel daemon reads /etc/hostname when it
+-- starts and names every packet with it, so that file is asked first and
+-- everything else is a fallback for a machine that has none.
+--
+-- The HOSTNAME variable is deliberately second. OpenOS sets it per shell, from
+-- that same file, at whatever moment `hostname --update` last ran, so it can
+-- say something the daemon has never heard of. Believing it over the file is
+-- how a machine addresses its own loopback to a name that is not its own.
 function net.hostname(config)
-  local name = os.getenv("HOSTNAME")
+  local name
+  local file = io.open("/etc/hostname", "r")
+  if file then
+    name = file:read()
+    file:close()
+  end
   if not name or name == "" then
-    local file = io.open("/etc/hostname", "r")
-    if file then
-      name = file:read()
-      file:close()
-    end
+    name = os.getenv("HOSTNAME")
   end
   if not name or name == "" then
     name = config and config.hostname
@@ -104,6 +120,22 @@ function net.hostname(config)
     return computer.address():sub(1, 8)
   end
   return name
+end
+
+-- What a Minitel packet can carry as an address. The protocol allows rather
+-- more than this, but a tilde is the broadcast marker and a space makes the
+-- name awkward everywhere else it is typed.
+function net.validHostname(name)
+  if type(name) ~= "string" or name == "" then
+    return nil, "a machine needs a name"
+  end
+  if #name > 63 then
+    return nil, "too long, 63 characters at most"
+  end
+  if name:find("^[%w][%w%-_%.]*$") == nil then
+    return nil, "letters, digits, dot, dash and underscore only, starting with a letter or digit"
+  end
+  return true
 end
 
 -- Every satellite this machine should hear from: the ones it has heard from
@@ -329,6 +361,33 @@ function net.answer(minitel, port, from, request, report)
     return from .. "  gateway"
   end
 
+  if request == net.LOG_ASK then
+    -- Required here rather than at the top of the file: ocitems decides how
+    -- often it can read its network out of the memory it has left, and a
+    -- library it will almost never be asked for is memory taken off that.
+    local ok, notify = pcall(require, "ocnotify")
+    local records = ok and notify.records(RECORDS)
+    if not records then
+      return nil
+    end
+
+    local payload = serialization.serialize({
+      now = computer.uptime(),
+      records = records,
+    })
+    -- newest first, so the oldest is what goes when it will not all fit
+    while #payload > room(minitel, from) and #records > 1 do
+      table.remove(records)
+      payload = serialization.serialize({
+        now = computer.uptime(),
+        records = records,
+      })
+    end
+
+    minitel.usend(from, core.PORT, net.LOG_REPLY .. "\n" .. payload)
+    return from .. "  " .. #records .. " records"
+  end
+
   if request ~= net.ASK then
     return nil
   end
@@ -366,6 +425,13 @@ function net.askGateway(minitel)
   minitel.usend(net.EVERYONE, core.PORT, net.GATEWAY_ASK)
 end
 
+-- Asks one machine for what it has written down. Directed rather than
+-- broadcast: one machine collects the base's records, and hearing the same
+-- history from four machines at once says nothing extra.
+function net.askLog(minitel, host)
+  minitel.usend(host, core.PORT, net.LOG_ASK)
+end
+
 -- Reads one message off the network. Returns the answer it carries, or nil, and
 -- with nil a reason when the message was an answer that could not be
 -- understood. A satellite still on the old raw broadcast is not heard at all,
@@ -393,6 +459,27 @@ function net.decode(port, from, data)
     fluids = report.fluids or {},
     over = report.over,
   }
+end
+
+-- Reads an answer to net.askLog. The records come back newest first, each with
+-- the level it was raised at, and `now` is the collector's clock at the moment
+-- it answered, which is the only thing that makes the stamps mean anything
+-- here.
+function net.decodeLog(port, from, data)
+  if port ~= core.PORT or type(data) ~= "string" then
+    return nil
+  end
+  local body = data:match("^" .. net.LOG_REPLY .. "\n(.*)$")
+  if not body then
+    return nil
+  end
+
+  local ok, answer = pcall(serialization.unserialize, body)
+  if not ok or type(answer) ~= "table" or type(answer.records) ~= "table" then
+    return nil, "unreadable"
+  end
+
+  return { host = from, now = answer.now or 0, records = answer.records }
 end
 
 -- Hands every packet that arrives to one function, which is how a program with

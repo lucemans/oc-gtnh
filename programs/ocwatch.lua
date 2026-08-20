@@ -16,6 +16,7 @@ local tank = require("octank")
 local ct = require("occomputronics")
 local sec = require("ocsecurity")
 local notify = require("ocnotify")
+local sh = require("sh")
 local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
@@ -1306,10 +1307,16 @@ local function editNetwork()
     elseif row and code == keyboard.keys.enter and row.what == "hostname" then
       local name = prompt("what to call this machine on the network",
         net.hostname(config))
-      if name and name ~= "" then
+      local fine, why = net.validHostname(name)
+      if name and name ~= "" and not fine then
+        notice(name .. ": " .. why)
+      elseif fine then
         config.hostname = name
         save()
         if writeHostname(name) then
+          -- OpenOS keeps its own copy of the name per shell, and the daemon
+          -- reads the file once at start, so neither notices on its own
+          pcall(sh.execute, _ENV, "hostname --update")
           notice("named " .. name .. ", restart minitel for it to take: rc minitel restart")
         else
           notice("could not write /etc/hostname")

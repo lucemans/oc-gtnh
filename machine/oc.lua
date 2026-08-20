@@ -37,6 +37,7 @@ function oc.reset()
   oc.directories = {}
   oc.deviceInfo = {}
   oc.listeners = {}
+  oc.env = {}
   emptyPulls = 0
   oc.timers = {}
   oc.output = {""}
@@ -735,6 +736,12 @@ function oc.install()
   end
 
   _G._OSVERSION = oc.osversion
+  -- OpenOS keeps the shell environment here, and HOSTNAME in it, which is a
+  -- copy of /etc/hostname taken whenever `hostname --update` last ran and can
+  -- say something the file no longer does
+  os.getenv = function(name)
+    return oc.env[name]
+  end
   os.sleep = function() end
   -- held still alongside computer.uptime, so anything seeding a generator from
   -- the clock lays out the same board on every run and a test can rely on it
@@ -786,9 +793,26 @@ function oc.install()
     if not contents then
       return nil, "no such file or directory"
     end
+    -- Reading from somewhere other than the start is how a program looks at the
+    -- end of a file it cannot afford to read whole.
+    local at = 0
     return {
       read = function()
-        return contents
+        local rest = contents:sub(at + 1)
+        at = #contents
+        return rest
+      end,
+      seek = function(_, whence, offset)
+        offset = offset or 0
+        if whence == "end" then
+          at = #contents + offset
+        elseif whence == "set" then
+          at = offset
+        else
+          at = at + offset
+        end
+        at = math.max(0, math.min(#contents, at))
+        return at
       end,
       close = function() end,
     }, nil
