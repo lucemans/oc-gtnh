@@ -33,11 +33,19 @@ local DIM = 0x999999
 local BAR = 0x333333
 local OK_COLOR = 0x66CC66
 local ALARM = 0xCC6666
+-- the view being looked at, and the key that would change it
+local ACTIVE = 0x66CCFF
+-- quieter than DIM, for the rules between the parts of a bar
+local RULE = 0x666666
 
+-- written as bytes rather than \u{} so the file still loads on a Lua 5.2 CPU
 local FULL_BLOCK = "\226\150\136"
 local LIGHT_BLOCK = "\226\150\145"
--- a thin vertical line, drawn over the bar where an alert sits
+-- a thin vertical line, drawn over the bar where an alert sits, and between the
+-- parts of the top and bottom bars
 local MARK = "\226\148\130"
+local DOT = "\226\151\143"
+local WARN_MARK = "\226\150\178"
 
 local gpu = component.gpu
 
@@ -84,37 +92,69 @@ local clash = nil
 -- them by name through the mesh rather than only when they are in range
 local learned = false
 
--- What the base has written down, and whose clock the stamps are in. Fetched
--- only while the log view is open: it is a screenful of history that does not
--- change quickly, and asking for it every round on every screen would cost more
--- than the machines do.
-local log = { records = {}, now = 0, host = nil, at = nil }
+-- What the base has written down. Fetched only while the log view is open: it
+-- is a screenful of history that does not change quickly, and asking for it
+-- every round on every screen would cost more than the machines do.
+--
+-- Kept per answering machine rather than as one list, so a round replaces what
+-- that machine said instead of piling another copy of it on top.
+local log = { byHost = {}, answered = 0 }
+
+-- Which machine to ask, or nil for all of them. A named collector holds a copy
+-- of everybody's records already, so asking it alone is the whole history and
+-- asking the satellites too would hear each record twice.
+local function collector()
+  local named = notify.settings(config, "syslog").collector
+  if named and named ~= "" then
+    return named
+  end
+  return nil
+end
 
 local function absorbLog(from, port, data)
   local answer = net.decodeLog(port, from, data)
   if not answer then
     return false
   end
-  log.records, log.now, log.host = answer.records, answer.now, answer.host
-  log.at = computer.uptime()
+
+  -- An age rather than a stamp. Every machine's uptime is its own and two of
+  -- them have no relation, so the only portable thing in a record is how long
+  -- ago it was, measured against the clock that came with it.
+  local aged = {}
+  for _, record in ipairs(answer.records) do
+    aged[#aged + 1] = {
+      age = math.max(0, (answer.now or 0) - (record.at or 0)),
+      host = record.host or answer.host,
+      service = record.service,
+      level = record.level,
+      message = record.message,
+    }
+  end
+
+  if log.byHost[answer.host] == nil then
+    log.answered = log.answered + 1
+  end
+  log.byHost[answer.host] = aged
   return true
 end
 
--- Which machine to ask. The collector holds the whole base; with none named,
--- records stay where they were raised and this machine's own are all there is.
-local function collector()
-  local named = notify.settings(config, "syslog").collector
-  if named and named ~= "" then
-    return named
+-- Every machine's records in one list, oldest last. Ages are comparable across
+-- machines even though the uptimes they were worked out from are not.
+local function records()
+  local all = {}
+  for _, kept in pairs(log.byHost) do
+    for _, record in ipairs(kept) do
+      all[#all + 1] = record
+    end
   end
-  return net.hostname(config)
+  table.sort(all, function(a, b)
+    return a.age < b.age
+  end)
+  return all
 end
 
--- Older than an error, in words, against the clock of the machine that wrote
--- it. Its own uptime means nothing here, which is why the answer carries the
--- collector's.
 local function ago(record)
-  local seconds = math.max(0, (log.now or 0) - (record.at or 0))
+  local seconds = record.age or 0
   if seconds < 90 then
     return math.floor(seconds) .. "s"
   end
@@ -122,6 +162,58 @@ local function ago(record)
     return math.floor(seconds / 60) .. "m"
   end
   return math.floor(seconds / 3600) .. "h"
+end
+
+-- One row of the frame, drawn in pieces so each piece keeps its own colour. The
+-- right hand pieces are measured first and always fit; what runs out of room is
+-- the left hand side, which is ordered least important last for that reason.
+local function drawBar(y, left, right)
+  local width = 0
+  for _, piece in ipairs(right) do
+    width = width + unicode.len(piece[1])
+  end
+  local edge = math.max(1, W - width + 1)
+
+  local x = 1
+  for _, piece in ipairs(left) do
+    if x >= edge then
+      break
+    end
+    local text = piece[1]
+    if unicode.len(text) > edge - x then
+      -- two characters back, so what is cut off does not end up touching the
+      -- right hand side and reading as one word with it
+      text = unicode.sub(text, 1, math.max(0, edge - x - 2))
+    end
+    write(x, y, text, piece[2], BAR)
+    x = x + unicode.len(text)
+  end
+  if x < edge then
+    write(x, y, string.rep(" ", edge - x), FG, BAR)
+  end
+
+  x = edge
+  for _, piece in ipairs(right) do
+    write(x, y, piece[1], piece[2], BAR)
+    x = x + unicode.len(piece[1])
+  end
+end
+
+local function rule(pieces)
+  pieces[#pieces + 1] = { " " .. MARK .. " ", RULE }
+end
+
+local function plural(number, what)
+  if number == 1 then
+    return what
+  end
+  return what .. "s"
+end
+
+-- A figure and what it counts, so the number is the thing the eye lands on.
+local function counted(pieces, number, what)
+  pieces[#pieces + 1] = { tostring(number), FG }
+  pieces[#pieces + 1] = { " " .. plural(number, what), DIM }
 end
 
 -- Error and worse is the red one. Warning and notice are worth reading and
@@ -293,6 +385,71 @@ local function nextMode()
   end
 end
 
+-- The two bars, drawn together because they answer the same question between
+-- them: what am I looking at, and what else could I look at.
+--
+-- The top counts what is on screen and says whether anything is wrong. The
+-- bottom is every view there is, with this one lit, which is a good deal more
+-- discoverable than naming the current one and leaving the rest to be found.
+local function drawBars(tripped, machines)
+  local left = { { "  ocview ", DIM }, { VERSION, DIM } }
+
+  if mode == "log" then
+    local kept = records()
+    local bad = 0
+    for _, record in ipairs(kept) do
+      if (record.level or 6) <= 3 then
+        bad = bad + 1
+      end
+    end
+    rule(left)
+    counted(left, #kept, "record")
+    rule(left)
+    if collector() then
+      left[#left + 1] = { "from ", DIM }
+      left[#left + 1] = { collector(), FG }
+    else
+      counted(left, log.answered, "machine")
+    end
+    if bad > 0 then
+      rule(left)
+      left[#left + 1] = { bad .. " " .. plural(bad, "error"), ALARM }
+    end
+  elseif #order == 0 then
+    rule(left)
+    left[#left + 1] = { "no data", DIM }
+  else
+    rule(left)
+    counted(left, #order, "satellite")
+    rule(left)
+    counted(left, machines, "machine")
+  end
+
+  local right
+  if tripped > 0 then
+    right = { { WARN_MARK .. " ", ALARM },
+      { tripped .. " " .. plural(tripped, "alert") .. "  ", ALARM } }
+  else
+    right = { { DOT .. " ", OK_COLOR }, { "all clear  ", DIM } }
+  end
+  drawBar(1, left, right)
+
+  local bottom = { { "  ", DIM } }
+  for index, name in ipairs(MODES) do
+    if index > 1 then
+      rule(bottom)
+    end
+    bottom[#bottom + 1] = { name, name == mode and ACTIVE or DIM }
+  end
+  bottom[#bottom + 1] = { "   " .. MODE_HELP[mode], RULE }
+
+  drawBar(H, bottom, {
+    { "v", ACTIVE }, { " view  ", DIM },
+    { "r", ACTIVE }, { " refresh  ", DIM },
+    { "q", ACTIVE }, { " quit  ", DIM },
+  })
+end
+
 -- A machine is worth showing in the alerts view when something about it is
 -- wrong: an alert has it, it has been stopped, or a gauge has run dry.
 local function troubled(card)
@@ -420,7 +577,8 @@ local function drawRow(row, x, y, width)
   if row.kind == "blank" then
     write(x, y, fit("", width), FG, BG)
   elseif row.kind == "host" then
-    write(x, y, fit(" " .. row.host .. "   " .. row.machines .. " machines"
+    write(x, y, fit(" " .. row.host .. "   " .. row.machines .. " "
+      .. plural(row.machines, "machine")
       .. (row.stale and "   not answering" or ""), width), FG, BAR)
   elseif row.kind == "alert" then
     local mark = "ok"
@@ -526,37 +684,15 @@ local function render()
     end
   end
 
-  local heading = "  ocview v" .. VERSION .. "    " .. #order .. " satellites, "
-    .. machines .. " machines"
-  if #order == 0 then
-    heading = "  ocview v" .. VERSION .. "    no data"
-  end
-  if mode == "log" then
-    local bad = 0
-    for _, record in ipairs(log.records) do
-      if (record.level or 6) <= 3 then
-        bad = bad + 1
-      end
-    end
-    heading = "  ocview v" .. VERSION .. "    " .. #log.records
-      .. " records from " .. tostring(log.host or collector())
-    if bad > 0 then
-      heading = heading .. ", " .. bad .. " of them errors"
-    end
-  end
-  write(1, 1, fit(heading, W - 20), FG, BAR)
-  if tripped > 0 then
-    write(math.max(1, W - 19), 1, fit(tripped .. " ALERTS TRIPPED", 20), ALARM, BAR)
-  else
-    write(math.max(1, W - 19), 1, fit("all clear", 20), OK_COLOR, BAR)
-  end
+  drawBars(tripped, machines)
 
   -- The log is a list rather than a base, so it does not go through the block
   -- and column machinery at all: no satellite owns these lines, and they are
   -- read top to bottom rather than scanned.
   if mode == "log" then
+    local kept = records()
     for line = 0, H - 4 do
-      local record = log.records[line + 1]
+      local record = kept[line + 1]
       local y = 3 + line
       if not record then
         write(2, y, fit("", W - 2), FG, BG)
@@ -566,14 +702,14 @@ local function render()
           .. tostring(record.message), W - 2), levelColor(record.level), BG)
       end
     end
-    if not log.at then
-      write(3, 3, fit("asking " .. collector() .. " what it has written down",
-        W - 4), DIM, BG)
-    elseif #log.records == 0 then
-      write(3, 3, fit(log.host .. " has written nothing down yet", W - 4), DIM, BG)
+    if log.answered == 0 then
+      write(3, 3, fit("asking " .. (collector() or "every machine")
+        .. " what has been written down", W - 4), DIM, BG)
+    elseif #kept == 0 then
+      write(3, 3, fit(log.answered .. " " .. plural(log.answered, "machine")
+        .. " answered, and none of them has "
+        .. "written anything down yet", W - 4), DIM, BG)
     end
-    write(1, H, fit("  [v] view: " .. mode .. "   [r] refresh   [q] quit      "
-      .. MODE_HELP[mode], W), FG, BAR)
     paint.flush(W, H, BG, FG)
     return
   end
@@ -625,8 +761,6 @@ local function render()
     write(3, 3, fit(trouble, W - 4), ALARM, BG)
   end
 
-  write(1, H, fit("  [v] view: " .. mode .. "   [r] refresh   [q] quit      "
-    .. MODE_HELP[mode], W), FG, BAR)
   paint.flush(W, H, BG, FG)
 end
 
@@ -665,7 +799,7 @@ while true do
     -- only while somebody is looking at it: the history is a screenful that
     -- barely changes, and the machines are what the other views are for
     if mode == "log" then
-      net.askLog(minitel, collector())
+      net.askLog(minitel, config, collector())
     end
     asked = now
   end

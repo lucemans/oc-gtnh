@@ -2005,8 +2005,9 @@ test("ocview shows what the collector has written down", function()
   check(contains(shown, "tank-farm"), "did not say which machine raised it")
   check(contains(shown, "ocwatch"), "did not say what raised it")
   check(contains(shown, "60s"), "did not say how long ago: " .. tostring(shown:match("[^\n]*diesel[^\n]*")))
-  check(contains(shown, "2 records from main"), "did not head the view")
-  check(contains(shown, "1 of them errors"), "did not count the errors")
+  check(contains(shown, "2 records"), "did not head the view")
+  check(contains(shown, "1 machine"), "did not say how many machines answered")
+  check(contains(shown, "1 error"), "did not count the errors")
 end)
 
 test("ocview asks the collector for the log, and only in the log view", function()
@@ -2071,7 +2072,7 @@ test("a satellite answers for the log it keeps", function()
   check(answer and answer.now > 0, "sent no clock to read the stamps against")
 end)
 
-test("a machine with no log answers nothing rather than answering empty", function()
+test("a machine with no log answers, with nothing in it", function()
   local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
   oc.components = { modem, SUPER_TANK }
   startMinitel("boiler-room")
@@ -2080,9 +2081,105 @@ test("a machine with no log answers nothing rather than answering empty", functi
   oc.run("ocserve", "--once")
   oc.pump()
 
+  local reply
   for _, packet in ipairs(outbound(modem)) do
-    check(type(packet.data) ~= "string" or packet.data:sub(1, 7) ~= "oclog!\n",
-      "answered for a log it does not have")
+    if type(packet.data) == "string" and packet.data:sub(1, 7) == "oclog!\n" then
+      reply = packet
+    end
+  end
+  -- silence and an empty history look the same on the asking screen, and only
+  -- one of them is worth walking over to the machine about
+  check(reply ~= nil, "said nothing at all, which reads as unreachable")
+  local answer = require("ocnet").decodeLog(PORT, "boiler-room",
+    reply and reply.data or "")
+  check(answer and #answer.records == 0, "answered with records it does not have")
+end)
+
+test("the log view shows every machine, not just one", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({ view = "log" })
+  startMinitel("tablet")
+
+  local serialize = require("serialization").serialize
+  -- Two machines, two uptimes that have nothing to do with each other. The
+  -- newest record is the boiler's, and its raw stamp is the smaller number.
+  deliver(modem, "bb000000", "tablet", "boiler-room", "oclog!\n" .. serialize({
+    now = 300,
+    records = { { at = 290, host = "boiler-room", service = "ocwatch", level = 3,
+      message = "steam low tripped" } },
+  }))
+  deliver(modem, "dd000000", "tablet", "tank-farm", "oclog!\n" .. serialize({
+    now = 90000,
+    records = { { at = 89000, host = "tank-farm", service = "ocwatch", level = 6,
+      message = "creosote switchover" } },
+  }))
+
+  oc.run("ocview", "--once")
+
+  local shown = oc.screen()
+  check(contains(shown, "steam low tripped"), "lost the first machine's records")
+  check(contains(shown, "creosote switchover"), "lost the second machine's records")
+  check(contains(shown, "2 records"), "did not count both machines' records")
+  check(contains(shown, "2 machines"), "did not say how many answered")
+
+  -- sorted by how long ago, which is comparable across machines even though the
+  -- uptimes it was worked out from are not
+  local first = shown:match("[^\n]*tripped[^\n]*")
+  local second = shown:match("[^\n]*switchover[^\n]*")
+  check(shown:find(first, 1, true) < shown:find(second, 1, true),
+    "put the older record above the newer one")
+end)
+
+test("with no collector named, every machine is asked for its own log", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    view = "log",
+    peers = { "tank-farm" },
+  })
+  startMinitel("tablet")
+
+  oc.run("ocview", "--once")
+
+  local broadcast, byName = false, false
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "oclog?" and packet.dest == "~" then
+      broadcast = true
+    end
+    if packet.data == "oclog?" and packet.dest == "tank-farm" then
+      byName = true
+    end
+  end
+  check(broadcast, "did not ask what is in range")
+  check(byName, "did not ask the satellite that a broadcast cannot reach")
+end)
+
+test("with a collector named, only it is asked", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    view = "log",
+    peers = { "tank-farm" },
+    notify = { syslog = { collector = "main" } },
+  })
+  startMinitel("tablet")
+
+  oc.run("ocview", "--once")
+
+  -- it holds a copy of everybody's already, so asking the satellites as well
+  -- would hear every record twice
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "oclog?" then
+      check(packet.dest == "main",
+        "asked " .. tostring(packet.dest) .. " as well as the collector")
+    end
   end
 end)
 

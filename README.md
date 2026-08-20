@@ -47,6 +47,7 @@ read     curl -s "https://ntfy.sh/<topic>-out/raw?poll=1"
 
 Whatever is already in the topic when `occonnect` starts is treated as history,
 so restarting cannot replay a command sent hours ago.
+
 ## The network
 
 Every machine here talks over [Minitel](https://github.com/ShadowKatStudios/OC-Minitel),
@@ -140,19 +141,31 @@ name that is receives, everybody else relays to it, and each one still keeps its
 own copy, so a satellite that loses the network loses nothing. `syslogd` reads
 its settings at start, so a change wants `rc syslogd reload`.
 
-`ocview`'s `log` view is how you read them. It asks the collector for the last
-few records and shows each one as how long ago, which machine raised it, what
-raised it, and what it said, in red for an error and grey for the routine.
+`ocview`'s `log` view is how you read them. Each record shows as how long ago,
+which machine raised it, what raised it, and what it said, in red for an error
+and grey for the routine.
+
+Who it asks depends on whether a collector is named. With one, it asks only the
+collector, which already holds a copy of everybody's records; asking the
+satellites as well would show every record twice. With none, every machine keeps
+its own and nobody holds the lot, so it asks all of them and what comes back is
+one base's history between them.
+
+That merge works because a record travels as an age rather than a stamp. There
+is no wall clock here and two machines' uptimes have nothing to do with each
+other, so a raw stamp cannot be compared across machines. An age can, which is
+why the answer carries the answering machine's own clock beside the records and
+the ages are worked out against that before anything is sorted.
+
+A machine that has never written anything answers with nothing in it rather than
+staying silent, because silence and an empty history look the same on the
+screen and only one of them is worth walking over to the machine about.
 
 Only the last 4 KB of the file is ever read. It grows all week and is never
 rewritten, so reading it whole to show a screenful is how a small computer runs
 out of memory looking at its own history. Only the view that shows them fetches
 them, for the same reason: it is a screenful that barely changes, where the
 machines change every two seconds.
-
-A record is stamped with the uptime of the machine that wrote it, which means
-nothing anywhere else, so the answer carries the collector's own clock beside
-the records and the ages on screen are worked out against that.
 
 ### One internet card for the base
 

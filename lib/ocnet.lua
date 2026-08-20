@@ -366,10 +366,13 @@ function net.answer(minitel, port, from, request, report)
     -- often it can read its network out of the memory it has left, and a
     -- library it will almost never be asked for is memory taken off that.
     local ok, notify = pcall(require, "ocnotify")
-    local records = ok and notify.records(RECORDS)
-    if not records then
+    if not ok then
       return nil
     end
+    -- A machine that has never written anything answers with nothing rather
+    -- than staying silent. Silence and an empty history look the same on the
+    -- asking screen, and only one of them is worth investigating.
+    local records = notify.records(RECORDS) or {}
 
     local payload = serialization.serialize({
       now = computer.uptime(),
@@ -425,11 +428,24 @@ function net.askGateway(minitel)
   minitel.usend(net.EVERYONE, core.PORT, net.GATEWAY_ASK)
 end
 
--- Asks one machine for what it has written down. Directed rather than
--- broadcast: one machine collects the base's records, and hearing the same
--- history from four machines at once says nothing extra.
-function net.askLog(minitel, host)
-  minitel.usend(host, core.PORT, net.LOG_ASK)
+-- Asks for what has been written down.
+--
+-- With a collector named, only it is asked, because it already holds a copy of
+-- everybody's records and asking the satellites as well would hear each one
+-- twice. With none named, every machine keeps its own and nobody holds the lot,
+-- so everybody is asked and the answers are one base's history between them.
+function net.askLog(minitel, config, host)
+  if host and host ~= "" then
+    minitel.usend(host, core.PORT, net.LOG_ASK)
+    return
+  end
+  minitel.usend(net.EVERYONE, core.PORT, net.LOG_ASK)
+  local here = net.hostname(config)
+  for _, peer in ipairs(net.peers(config)) do
+    if peer ~= here then
+      minitel.usend(peer, core.PORT, net.LOG_ASK)
+    end
+  end
 end
 
 -- Reads one message off the network. Returns the answer it carries, or nil, and
