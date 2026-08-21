@@ -2572,6 +2572,190 @@ test("ocmkfs writes the installer and labels the disk", function()
   check(contains(table.concat(oc.invoked, " "), "setLabel"), "disk was not labelled")
 end)
 
+test("ocmkfs writes down what the floppy carries", function()
+  local floppy = fakeDisk(FLOPPY, nil, 524288, false)
+  oc.components = {
+    floppy,
+    fakeDrive("372997ab-4a0c-46ee-a425-e13a3b7b18a4", FLOPPY),
+  }
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocinstall.lua"] = "-- ocinstall"
+  oc.files["/bin/ocdebug.lua"] = "-- ocdebug"
+  oc.files["/bin/ocwatch.lua"] = "-- ocwatch"
+  oc.files["/lib/oclib.lua"] = "-- oclib"
+
+  oc.run("ocmkfs", "--disk", FLOPPY:sub(1, 8))
+
+  -- Without this the first ocup falls back to its own default and takes
+  -- everything else off the disk, which is a machine throwing away what the
+  -- floppy just gave it.
+  local written = floppy.written["/etc/ocgt.cfg"]
+  check(written ~= nil, "the floppy carried no choice for ocup to read")
+  local saved = written and require("serialization").unserialize(written)
+  check(type(saved) == "table" and type(saved.programs) == "table",
+    "what was written is not a configuration ocup can read")
+
+  local carrying = {}
+  for _, name in ipairs(saved and saved.programs or {}) do
+    carrying[name] = true
+  end
+  check(carrying.ocdebug, "a program on the floppy was left out of the choice")
+  check(carrying.ocwatch, "a program on the floppy was left out of the choice")
+  check(carrying.ocinstall, "ocinstall was left out, so ocup would remove it")
+  check(not carrying.ocup, "ocup listed itself, which it never does")
+end)
+
+test("ocmkfs never leaves ocinstall off a floppy", function()
+  local floppy = fakeDisk(FLOPPY, nil, 524288, false)
+  oc.components = {
+    floppy,
+    fakeDrive("372997ab-4a0c-46ee-a425-e13a3b7b18a4", FLOPPY),
+  }
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocinstall.lua"] = "-- ocinstall"
+  oc.files["/bin/ocdebug.lua"] = "-- ocdebug"
+
+  -- pick the disk, then flash without touching anything. ocinstall is not in
+  -- the list to be turned off, so the only entry the cursor can reach is ocdebug
+  oc.reads = { "1" }
+  oc.push("key_down", "keyboard", 32, 0x39) -- space, on whatever is first
+  oc.push("key_down", "keyboard", 13, 0x1C) -- enter
+
+  oc.run("ocmkfs")
+  check(floppy.written["/bin/ocinstall.lua"] == "-- ocinstall",
+    "the one program that has to be on the floppy was left off it")
+  check(floppy.written["/bin/ocdebug.lua"] == nil,
+    "the entry the cursor started on was not the one that got toggled")
+end)
+
+-------------------------------------------------------------------------------
+-- ocinstall
+
+local function installedSet()
+  local names = {}
+  for path in pairs(oc.files) do
+    local name = path:match("^/bin/(oc.+)%.lua$")
+    if name then
+      names[name] = true
+    end
+  end
+  return names
+end
+
+test("ocinstall removes what was not picked and writes down what was", function()
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocinstall.lua"] = "-- ocinstall"
+  oc.files["/bin/ocdebug.lua"] = "-- ocdebug"
+  oc.files["/bin/ocdump.lua"] = "-- ocdump"
+  oc.files["/bin/ocwatch.lua"] = "-- ocwatch"
+
+  -- everything starts ticked, so one space turns the first entry off
+  oc.push("key_down", "keyboard", 32, 0x39) -- space, on ocdebug
+  oc.push("key_down", "keyboard", 13, 0x1C) -- enter
+
+  local ok, reason = oc.run("ocinstall")
+  check(ok, "ocinstall crashed: " .. tostring(reason))
+
+  local left = installedSet()
+  check(not left.ocdebug, "kept a program that was turned off")
+  check(left.ocdump and left.ocwatch, "removed a program that was left on")
+  check(left.ocup and left.ocinstall, "removed one of the two it must never remove")
+
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  local chosen = {}
+  for _, name in ipairs(saved and saved.programs or {}) do
+    chosen[name] = true
+  end
+  check(not chosen.ocdebug, "wrote down a program it had just removed")
+  check(chosen.ocdump and chosen.ocwatch, "left a kept program out of the choice")
+end)
+
+test("ocinstall keeps the rest of the configuration", function()
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocinstall.lua"] = "-- ocinstall"
+  oc.files["/bin/ocdump.lua"] = "-- ocdump"
+  -- what somebody set up on this machine, which is none of this program's
+  -- business and has to survive it
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    programs = { "ocdump" },
+    peers = { "boiler-room" },
+    alerts = { { name = "water low", below = 4000 } },
+    nicknames = { ["aa000000"] = "Big Tank" },
+    telemetry = { host = "ovw-core-obs-01" },
+  })
+
+  oc.push("key_down", "keyboard", 13, 0x1C) -- enter, changing nothing
+
+  oc.run("ocinstall")
+
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"])
+  check(saved.peers and saved.peers[1] == "boiler-room", "lost the satellites")
+  check(saved.alerts and saved.alerts[1] and saved.alerts[1].name == "water low",
+    "lost the alerts")
+  check(saved.nicknames and saved.nicknames["aa000000"] == "Big Tank", "lost the names")
+  check(saved.telemetry and saved.telemetry.host == "ovw-core-obs-01",
+    "lost where telemetry goes")
+end)
+
+test("ocinstall shows the choice already recorded rather than everything", function()
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocinstall.lua"] = "-- ocinstall"
+  oc.files["/bin/ocdebug.lua"] = "-- ocdebug"
+  oc.files["/bin/ocdump.lua"] = "-- ocdump"
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({ programs = { "ocdump" } })
+
+  oc.push("key_down", "keyboard", 13, 0x1C) -- enter, changing nothing
+
+  oc.run("ocinstall")
+  local left = installedSet()
+  check(not left.ocdebug, "a program the machine had already opted out of was kept")
+  check(left.ocdump, "removed the one program that was recorded")
+end)
+
+test("ocinstall offers a program that is chosen but not installed yet", function()
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocinstall.lua"] = "-- ocinstall"
+  oc.files["/bin/ocdump.lua"] = "-- ocdump"
+  -- ocwatch is chosen and has not arrived: ocup installs it on the next run.
+  -- Leaving it out of the menu would cancel that without ever showing it.
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    programs = { "ocdump", "ocwatch" },
+  })
+
+  oc.push("key_down", "keyboard", 13, 0x1C) -- enter, changing nothing
+
+  oc.run("ocinstall")
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"])
+  local chosen = {}
+  for _, name in ipairs(saved.programs or {}) do
+    chosen[name] = true
+  end
+  check(chosen.ocwatch, "dropped a program that was waiting to be installed")
+  check(chosen.ocdump, "dropped a program that is installed")
+end)
+
+test("ocinstall changes nothing when it is quit", function()
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocinstall.lua"] = "-- ocinstall"
+  oc.files["/bin/ocdebug.lua"] = "-- ocdebug"
+
+  oc.push("key_down", "keyboard", 32, 0x39) -- space, turning ocdebug off
+  oc.push("key_down", "keyboard", 113, 0x10) -- q
+
+  oc.run("ocinstall")
+  check(installedSet().ocdebug, "removed a program on the way out")
+  check(oc.files["/etc/ocgt.cfg"] == nil, "wrote a choice that was cancelled")
+end)
+
+test("ocinstall says so when there is nothing to choose from", function()
+  oc.files["/bin/ocup.lua"] = "-- ocup"
+  oc.files["/bin/ocinstall.lua"] = "-- ocinstall"
+
+  oc.run("ocinstall")
+  check(contains(oc.printed(), "run install from the floppy first"),
+    "did not say why there was nothing to do")
+end)
+
 -------------------------------------------------------------------------------
 -- ockeypad
 
@@ -4342,6 +4526,212 @@ test("ocsweeper starts over on r", function()
 end)
 
 -------------------------------------------------------------------------------
+-- octiles
+
+-- mirrors the layout in programs/octiles.lua: a tile owns two rows and seven
+-- columns, and the board is centred in what the header and the bar leave
+local TILES_CELL_W = 7
+local TILES_CELL_H = 2
+local PIPE = "\226\148\130"
+
+local function tilesOrigin(size)
+  local columns = size * TILES_CELL_W + 1
+  local rows = size * TILES_CELL_H + 1
+  local x = math.max(1, math.floor((oc.width - columns) / 2) + 1)
+  local y = 2 + math.max(0, math.floor(((oc.height - 2) - (rows + 1)) / 2))
+  return x, y, columns, rows
+end
+
+-- Split on the separator rather than by column, because the box characters are
+-- three bytes each and a byte offset stops being a column at the first one.
+local function tilesInRow(line)
+  local values, at = {}, 1
+  while true do
+    local _, ends = line:find(PIPE, at, true)
+    if not ends then
+      break
+    end
+    local nextOne = line:find(PIPE, ends + 1, true)
+    if not nextOne then
+      break
+    end
+    values[#values + 1] = tonumber((line:sub(ends + 1, nextOne - 1):gsub("%s", ""))) or 0
+    at = ends + 1
+  end
+  return values
+end
+
+local function tilesBoard()
+  local rows = {}
+  for line in (oc.frame() .. "\n"):gmatch("([^\n]*)\n") do
+    if line:find(PIPE, 1, true) then
+      rows[#rows + 1] = tilesInRow(line)
+    end
+  end
+  return rows
+end
+
+test("octiles draws a board", function()
+  local ok, reason = oc.run("octiles")
+  check(ok, "octiles crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  check(contains(frame, "octiles v"), "no header")
+  check(contains(frame, "4 x 4"), "board size not shown")
+  check(contains(frame, "score 0"), "score missing")
+  check(contains(frame, TOP_LEFT), "no box drawn around the board")
+  if show then
+    say(frame)
+  end
+end)
+
+test("octiles keeps the board between 2 and 8 a side", function()
+  oc.run("octiles", "40")
+  check(contains(oc.frame(), "8 x 8"), "a board wider than 8 was dealt")
+
+  oc.reset()
+  oc.run("octiles", "1")
+  check(contains(oc.frame(), "2 x 2"), "a board narrower than 2 was dealt")
+
+  oc.reset()
+  oc.run("octiles", "x")
+  check(contains(oc.frame(), "4 x 4"), "a size that is not a number was not ignored")
+end)
+
+test("octiles joins equal tiles, and stops when nothing can move", function()
+  -- a 2 by 2 board played left and up until it jams. Every join is worth what
+  -- the two tiles made, so 12 is a four and then an eight, which is the whole
+  -- of the rule: two twos become a four rather than the four becoming an eight
+  -- in the same move.
+  for _ = 1, 40 do
+    oc.push("key_down", "keyboard", 0, 0xCB)
+    oc.push("key_down", "keyboard", 0, 0xC8)
+  end
+
+  local ok, reason = oc.run("octiles", "2")
+  check(ok, "octiles crashed: " .. tostring(reason))
+
+  local frame = oc.frame()
+  check(contains(frame, "score 12"), "joins did not score what the tiles made")
+  check(contains(frame, "no moves left"), "a jammed board was not called finished")
+end)
+
+test("octiles slides every tile as far as it goes", function()
+  for _ = 1, 12 do
+    oc.push("key_down", "keyboard", 0, 0xCB)
+  end
+  oc.run("octiles")
+
+  -- one new tile arrives after each slide and it can land anywhere, so at most
+  -- one row is allowed to hold a tile with a hole to its left
+  local loose = 0
+  for _, row in ipairs(tilesBoard()) do
+    local filled = 0
+    for _, value in ipairs(row) do
+      if value ~= 0 then
+        filled = filled + 1
+      end
+    end
+    for x = 1, filled do
+      if row[x] == 0 then
+        loose = loose + 1
+        break
+      end
+    end
+  end
+  check(loose <= 1, loose .. " rows left a hole on the side they were slid to")
+end)
+
+test("octiles slides towards the side a click lands on", function()
+  -- the board is quartered along its diagonals, so a click in one quarter has
+  -- to do what the arrow key for that side does
+  local function afterKey(code)
+    oc.reset()
+    oc.push("key_down", "keyboard", 0, code)
+    oc.run("octiles")
+    return oc.frame()
+  end
+
+  local function afterClick(dx, dy)
+    oc.reset()
+    local x, y, columns, rows = tilesOrigin(4)
+    oc.push("touch", "screen",
+      math.floor(x + columns / 2 + dx), math.floor(y + rows / 2 + dy), 0)
+    oc.run("octiles")
+    return oc.frame()
+  end
+
+  local sides = {
+    { name = "left", code = 0xCB, dx = -5, dy = 0 },
+    { name = "right", code = 0xCD, dx = 5, dy = 0 },
+    { name = "up", code = 0xC8, dx = 0, dy = -3 },
+    { name = "down", code = 0xD0, dx = 0, dy = 3 },
+  }
+  for _, side in ipairs(sides) do
+    check(afterClick(side.dx, side.dy) == afterKey(side.code),
+      "a click on the " .. side.name .. " did not slide " .. side.name)
+  end
+
+  -- and the four are not all the same thing quietly passing
+  check(afterKey(0xCB) ~= afterKey(0xCD), "left and right left the same board")
+end)
+
+test("octiles starts over on r", function()
+  for _ = 1, 12 do
+    oc.push("key_down", "keyboard", 0, 0xCB)
+  end
+  oc.push("key_down", "keyboard", 0, 0x13) -- r
+
+  oc.run("octiles", "2")
+  check(contains(oc.frame(), "score 0"), "restart kept the score")
+  check(not contains(oc.frame(), "no moves left"), "restart kept the finished board")
+end)
+
+test("octiles grows into a screen that changed size", function()
+  oc.width, oc.height = 44, 14
+  oc.reset()
+  oc.run("octiles", "8")
+  check(contains(oc.frame(), "5 x 5"), "did not shrink to what the small screen fits")
+
+  oc.reset()
+  oc.resize(160, 50)
+  local ok, reason = oc.run("octiles", "8")
+  check(ok, "octiles crashed on resize: " .. tostring(reason))
+  check(contains(oc.frame(), "8 x 8"), "did not grow into the larger screen")
+
+  oc.width, oc.height = 80, 20
+  oc.reset()
+end)
+
+test("octiles never draws outside a small screen", function()
+  oc.width, oc.height = 44, 14
+  oc.reset()
+
+  -- gpu.set asserts on an out-of-bounds row, so crashing here means it drew off
+  -- the edge of a display smaller than the default board
+  local ok, reason = oc.run("octiles")
+  check(ok, "octiles drew outside a small screen: " .. tostring(reason))
+
+  oc.width, oc.height = 80, 20
+  oc.reset()
+end)
+
+test("octiles repaints without clearing the screen every frame", function()
+  oc.push()
+  oc.push()
+  oc.push()
+
+  oc.run("octiles")
+  local full = 0
+  for _, fill in ipairs(oc.fills) do
+    if fill.w >= oc.width and fill.h >= oc.height then
+      full = full + 1
+    end
+  end
+  check(full <= 1, "cleared the whole screen " .. full .. " times over four frames")
+end)
+
+-------------------------------------------------------------------------------
 -- ocdump
 
 test("ocdump builds a valid multipart upload", function()
@@ -4373,6 +4763,99 @@ test("ocdump builds a valid multipart upload", function()
   if show then
     say(request.body)
   end
+end)
+
+test("ocdump --net writes down what the network answered", function()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { INTERNET, modem }
+  startMinitel("tablet")
+  oc.respond = function()
+    return 201, "Created", "https://dpaste.com/TESTTESTT\n"
+  end
+
+  deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
+    address = "aa000000-0000-0000-0000-000000000001",
+    cards = {
+      {
+        name = "Super Tank",
+        status = "idle",
+        gauges = { { label = "Bio Diesel", current = "42,000", maximum = "4,000,000",
+          unit = "L", percent = 1.05 } },
+      },
+    },
+    alerts = { { name = "diesel low", tripped = true } },
+    fluids = { { name = "Creosote", amount = "12,000" } },
+  }))
+  deliver(modem, "bb000000", "tablet", "boiler-room", "ocgateway!")
+
+  local ok, reason = oc.run("ocdump", "--net")
+  check(ok, "ocdump crashed: " .. tostring(reason))
+  check(#oc.requests == 1, "expected exactly one upload")
+
+  local body = oc.requests[1].body
+  check(contains(body, "== network =="), "no network section")
+  check(contains(body, "hostname    tablet"), "did not name this machine")
+  check(contains(body, "minitel     running"), "did not report the daemon")
+  check(contains(body, modem.address:sub(1, 8)), "did not list the card")
+  check(contains(body, "boiler-room"), "did not name the satellite that answered")
+  check(contains(body, "Super Tank"), "did not write down the machine it reported")
+  check(contains(body, "Bio Diesel"), "did not write down the gauge")
+  check(contains(body, "42,000"), "did not write down the reading")
+  check(contains(body, "diesel low"), "did not write down the alert")
+  check(contains(body, "Creosote"), "did not write down the fluid")
+  check(contains(body, "who can reach the internet"), "never asked for a gateway")
+
+  local asked = false
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "ocstatus?" and packet.dest == "~" then
+      asked = true
+    end
+  end
+  check(asked, "never broadcast the question")
+  if show then
+    say(body)
+  end
+end)
+
+test("ocdump --net says a peer went unanswered", function()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { INTERNET, modem }
+  oc.files["/etc/ocgt.cfg"] = "{peers={\"tank-farm\"}}"
+  startMinitel("tablet")
+  oc.respond = function()
+    return 201, "Created", "https://dpaste.com/TESTTESTT\n"
+  end
+
+  oc.run("ocdump", "--net")
+  local body = oc.requests[1].body
+  check(body:find("tank%-farm%s+no answer") ~= nil,
+    "a satellite that stayed quiet was not named as quiet")
+end)
+
+test("ocdump --net reports a network it cannot use", function()
+  -- no card at all, which is what a machine that was never on the mesh looks
+  -- like. The dump is still worth having, so it is still written and uploaded.
+  oc.components = { INTERNET }
+  oc.respond = function()
+    return 201, "Created", "https://dpaste.com/TESTTESTT\n"
+  end
+
+  local ok, reason = oc.run("ocdump", "--net")
+  check(ok, "ocdump crashed with no network card: " .. tostring(reason))
+
+  local body = oc.requests[1].body
+  check(contains(body, "== network =="), "no network section")
+  check(contains(body, "no network card"), "did not say why the network was unusable")
+  check(contains(body, "only ever a relay"), "did not say there were no cards")
+end)
+
+test("ocdump refuses an argument it does not know", function()
+  oc.components = { INTERNET }
+
+  oc.run("ocdump", "--network")
+  check(contains(oc.printed(), "unknown argument --network"),
+    "a mistyped flag quietly dumped without the network")
+  check(#oc.requests == 0, "uploaded anyway")
 end)
 
 test("ocdump reports an upload failure", function()

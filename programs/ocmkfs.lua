@@ -16,6 +16,12 @@
 -- Minitel daemons and the file saying to run them. A machine with no internet
 -- card fetches through another machine on the network, so a floppy carrying
 -- only the updater would install a program with no way to reach anything.
+--
+-- The floppy also carries the choice itself, as `programs` in the configuration.
+-- ocup treats a recorded choice as the whole truth and removes anything missing
+-- from it, so a floppy that copied programs and said nothing about them left a
+-- computer that threw them away on its first update. `ocinstall` on the target
+-- is how that choice is narrowed to the one machine.
 
 local component = require("component")
 local computer = require("computer")
@@ -23,9 +29,10 @@ local core = require("oclib")
 local event = require("event")
 local filesystem = require("filesystem")
 local keyboard = require("keyboard")
+local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 
 local LABEL = "oc-gtnh"
 -- Where the installed set lives, and what belongs to this project. Our own
@@ -40,8 +47,10 @@ local VENDORED = {
   ["syslogd.lua"] = true,
   ["fserv.lua"] = true,
 }
--- the reason the floppy exists, so it is never left off one
-local SELF = "/bin/ocup.lua"
+-- the two the floppy exists for, so neither is ever left off one and neither is
+-- offered as a choice: ocup is what updates the machine afterwards, ocinstall is
+-- what narrows the floppy to the machine
+local ALWAYS = { ["/bin/ocup.lua"] = true, ["/bin/ocinstall.lua"] = true }
 -- A brand new computer has nothing enabled, so the floppy says which services
 -- to run. Written rather than merged, which is safe on the empty machine this
 -- exists for and would not be on one that had been set up already.
@@ -165,7 +174,7 @@ end
 local function choose(files)
   local programs = {}
   for _, file in ipairs(files) do
-    if file.path:match("^/bin/") and file.path ~= SELF then
+    if file.path:match("^/bin/") and not ALWAYS[file.path] then
       programs[#programs + 1] = file
     end
   end
@@ -189,7 +198,7 @@ local function choose(files)
         .. file.path:match("/([^/]+)$"), on and WHITE or DIM)
     end
     say("")
-    say("  ocup and the libraries are always copied", DIM)
+    say("  ocup, ocinstall and the libraries are always copied", DIM)
     say("  up and down to move, space to toggle, enter to flash", DIM)
 
     local name, _, _, code = event.pull(nil, "key_down")
@@ -214,7 +223,7 @@ local function choose(files)
 
   local kept = {}
   for _, file in ipairs(files) do
-    if not file.path:match("^/bin/") or file.path == SELF or taking[file.path] then
+    if not file.path:match("^/bin/") or ALWAYS[file.path] or taking[file.path] then
       kept[#kept + 1] = file
     end
   end
@@ -355,6 +364,28 @@ if not enabled then
 end
 say("    /etc/rc.cfg", DIM)
 
+-- What ocup will read as the choice already made. Without it ocup falls back to
+-- its own default and takes everything else off the disk, which is a computer
+-- throwing away what it was just given. ocup never lists itself, so neither
+-- does this.
+local carried = {}
+for _, file in ipairs(files) do
+  local name = file.path:match("^/bin/(.+)%.lua$")
+  if name and name ~= "ocup" then
+    carried[#carried + 1] = name
+  end
+end
+table.sort(carried)
+
+local recorded, badly = writeTo(chosen.address, core.CONFIG_PATH,
+  serialization.serialize({ programs = carried }))
+if not recorded then
+  io.stderr:write("ocmkfs: could not write " .. core.CONFIG_PATH .. ": "
+    .. tostring(badly) .. "\n")
+  return 1
+end
+say("    " .. core.CONFIG_PATH .. "  " .. #carried .. " programs", DIM)
+
 core.setValue(chosen.address, "setLabel", LABEL)
 
 say("")
@@ -362,6 +393,9 @@ say("  done, labelled " .. LABEL, GREEN)
 say("")
 say("  put the floppy in another computer and run:", DIM)
 say("    install", CYAN)
+say("    ocinstall", CYAN)
 say("")
-say("  that is all a machine without an internet card needs.", DIM)
+say("  install copies the lot and the machine is usable straight away.", DIM)
+say("  ocinstall is where that machine drops what it does not want,", DIM)
+say("  and it is the only thing that has to be run on the machine itself.", DIM)
 say("  run ocup afterwards only to pick up anything newer.", DIM)

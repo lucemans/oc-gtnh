@@ -19,9 +19,11 @@ programs/ocdump.lua
 programs/ocwatch.lua
 programs/ocitems.lua
 programs/ocsweeper.lua
+programs/octiles.lua
 programs/occonnect.lua
 programs/ockeypad.lua
 programs/ocmkfs.lua
+programs/ocinstall.lua
 programs/ocglass.lua
 programs/ocserve.lua
 programs/ocview.lua

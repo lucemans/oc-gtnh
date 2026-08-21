@@ -14,11 +14,13 @@ https://ocdoc.cil.li/api:internet
 | `ocserve`   | answers for the machines it watches, with nobody looking at its screen  |
 | `ocping`    | whether the network works, at either layer                             |
 | `ocdebug`   | live on-screen browser for components, their methods and values        |
-| `ocdump`    | uploads a full system dump as an unlisted paste, to share for support  |
+| `ocdump`    | uploads a full system dump as an unlisted paste, `--net` for the mesh  |
 | `occonnect` | lets someone off the machine run commands on it, over HTTPS            |
 | `ockeypad`  | a PIN lock on an OpenSecurity keypad                                   |
 | `ocmkfs`    | flashes a floppy with the programs you pick, for a computer with no net |
+| `ocinstall` | on the new machine: keeps what it wants of the floppy, records the choice |
 | `ocsweeper` | minesweeper, up to 21x21                                               |
+| `octiles`   | 2048, from 2x2 up to 8x8                                               |
 | `ocitems`   | everything the Logistics Pipes network holds, items and fluids alike   |
 
 ## occonnect
@@ -167,6 +169,61 @@ out of memory looking at its own history. Only the view that shows them fetches
 them, for the same reason: it is a screenful that barely changes, where the
 machines change every two seconds.
 
+### Metrics, for Grafana
+
+Readings also go to a telemetry service, as GTP/1, which is a specification of
+this base rather than one of Minitel's own. It uses virtual port 2000.
+A message is `GTP1:` and then a serialized table, sent unreliably, one message
+to a packet.
+
+The whole coupling to that service is the shape of those bytes. It owns
+everything past them: the `gtnh.` prefix, the Graphite translation, validation,
+and the `host`, `site` and `area` labels, which it works out from the sender
+rather than being told.
+
+A reading here is a label and a number, and a metric there is a name and a
+number with labels saying what it was measured on. So `ocgtp` is mostly a
+translation, and the part of it that matters is refusing to guess:
+
+| what arrives | what is sent |
+| --- | --- |
+| a gauge in `L` | `fluid.amount_liters`, `fluid.capacity_liters`, `fluid.fill_ratio`, labelled `fluid` and `machine` |
+| a gauge in `EU` | `energy.stored_eu`, `energy.capacity_eu`, `energy.fill_ratio`, labelled `machine` |
+| a firebox in `C` | `machine.temperature_kelvin`, converted rather than renamed |
+| a machine's status | `machine.active`, 1 when it is working |
+| an alert | `alert.tripped`, 1 or 0, labelled `alert` |
+| the fluid network | `fluid.amount_liters`, labelled `fluid` |
+| a unit nothing here recognises | nothing at all |
+
+That last row is the rule the rest follows from. A series invented out of a unit
+nobody recognised sits in the database being wrong for as long as the database
+exists, and no dashboard is worth that.
+
+Nothing about the item network is sent. A base holds thousands of item names and
+each one as a label value is a series of its own, which is the one mistake the
+specification names twice.
+
+The samples come out of the report `ocnet` already built for the dashboard,
+rather than from the machines again. That is what stops the screen and the graph
+disagreeing about a scale, and it means telemetry costs no machine reads beyond
+the ones already happening.
+
+`site` and `area` come from the first two parts of the hostname, so the names
+are worth choosing:
+
+| machine | hostname | gives |
+| --- | --- | --- |
+| the one running `ocview` | `ovw-core-view-01` | `site=ovw area=core` |
+| the boiler room | `ovw-pwr-steam-col-01` | `site=ovw area=pwr` |
+| the blast furnace | `ovw-smelt-ebf-col-01` | `site=ovw area=smelt` |
+| the chemical room | `ovw-chem-oil-col-01` | `site=ovw area=chem` |
+
+The service to send to is `ovw-core-obs-01` every ten seconds until told
+otherwise, which is the deployment the specification names. `ocwatch --edit` has
+it on the network screen, and blank turns it off. Off is a real answer: a
+machine sending to a service that is not there puts one unroutable packet across
+the mesh every interval, forever.
+
 ### One internet card for the base
 
 `ocup` fetches over HTTPS when the machine has an internet card. When it has
@@ -199,6 +256,15 @@ daemon has in its route cache. `ocping --l2` is the bare modem, which tests
 whether two cards can hear each other at all. When the first fails, the second
 says whether the fault is below Minitel or in it.
 
+`ocdump --net` writes the same picture into a dump somebody else can read. It
+adds this machine's hostname, whether the daemon answers its own loopback, every
+network card with its strength, the route cache, the satellites written down,
+and then what each satellite reports: its machines, their gauges, the alerts,
+the fluids and whatever items are moving. It asks everyone at once and waits
+five seconds, so a satellite that says nothing is in the dump as `no answer`.
+That is the line worth reading, because a satellite missing from a dashboard and
+a satellite that is switched off look the same on the screen.
+
 ### What is vendored
 
 Five files are not ours. They come from
@@ -224,6 +290,7 @@ The libraries install to `/lib`, each knowing about one thing:
 | `ocnotify` | every way this base can say something happened, and which are wanted |
 | `occomputronics` | Computronics: saying something aloud, and the colourful lamp |
 | `ocnet` | the question one computer puts to another, and the answer |
+| `ocgtp` | readings as metrics, for whatever is collecting them |
 | `minitel` | the network itself, vendored: addressing, meshing, streams |
 | `syslog` | raising one record, vendored: a service, a severity, a line |
 
@@ -434,9 +501,9 @@ Not every computer wants every program. `ocup install` lists what the manifest
 offers, records the choice in `/etc/ocgt.cfg` as `programs`, and then installs
 it. Move with the arrow keys, toggle with space, enter installs what is ticked,
 q leaves everything as it was. A computer that has never
-chosen gets `ocup`, `ocdebug` and `ocdump`: enough to look at the machines in
-front of it and to ask for help with them. Once a choice exists it is the whole
-truth:
+chosen gets `ocup`, `ocdebug`, `ocdump` and `ocinstall`: enough to look at the
+machines in front of it, to ask for help with them, and to set up the next
+machine from a floppy. Once a choice exists it is the whole truth:
 `ocup` installs what is in the list and takes anything else off `/bin`, so what
 is installed is always what was chosen. `ocup` itself cannot be opted out,
 since nothing would be left to opt back in with. Libraries are not part of the
@@ -462,8 +529,26 @@ also names the machine if it has no name yet, after the first eight characters
 of its address, which `ocwatch --edit` then changes to something worth reading.
 
 A machine with no internet card has nothing to fetch `ocup` with in the first
-place. Flash a floppy on a machine that has one, with `ocmkfs`, then `install`
-from it there.
+place. Flash a floppy on a machine that has one, with `ocmkfs`, then on the new
+machine run `install` and then `ocinstall`.
+
+```
+install      copies the floppy onto the machine, which is usable at that point
+ocinstall    drops the programs this machine does not want
+```
+
+The floppy carries every program, because it is made before anybody knows which
+machine it is for, and it carries the list of them as `programs` in
+`/etc/ocgt.cfg`. That list is what stops the next `ocup` run from removing the
+lot: `ocup` treats a recorded choice as the whole truth, so a floppy that copied
+programs and said nothing about them left a machine that threw them away on its
+first update.
+
+`ocinstall` is where one machine narrows that list. It shows what is in `/bin`,
+removes what is turned off, and writes the rest back. Everything else in the
+configuration is read and put back untouched, so the machines being watched, the
+alerts, the satellites and the telemetry service survive it. It needs no network,
+which is the point: the machine it runs on usually has none yet.
 
 `ocping` is what to run when something is wrong. It says whether the daemon is
 running, what this machine is called, and what it knows about where the others

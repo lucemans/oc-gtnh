@@ -296,8 +296,8 @@ size until it is restarted.
 
 So every full-screen program here keeps its positional constants inside a
 `layout()` function, calls it at startup, and calls it again on
-`screen_resized`. `ocsweeper` additionally starts a new game when the board no
-longer fits, since its board size is derived from the screen.
+`screen_resized`. `ocsweeper` and `octiles` additionally start a new game when
+the board size changes, since both derive it from the screen.
 
 `core.viewport(gpu)` wraps the call and falls back to `getResolution` if a card
 does not offer a viewport.

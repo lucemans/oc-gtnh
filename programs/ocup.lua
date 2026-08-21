@@ -15,7 +15,7 @@ local serialization = require("serialization")
 local sh = require("sh")
 local term = require("term")
 
-local VERSION = "0.19.0"
+local VERSION = "0.20.0"
 
 -- read here rather than through oclib: on a fresh computer ocup arrives alone
 -- and there is no /lib yet for it to require
@@ -418,7 +418,9 @@ end
 -- not installed, and is taken off the disk if it is already there. Libraries
 -- are not part of the choice, since the programs that are kept need whichever
 -- of them they require.
-local DEFAULT = { ocdebug = true, ocdump = true }
+-- ocinstall is here because a floppy carries whatever the machine that flashed
+-- it had, and a machine that never installed it cannot put it on one.
+local DEFAULT = { ocdebug = true, ocdump = true, ocinstall = true }
 
 local chosen = nil
 if type(config.programs) == "table" then

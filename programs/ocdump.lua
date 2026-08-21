@@ -1,19 +1,31 @@
 -- ocdump: writes a full system dump and uploads it as an unlisted paste, so it
 -- can be handed to someone who needs to understand this machine's setup
+--
+--   ocdump         this computer: its components, their methods and values
+--   ocdump --net   and the network as well, as this computer sees it
+--
+-- The network half is one round of questions and one window to answer in,
+-- rather than a machine at a time. A satellite that says nothing in that window
+-- is in the dump as silence, which is the fault worth reading about.
 
 local component = require("component")
 local computer = require("computer")
+local event = require("event")
 local filesystem = require("filesystem")
 local core = require("oclib")
 local gt = require("ocgt")
 local lp = require("oclogistics")
+local net = require("ocnet")
 local serialization = require("serialization")
 
-local VERSION = "0.7.0"
+local VERSION = "0.8.0"
 
 local ARCHIVE_DIR = "/home/dumps"
 local PASTE_URL = "https://dpaste.com/api/v2/"
 local EXPIRY_DAYS = "1"
+-- how long the answers have to arrive. Every satellite is asked at once, so
+-- this is the whole cost of --net rather than the cost of each one.
+local ANSWER_WAIT = 5
 -- multipart avoids percent-encoding the dump, which would cost a whole extra
 -- copy of it on a computer that only has a few hundred KB of memory
 local BOUNDARY = "ocdump7f3ab21cBOUNDARY"
@@ -107,6 +119,176 @@ local function dumpComponent(address, kind)
   end
 end
 
+-- The daemon prints its route cache and keeps it in an upvalue, and it is
+-- vendored, so the only way to it is to send the print somewhere else for the
+-- length of the call.
+local function routeLines()
+  local ok, rc = pcall(require, "rc")
+  local route = ok and rc.loaded and rc.loaded.minitel and rc.loaded.minitel.route
+  if type(route) ~= "function" then
+    return nil
+  end
+
+  local captured = {}
+  local was = print
+  _G.print = function(...)
+    local parts = table.pack(...)
+    for index = 1, parts.n do
+      parts[index] = tostring(parts[index])
+    end
+    captured[#captured + 1] = table.concat(parts, "  ", 1, parts.n)
+  end
+  pcall(route)
+  _G.print = was
+  return captured
+end
+
+local function dumpCards()
+  line("")
+  line("-- cards --")
+  local found = 0
+  for address in component.list("modem") do
+    found = found + 1
+    local card = component.proxy(address)
+    local how = card.isWireless and card.isWireless() and
+      ("wireless, strength " .. tostring(card.getStrength())) or "wired"
+    line("  " .. address:sub(1, 8) .. "  " .. how
+      .. "  packet " .. tostring(card.maxPacketSize and card.maxPacketSize() or "?"))
+  end
+  for address in component.list("tunnel") do
+    found = found + 1
+    line("  " .. address:sub(1, 8) .. "  linked card")
+  end
+  if found == 0 then
+    line("  (none, so this machine is only ever a relay)")
+  end
+end
+
+local function dumpSatellite(answer)
+  line("")
+  line("-- " .. answer.host .. "  " .. tostring(answer.address) .. " --")
+
+  for _, card in ipairs(answer.cards) do
+    line("  machine  " .. tostring(card.name)
+      .. (card.status and ("  " .. card.status) or "")
+      .. (card.alarm and "  ALARM" or ""))
+    for _, gauge in ipairs(card.gauges or {}) do
+      line("    " .. tostring(gauge.label) .. "  "
+        .. tostring(gauge.current) .. " of " .. tostring(gauge.maximum)
+        .. " " .. tostring(gauge.unit or "")
+        .. string.format("  %.1f%%", gauge.percent or 0)
+        .. (gauge.rate and ("  rate " .. tostring(gauge.rate)) or ""))
+    end
+  end
+
+  for _, alert in ipairs(answer.alerts) do
+    line("  alert  " .. tostring(alert.name)
+      .. (alert.tripped and "  tripped" or "  quiet"))
+  end
+
+  if answer.items[1] then
+    line("  items moving over " .. tostring(answer.over) .. "s")
+    for _, item in ipairs(answer.items) do
+      line("    " .. tostring(item.name) .. "  " .. tostring(item.rate))
+    end
+  end
+
+  for _, fluid in ipairs(answer.fluids) do
+    line("  fluid  " .. tostring(fluid.name) .. "  " .. tostring(fluid.amount)
+      .. (fluid.rate and ("  " .. tostring(fluid.rate)) or ""))
+  end
+end
+
+-- Everything this machine can see of the network. Listening starts before the
+-- daemon is proved alive, because proving it consumes a packet and a satellite
+-- that answered first would otherwise be taken for the proof and then be gone.
+local function dumpNetwork()
+  line("")
+  line("== network ==")
+  line("hostname    " .. net.hostname(config))
+
+  local answers, gateways = {}, {}
+  local token = net.listen(function(from, port, data)
+    if port == core.PORT and data == net.GATEWAY_REPLY then
+      gateways[#gateways + 1] = from
+      return
+    end
+    local answer = net.decode(port, from, data)
+    if answer then
+      answers[from] = answer
+    end
+  end)
+
+  local minitel, reason = net.up()
+  if not minitel then
+    net.deafen(token)
+    line("minitel     " .. reason)
+    dumpCards()
+    return
+  end
+
+  line("minitel     running")
+  line("mtu         " .. tostring(minitel.mtu))
+  dumpCards()
+
+  local routes = routeLines()
+  line("")
+  line("-- routes the daemon has learned --")
+  if not routes or #routes == 0 then
+    line("  (none yet, so nothing has been heard from since it started)")
+  else
+    for _, text in ipairs(routes) do
+      line("  " .. text)
+    end
+  end
+
+  local peers = net.peers(config)
+  line("")
+  line("-- satellites written down --")
+  line("  " .. (peers[1] and table.concat(peers, ", ") or "(none)"))
+
+  net.ask(minitel, config)
+  net.askGateway(minitel)
+
+  local until_ = computer.uptime() + ANSWER_WAIT
+  repeat
+    event.pull(until_ - computer.uptime())
+  until computer.uptime() >= until_
+  net.deafen(token)
+
+  local hosts = {}
+  for host in pairs(answers) do
+    hosts[#hosts + 1] = host
+  end
+  table.sort(hosts)
+
+  line("")
+  line("-- who answered --")
+  if #hosts == 0 then
+    line("  (nobody in " .. ANSWER_WAIT .. "s)")
+  end
+  for _, host in ipairs(hosts) do
+    local answer = answers[host]
+    line(string.format("  %-24s %d machines  %d alerts  %d fluids  %d items",
+      host, #answer.cards, #answer.alerts, #answer.fluids, #answer.items))
+  end
+  for _, host in ipairs(peers) do
+    if not answers[host] then
+      line(string.format("  %-24s no answer", host))
+    end
+  end
+
+  line("")
+  line("-- who can reach the internet --")
+  line("  " .. (gateways[1] and table.concat(gateways, ", ") or "(nobody said so)"))
+
+  line("")
+  line("== satellites (" .. #hosts .. ") ==")
+  for _, host in ipairs(hosts) do
+    dumpSatellite(answers[host])
+  end
+end
+
 local function upload(body)
   local parts = {}
   local function field(name, value)
@@ -166,6 +348,16 @@ local function upload(body)
   end
 end
 
+local wantsNetwork = false
+for _, argument in ipairs({ ... }) do
+  if argument == "--net" then
+    wantsNetwork = true
+  else
+    io.stderr:write("ocdump: unknown argument " .. tostring(argument) .. "\n")
+    return 1
+  end
+end
+
 if not component.isAvailable("internet") then
   io.stderr:write("ocdump: no internet card installed\n")
   return 1
@@ -191,6 +383,11 @@ line("== index ==")
 for _, entry in ipairs(entries) do
   line(string.format("%-18s %s  %s", entry.kind, entry.address:sub(1, 8),
     gt.displayName(entry.address, config) or lp.displayName(entry.address) or ""))
+end
+
+if wantsNetwork then
+  print("asking the network, " .. ANSWER_WAIT .. "s for answers...")
+  dumpNetwork()
 end
 
 line("")
