@@ -22,7 +22,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.22.0"
+local VERSION = "0.23.0"
 
 -- what this machine tells the network it is running, in every report it sends
 net.running("ocwatch", VERSION)
@@ -1486,10 +1486,15 @@ local heard = net.listen(function(from, port, data)
   pending[#pending + 1] = { from = from, port = port, data = data }
 end)
 
-local minitel, offline = net.up()
+-- The note is worth showing either way: it says why there is no network, or what
+-- had to be started before there was one. A machine that comes up into this has
+-- no other place to say it.
+local minitel, note = net.up()
 if not minitel then
   net.deafen(heard)
-  notice(offline)
+end
+if note then
+  notice(note)
 end
 
 blank()

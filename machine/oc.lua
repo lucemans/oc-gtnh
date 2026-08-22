@@ -45,6 +45,9 @@ function oc.reset()
   oc.opened = {}
   oc.shutdowns = {}
   oc.later = {}
+  -- what "rc <name> start" will actually start, so a program that starts a
+  -- daemon for itself is tested against a daemon that then exists
+  oc.services = {}
   pulls = 0
   oc.elapsed = 0
   -- how many times a program waiting on a clock is allowed to hear nothing;
@@ -725,6 +728,13 @@ function oc.install()
         local target = command:match(">%s*(%S+)%s*$")
         if target then
           oc.files[target] = "output of " .. (command:match("^(.-)%s*>") or command)
+        end
+        -- rc is run rather than recorded, because a program that starts a daemon
+        -- for itself is only right if the daemon is then there. Recording it
+        -- would test that the command was typed, which is not the claim.
+        local service = command:match("^rc%s+(%S+)%s+start$")
+        if service and oc.services[service] then
+          oc.services[service]()
         end
         return true
       end,

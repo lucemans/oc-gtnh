@@ -27,7 +27,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.15.0"
+net.VERSION = "0.16.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -73,10 +73,17 @@ net.EVERYONE = "~"
 local PROBE = "ocalive?"
 local ALIVE = 1
 
+-- Whether the daemon is listening. A packet addressed to this machine is handed
+-- straight back by it and by nothing else, so a loopback that returns is the
+-- whole proof that it is there.
+local function answersItself(minitel)
+  minitel.usend(net.hostname(), core.PORT, PROBE)
+  return event.pull(ALIVE, "net_msg") ~= nil
+end
+
 -- Whether Minitel is installed and its daemon is actually running, and where
--- packets go once it is. A packet addressed to this machine is handed straight
--- back by the daemon, and by nothing else, so a loopback that returns is the
--- whole proof.
+-- packets go once it is. Returns the handle to send through, and beside it a
+-- note when something had to be put right first.
 --
 -- The loopback consumes a packet, so a program that wants to hear the network
 -- calls net.listen before this rather than after: a question that arrived first
@@ -102,12 +109,35 @@ function net.up()
     return nil, "no network card, only a relay or nothing at all"
   end
 
-  minitel.usend(net.hostname(), core.PORT, PROBE)
-  if not event.pull(ALIVE, "net_msg") then
-    return nil, "the minitel daemon is not running, try: rc minitel start"
+  if answersItself(minitel) then
+    return minitel
   end
 
-  return minitel
+  -- Started here rather than described to somebody. rc starts the daemons at
+  -- boot out of /etc/rc.cfg, and this used to print the command to type when it
+  -- had not: a machine set to come up into a dashboard has no prompt to type it
+  -- at, and the dashboard clears the screen over whatever rc said went wrong.
+  --
+  -- Enabled as well as started. Starting fixes this boot; enabling is what stops
+  -- the next one going the same way, and rc refuses a name it already has.
+  local hasShell, sh = pcall(require, "sh")
+  if not hasShell then
+    return nil, "the minitel daemon is not running, try: rc minitel start"
+  end
+  pcall(sh.execute, _ENV, "rc minitel enable")
+  pcall(sh.execute, _ENV, "rc minitel start")
+
+  if answersItself(minitel) then
+    return minitel, "the minitel daemon was not running, started and enabled it"
+  end
+
+  -- Installed, told to start, and a packet addressed to this machine still does
+  -- not come back. Either the daemon will not start at all, or it started under
+  -- a different name: it hands a packet straight back only when the address
+  -- matches what it read out of /etc/hostname, and a name it does not recognise
+  -- goes to the network and is never seen again. Both look like this from here.
+  return nil, "minitel will not answer to " .. net.hostname()
+    .. ", try: rc minitel restart"
 end
 
 -- Read once. The name is asked far more often than it can change: every packet

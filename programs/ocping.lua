@@ -16,7 +16,7 @@ local core = require("oclib")
 local event = require("event")
 local net = require("ocnet")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
 local PING = "ocping?"
 local PONG = "ocping!"
@@ -133,7 +133,9 @@ end
 
 local minitel, reason = net.up()
 say("  host      " .. net.hostname(config), DIM)
-if not minitel then
+if minitel and reason then
+  say("  minitel   " .. reason, GREEN)
+elseif not minitel then
   say("  minitel   " .. reason, RED)
   say("")
   say("  ocping --l2 tests the cards without it", DIM)

@@ -1532,6 +1532,18 @@ local function startMinitel(hostname)
   return daemon
 end
 
+-- The daemon installed and not started, which is what a machine looks like when
+-- rc has not run it. Nothing here starts it; the program under test has to.
+local function installMinitel(hostname)
+  oc.files["/etc/hostname"] = hostname
+  oc.services.minitel = function()
+    local daemon = oc.service("etc/minitel.lua")
+    if daemon then
+      daemon.start()
+    end
+  end
+end
+
 -- One packet arriving off the wire, from a machine that is not this one. Packet
 -- ids are counted rather than random, so a rerun sends the same thing twice and
 -- the daemon's duplicate cache can be tested on purpose.
@@ -1539,6 +1551,14 @@ local delivered = 0
 local function deliver(modem, card, dest, sender, data, id)
   delivered = delivered + 1
   oc.push("modem_message", modem.address, card, WIRE, 12,
+    id or ("packet-" .. delivered), 0, dest, sender, PORT, data)
+end
+
+-- The same, once the program has been running a while. Nothing hears a packet
+-- that arrives before the daemon does.
+local function deliverAfter(round, modem, card, dest, sender, data, id)
+  delivered = delivered + 1
+  oc.pushAfter(round, "modem_message", modem.address, card, WIRE, 12,
     id or ("packet-" .. delivered), 0, dest, sender, PORT, data)
 end
 
@@ -1819,6 +1839,50 @@ test("the machine says it heard the order before it starts fetching", function()
     "did not say what it was about to do")
 end)
 
+-- A machine set to come up into a dashboard has nobody at a prompt to type the
+-- command at, and the dashboard clears the screen over whatever rc said went
+-- wrong at boot. So it starts the daemon itself rather than describing it.
+test("a dashboard starts the minitel daemon when rc has not", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+  })
+  installMinitel("boiler-room")
+  -- asked once the daemon is up: a packet arriving before there is anything
+  -- listening for it is a packet nobody ever sees
+  deliverAfter(3, modem, "bb000000", "boiler-room", "tablet", "ocstatus?")
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  oc.pump()
+
+  local ran = table.concat(oc.executed, " ")
+  check(contains(ran, "rc minitel start"), "never started the daemon: " .. ran)
+  -- starting fixes this boot; enabling is what stops the next one going the
+  -- same way, and rc refuses a name it already has
+  check(contains(ran, "rc minitel enable"), "started it for this boot only")
+  check(firstReply(modem) ~= nil,
+    "started the daemon and still did not get on the network")
+  check(contains(oc.frame(), "was not running"),
+    "did not say the daemon had to be started")
+end)
+
+test("a dashboard that has a daemon already does not go near rc", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+  })
+  startMinitel("boiler-room")
+
+  oc.run("ocwatch")
+  check(not contains(table.concat(oc.executed, " "), "rc minitel"),
+    "restarted a daemon that was already answering")
+end)
+
 test("ocwatch says so when the daemon is not running", function()
   local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
   oc.components = { modem, SUPER_TANK }
@@ -1828,7 +1892,7 @@ test("ocwatch says so when the daemon is not running", function()
   })
 
   oc.run("ocwatch")
-  check(contains(oc.frame(), "minitel daemon is not running"),
+  check(contains(oc.frame(), "minitel will not answer"),
     "a dashboard off the network never said so")
 end)
 
@@ -2127,7 +2191,7 @@ test("ocview says so when the daemon is not running", function()
   oc.components = { modem }
 
   oc.run("ocview", "--once")
-  check(contains(oc.printed(), "minitel daemon is not running"),
+  check(contains(oc.printed(), "minitel will not answer"),
     "did not say why it could not ask")
 end)
 
