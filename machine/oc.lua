@@ -16,7 +16,19 @@ local frame = {}
 -- looks like from in here
 local emptyPulls = 0
 
+-- Our own libraries, dropped from package.loaded on every reset. A real machine
+-- gives every program its own Lua state, and this process runs the lot, so a
+-- library that remembers something across a run carried the last test's machine
+-- into the next one. ocnet reads /etc/hostname once and is the first to do it.
+local LIBRARIES = {
+  "oclib", "ocgt", "oclogistics", "ocrailcraft", "octank", "occomputronics",
+  "ocsecurity", "ocnotify", "ocgtp", "ocnet", "minitel", "syslog",
+}
+
 function oc.reset()
+  for _, name in ipairs(LIBRARIES) do
+    package.loaded[name] = nil
+  end
   oc.files = {}
   oc.events = {}
   oc.requests = {}
@@ -27,6 +39,7 @@ function oc.reset()
   oc.executed = {}
   oc.colors = {}
   oc.reads = {}
+  oc.opened = {}
   oc.elapsed = 0
   -- how many times a program waiting on a clock is allowed to hear nothing;
   -- tests that watch something happen on a timer raise it
@@ -782,6 +795,10 @@ function oc.install()
 
   io.open = function(path, mode)
     mode = mode or "r"
+    -- every path a program touched, in order, so a test can say how often. A
+    -- disk in this game is audible from across the room, and a file opened on
+    -- a clock is a computer that never goes quiet.
+    oc.opened[#oc.opened + 1] = path
     if mode:find("w") or mode:find("a") then
       if mode:find("w") then
         oc.files[path] = "" -- "w" truncates where "a" keeps, matching io.open

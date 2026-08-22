@@ -27,7 +27,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.13.0"
+net.VERSION = "0.14.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -95,6 +95,25 @@ function net.up()
   return minitel
 end
 
+-- Read once. The name is asked far more often than it can change: every packet
+-- sent and every question answered asks, so a satellite answering a dashboard
+-- was opening the file every couple of seconds and the disks were audible
+-- across the base. net.setHostname is the only rename here and keeps this
+-- current.
+local named, readNamed
+
+local function fromFile()
+  if not readNamed then
+    readNamed = true
+    local file = io.open("/etc/hostname", "r")
+    if file then
+      named = file:read()
+      file:close()
+    end
+  end
+  return named
+end
+
 -- What to call this machine. The Minitel daemon reads /etc/hostname when it
 -- starts and names every packet with it, so that file is asked first and
 -- everything else is a fallback for a machine that has none.
@@ -104,12 +123,7 @@ end
 -- say something the daemon has never heard of. Believing it over the file is
 -- how a machine addresses its own loopback to a name that is not its own.
 function net.hostname(config)
-  local name
-  local file = io.open("/etc/hostname", "r")
-  if file then
-    name = file:read()
-    file:close()
-  end
+  local name = fromFile()
   if not name or name == "" then
     name = os.getenv("HOSTNAME")
   end
@@ -120,6 +134,20 @@ function net.hostname(config)
     return computer.address():sub(1, 8)
   end
   return name
+end
+
+-- Renames this machine. The Minitel daemon reads /etc/hostname when it starts
+-- and names every packet with what it found there, so writing the file is the
+-- rename and the daemon has to be restarted for it to take.
+function net.setHostname(name)
+  local file, reason = io.open("/etc/hostname", "w")
+  if not file then
+    return nil, tostring(reason)
+  end
+  file:write(name)
+  file:close()
+  named, readNamed = name, true
+  return true
 end
 
 -- What a Minitel packet can carry as an address. The protocol allows rather

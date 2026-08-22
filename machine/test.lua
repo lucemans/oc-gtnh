@@ -1613,6 +1613,42 @@ test("ocwatch answers a status request while it is watching", function()
   check(contains(oc.frame(), "served"), "did not say it served the request")
 end)
 
+-- A disk in this game is heard from across the room. ocwatch answers a
+-- dashboard every couple of seconds for as long as it runs, and reading the
+-- machine's name off the disk to sign each answer had every satellite in the
+-- base clicking on a clock.
+test("the machine's own name is read off the disk once, not per question", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+  })
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "ocstatus?", "one")
+  deliver(modem, "cc000000", "boiler-room", "wall-screen", "ocstatus?", "two")
+  -- the daemon read the file when it started, which is its one read and not
+  -- ocwatch's
+  oc.opened = {}
+
+  oc.run("ocwatch")
+  oc.pump()
+
+  local answered, reads = 0, 0
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 10) == "ocstatus!\n" then
+      answered = answered + 1
+    end
+  end
+  for _, path in ipairs(oc.opened) do
+    if path == "/etc/hostname" then
+      reads = reads + 1
+    end
+  end
+  check(answered == 2, "answered " .. answered .. " of two questions")
+  check(reads == 1, "opened /etc/hostname " .. reads .. " times, not once")
+end)
+
 test("ocwatch says so when the daemon is not running", function()
   local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
   oc.components = { modem, SUPER_TANK }

@@ -22,7 +22,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.20.0"
+local VERSION = "0.21.0"
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -1250,19 +1250,6 @@ local function editNotify()
   end
 end
 
--- Minitel names every packet with what it read out of /etc/hostname when its
--- daemon started, so that file is the name and this writes it. The daemon does
--- not read it again, which is why the screen says to restart it.
-local function writeHostname(name)
-  local file = io.open("/etc/hostname", "w")
-  if not file then
-    return false
-  end
-  file:write(name)
-  file:close()
-  return true
-end
-
 -- Who this machine is, and which satellites it should be hearing from. The list
 -- fills itself in as ocview hears from a satellite, so what is edited here is a
 -- satellite that has never been in range to be heard.
@@ -1319,7 +1306,7 @@ local function editNetwork()
       elseif fine then
         config.hostname = name
         save()
-        if writeHostname(name) then
+        if net.setHostname(name) then
           -- OpenOS keeps its own copy of the name per shell, and the daemon
           -- reads the file once at start, so neither notices on its own
           pcall(sh.execute, _ENV, "hostname --update")
