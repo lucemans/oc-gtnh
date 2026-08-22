@@ -32,7 +32,7 @@ local keyboard = require("keyboard")
 local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
 
 local LABEL = "oc-gtnh"
 -- Where the installed set lives, and what belongs to this project. Our own
@@ -40,6 +40,9 @@ local LABEL = "oc-gtnh"
 -- here: a floppy without them installs a machine that cannot reach anything,
 -- which is the one machine a floppy is for.
 local FOLDERS = { "/lib", "/bin", "/etc/rc.d" }
+-- where a file installed here came from in the repository, which is how ocup
+-- names it and therefore how a dashboard comparing two machines names it
+local SOURCES = { ["/lib"] = "lib", ["/bin"] = "programs", ["/etc/rc.d"] = "etc" }
 local BELONGS = "^oc.*%.lua$"
 local VENDORED = {
   ["minitel.lua"] = true,
@@ -377,8 +380,23 @@ for _, file in ipairs(files) do
 end
 table.sort(carried)
 
+-- What the floppy is carrying, written down the way ocup writes it, so a
+-- machine installed off a floppy can say what it is running before it has ever
+-- reached the internet. The commit is this machine's, which is the right answer:
+-- the floppy is a copy of what is on this disk.
+local here = core.loadConfig()
+local installed = { commit = here.installed and here.installed.commit, files = {} }
+for _, file in ipairs(files) do
+  local folder, name = file.path:match("^(.*)/([^/]+)$")
+  local source = SOURCES[folder]
+  local version = file.contents:match('VERSION%s*=%s*"([^"]+)"')
+  if source and version then
+    installed.files[source .. "/" .. name] = version
+  end
+end
+
 local recorded, badly = writeTo(chosen.address, core.CONFIG_PATH,
-  serialization.serialize({ programs = carried }))
+  serialization.serialize({ programs = carried, installed = installed }))
 if not recorded then
   io.stderr:write("ocmkfs: could not write " .. core.CONFIG_PATH .. ": "
     .. tostring(badly) .. "\n")

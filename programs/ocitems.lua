@@ -32,7 +32,10 @@ local gtp = require("ocgtp")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.14.0"
+local VERSION = "0.15.0"
+
+-- what this machine tells the network it is running, in every report it sends
+net.running("ocitems", VERSION)
 
 local CACHE = "/etc/ocitems.cache"
 
@@ -460,7 +463,13 @@ while true do
     local packet = table.remove(pending, 1)
     local report = packet.data == net.ASK
       and net.report(config, net.machines(config), movers, fluids) or nil
-    net.answer(minitel, packet.port, packet.from, packet.data, report)
+    local _, command =
+      net.answer(minitel, config, packet.port, packet.from, packet.data, report)
+    if command == "update" then
+      -- the machine goes down inside this, so nothing after it runs
+      net.deafen(heard)
+      net.applyUpdate()
+    end
   end
 
   if name == nil then

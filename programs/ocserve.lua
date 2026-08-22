@@ -20,7 +20,10 @@ local lp = require("oclogistics")
 local net = require("ocnet")
 local gtp = require("ocgtp")
 
-local VERSION = "0.6.0"
+local VERSION = "0.7.0"
+
+-- what this machine tells the network it is running, in every report it sends
+net.running("ocserve", VERSION)
 
 -- how many items are counted between two questions, and how long the loop
 -- listens before it goes back to counting. One count is a server tick.
@@ -124,10 +127,16 @@ while true do
     -- for one costs no reads at all
     local report = packet.data == net.ASK
       and net.report(config, net.machines(config), movers, fluids) or nil
-    local sent = net.answer(minitel, packet.port, packet.from, packet.data, report)
+    local sent, command =
+      net.answer(minitel, config, packet.port, packet.from, packet.data, report)
     if sent then
       say("  answered " .. sent, GREEN)
       answered = true
+    end
+    if command == "update" then
+      -- the machine goes down inside this, so nothing after it runs
+      net.deafen(heard)
+      net.applyUpdate()
     end
   end
 

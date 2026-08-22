@@ -22,7 +22,11 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.21.0"
+local VERSION = "0.22.0"
+
+-- what this machine tells the network it is running, in every report it sends
+net.running("ocwatch", VERSION)
+
 local REFRESH_SECONDS = 2
 
 local gpu = component.gpu
@@ -1534,12 +1538,18 @@ while true do
   -- answers out of the reading the last refresh already took
   while pending[1] do
     local packet = table.remove(pending, 1)
-    local sent = net.answer(minitel, packet.port, packet.from, packet.data, latest)
+    local sent, command =
+      net.answer(minitel, config, packet.port, packet.from, packet.data, latest)
     if sent then
       notice("served " .. sent)
       -- drawing is cheap, and it is the only way the notice reaches the screen
       -- before the next refresh comes round
       render(cards)
+    end
+    if command == "update" then
+      -- the machine goes down inside this, so nothing after it runs
+      net.deafen(heard)
+      net.applyUpdate()
     end
   end
 

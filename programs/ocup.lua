@@ -15,7 +15,7 @@ local serialization = require("serialization")
 local sh = require("sh")
 local term = require("term")
 
-local VERSION = "0.20.0"
+local VERSION = "0.21.0"
 
 -- read here rather than through oclib: on a fresh computer ocup arrives alone
 -- and there is no /lib yet for it to require
@@ -28,6 +28,12 @@ local BRANCH = "refs/heads/master"
 local MANIFEST = "manifest.txt"
 local VERSIONS = "versions.txt"
 local SELF = "programs/ocup.lua"
+
+-- What OpenOS runs for an interactive shell: /etc/profile.lua sources this, and
+-- boot gives the primary screen an interactive shell. It is the only autostart
+-- there is. rc is for daemons, and a dashboard that owns the screen and reads
+-- the keyboard is not one.
+local SHRC = "/home/.shrc"
 
 -- the folder a file lives in decides where it installs
 local DESTINATIONS = { programs = "/bin/", lib = "/lib/", etc = "/etc/rc.d/" }
@@ -471,6 +477,34 @@ if choosing then
     end
   end
 
+  -- What comes up at boot, cycled through the programs this machine is keeping.
+  -- Offering one it is not installing would write a .shrc naming a file that is
+  -- about to be deleted, and a machine that boots to an error is worse off than
+  -- one that boots to a prompt.
+  local function bootable()
+    local out = { "" }
+    for _, name in ipairs(names) do
+      if isWanted("programs/" .. name .. ".lua") then
+        out[#out + 1] = name
+      end
+    end
+    return out
+  end
+
+  local function cycleBoot()
+    local offered = bootable()
+    for index, name in ipairs(offered) do
+      if name == (config.boot or "") then
+        config.boot = offered[index % #offered + 1]
+        return
+      end
+    end
+    config.boot = offered[1]
+  end
+
+  -- one past the programs: the row that says what starts on its own
+  local BOOT_ROW = #names + 1
+
   local cursor = 1
   while true do
     term.clear()
@@ -488,6 +522,13 @@ if choosing then
       end
     end
 
+    local booting = config.boot
+    if booting == nil or booting == "" then
+      booting = "nothing, this machine comes up at a prompt"
+    end
+    write((cursor == BOOT_ROW and "\n  > " or "\n    ") .. "at boot: " .. booting
+      .. "\n", cursor == BOOT_ROW and WHITE or DIM)
+
     write("\n  ocup and the libraries are always installed\n", DIM)
     write("  up and down to move, space to toggle\n", DIM)
     write("  enter to install these " .. keeping .. ", q to leave it as it is\n", DIM)
@@ -504,16 +545,25 @@ if choosing then
       if cursor > 1 then
         cursor = cursor - 1
       else
-        cursor = #names
+        cursor = BOOT_ROW
       end
     elseif code == keyboard.keys.down then
-      if cursor < #names then
+      if cursor < BOOT_ROW then
         cursor = cursor + 1
       else
         cursor = 1
       end
-    elseif code == keyboard.keys.space and names[cursor] then
-      toggle(names[cursor])
+    elseif code == keyboard.keys.space then
+      if cursor == BOOT_ROW then
+        cycleBoot()
+      elseif names[cursor] then
+        toggle(names[cursor])
+        -- a program dropped from the list cannot go on being what boots
+        if config.boot and config.boot ~= ""
+          and not isWanted("programs/" .. config.boot .. ".lua") then
+          config.boot = ""
+        end
+      end
     end
   end
 
@@ -867,6 +917,37 @@ for path, defaults in pairs(DAEMON_CONFIG) do
   local daemon = path:match("^/etc/(.+)%.cfg$")
   if filesystem.exists("/etc/rc.d/" .. daemon .. ".lua") and not readFile(path) then
     writeFile(path, defaults)
+  end
+end
+
+-- What this machine is now running, written down where every program already
+-- reads it. A satellite is then able to say what it has without going back to
+-- the disk for it, which is the whole point: a dashboard asks a dozen machines
+-- what version they are on and none of them touches a file to answer.
+--
+-- The commit is the one name for the lot. Versions are per file and say which
+-- part is behind; a commit says whether the machine is on the same code as the
+-- one beside it, which is the question actually being asked.
+config.installed = { commit = commit, files = {} }
+for _, file in ipairs(FILES) do
+  if file.wanted then
+    local text = file.contents or file.existing
+    local version = versionOf(text)
+    if version then
+      config.installed.files[file.source] = version
+    end
+  end
+end
+writeFile(CONFIG_PATH, serialization.serialize(config))
+
+-- Which program this machine comes up running. A satellite told to update
+-- reboots into what it fetched, and without this it reboots into a shell
+-- prompt and is never heard from again.
+if config.boot and config.boot ~= "" then
+  local line = config.boot .. "\n"
+  if readFile(SHRC) ~= line then
+    writeFile(SHRC, line)
+    write("\n  " .. SHRC .. " starts " .. config.boot .. " at boot\n", CYAN)
   end
 end
 

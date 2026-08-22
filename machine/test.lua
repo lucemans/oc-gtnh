@@ -218,6 +218,74 @@ test("ocup installs missing programs", function()
   end
 end)
 
+-- What a machine is running has to be answerable without going to the disk for
+-- it, or a dashboard asking a dozen satellites sets a dozen disks going. ocup
+-- is the only thing that changes those files, so ocup is what writes them down.
+test("ocup writes down the commit and the versions it installed", function()
+  oc.components = { INTERNET }
+  oc.respond = serveProgram({
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
+    ["programs/ocdebug.lua"] = program("0.2.0"),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.4.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+
+  local ok, reason = oc.run("ocup")
+  check(ok, "ocup crashed: " .. tostring(reason))
+
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  check(type(saved) == "table" and type(saved.installed) == "table",
+    "wrote nothing down about what it installed")
+  check(saved and saved.installed and saved.installed.commit == COMMIT,
+    "did not record the commit it fetched from")
+  check(saved and saved.installed and saved.installed.files
+    and saved.installed.files["lib/ocgt.lua"] == "0.4.0",
+    "did not record the version of a file it installed")
+end)
+
+-- A machine told to update reboots into what it fetched, and OpenOS boots to a
+-- shell. Without this it boots to a prompt and is never heard from again.
+test("ocup starts the chosen program at boot", function()
+  oc.components = { INTERNET }
+  oc.respond = serveProgram({
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    programs = { "ocdump" },
+    boot = "ocdump",
+  })
+
+  oc.run("ocup")
+  check(oc.files["/home/.shrc"] == "ocdump\n",
+    "did not write the autostart: " .. tostring(oc.files["/home/.shrc"]))
+end)
+
+test("ocup leaves the autostart alone when no program was chosen for it", function()
+  oc.components = { INTERNET }
+  oc.respond = serveProgram({
+    ["manifest.txt"] = MANIFEST,
+    ["programs/ocup.lua"] = program(declaredVersion("programs/ocup.lua")),
+    ["programs/ocdump.lua"] = program("0.1.0"),
+    ["lib/oclib.lua"] = program("0.1.0"),
+    ["lib/ocgt.lua"] = program("0.1.0"),
+    ["lib/oclogistics.lua"] = program("0.1.0"),
+  })
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    programs = { "ocdump" },
+  })
+
+  oc.run("ocup")
+  check(oc.files["/home/.shrc"] == nil, "wrote an autostart nobody asked for")
+end)
+
 -- Not every computer wants every program. The satellite by the blast furnace
 -- has no use for minesweeper, and /bin is small.
 local function serveEverything()
@@ -1649,6 +1717,108 @@ test("the machine's own name is read off the disk once, not per question", funct
   check(reads == 1, "opened /etc/hostname " .. reads .. " times, not once")
 end)
 
+-- The answer comes out of the configuration ocup wrote, which the program is
+-- already holding, so a dashboard can ask every machine in the base what it is
+-- running and not one of them opens a file to reply.
+test("a satellite says what it is running, without touching the disk", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+    installed = { commit = "abc1234", files = { ["programs/ocwatch.lua"] = "0.22.0" } },
+  })
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "ocver?")
+  oc.opened = {}
+
+  local ok, reason = oc.run("ocwatch")
+  check(ok, "ocwatch crashed: " .. tostring(reason))
+  oc.pump()
+
+  local reply
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 7) == "ocver!\n" then
+      reply = packet
+    end
+  end
+  check(reply ~= nil, "no answer to ocver? went out")
+
+  local answer = reply and require("ocnet").decodeVersions(PORT, "boiler-room", reply.data)
+  check(answer ~= nil, "the answer could not be read back")
+  check(answer and answer.program and answer.program.name == "ocwatch",
+    "did not say which program is running")
+  check(answer and answer.installed
+    and answer.installed.files["programs/ocwatch.lua"] == "0.22.0",
+    "did not send the versions it has")
+  check(answer and answer.uptime > 0, "sent no uptime to tell a reboot by")
+
+  -- The two a program opens once when it starts, and never again. Anything else
+  -- in this list is a disk going round because somebody looked at a screen.
+  local STARTUP = { ["/etc/ocgt.cfg"] = true, ["/etc/hostname"] = true }
+  local extra = {}
+  for _, opened in ipairs(oc.opened) do
+    if not STARTUP[opened] then
+      extra[#extra + 1] = opened
+    end
+  end
+  check(#extra == 0, "went to the disk to answer: " .. table.concat(extra, ", "))
+end)
+
+-- The reboot is the point of it. Overwriting a file changes nothing that is
+-- already running, and a daemon reads its own file once when rc starts it.
+test("a satellite told to update runs ocup and reboots", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+  })
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "ocupdate?")
+
+  oc.run("ocwatch")
+  oc.pump()
+
+  local said
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 10) == "ocupdate!\n" then
+      said = packet
+    end
+  end
+  check(said ~= nil, "never said it had heard the order")
+  check(said and said.dest == "tablet", "did not answer the machine that asked")
+  check(contains(table.concat(oc.executed, " "), "ocup"), "never ran ocup")
+  check(oc.shutdowns[1] == "reboot",
+    "did not reboot: " .. tostring(oc.shutdowns[1]))
+end)
+
+-- Said before ocup runs rather than after. What happens next is a machine that
+-- answers nothing for half a minute, and a dashboard with no word from it
+-- cannot tell that from one that has died.
+test("the machine says it heard the order before it starts fetching", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+  })
+  startMinitel("boiler-room")
+  deliver(modem, "bb000000", "boiler-room", "tablet", "ocupdate?")
+
+  oc.run("ocwatch")
+  oc.pump()
+
+  local answer = nil
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 10) == "ocupdate!\n" then
+      answer = require("ocnet").decodeUpdate(PORT, "boiler-room", packet.data)
+    end
+  end
+  check(answer ~= nil and answer.word == "starting",
+    "did not say what it was about to do")
+end)
+
 test("ocwatch says so when the daemon is not running", function()
   local modem = fakeModem("aa000000-0000-0000-0000-000000000003", true)
   oc.components = { modem, SUPER_TANK }
@@ -2080,6 +2250,213 @@ test("ocview in the machine views asks for no log at all", function()
     check(packet.data ~= "oclog?",
       "fetched a screenful of history nobody was looking at")
   end
+end)
+
+-------------------------------------------------------------------------------
+-- the maintenance screen
+
+local function versionsOf(answer)
+  return "ocver!\n" .. require("serialization").serialize(answer)
+end
+
+test("ocview asks what every machine is running, and only on the update view",
+  function()
+    oc.width, oc.height = 120, 20
+    oc.reset()
+    local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+    oc.components = { modem }
+    oc.files["/etc/ocgt.cfg"] =
+      require("serialization").serialize({ view = "update" })
+    startMinitel("tablet")
+
+    oc.run("ocview", "--once")
+    local asked = false
+    for _, packet in ipairs(outbound(modem)) do
+      if packet.data == "ocver?" then
+        asked = true
+      end
+    end
+    check(asked, "never asked what anything is running")
+  end)
+
+test("ocview on the machine views asks for no versions at all", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] =
+    require("serialization").serialize({ view = "columns" })
+  startMinitel("tablet")
+
+  oc.run("ocview", "--once")
+  for _, packet in ipairs(outbound(modem)) do
+    check(packet.data ~= "ocver?",
+      "asked for versions on a screen that does not show them")
+  end
+end)
+
+test("the update view names each machine, what it runs and its commit", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] =
+    require("serialization").serialize({ view = "update" })
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
+    address = "aa000000-0000-0000-0000-000000000001",
+    program = { name = "ocwatch", version = "0.22.0" },
+    commit = "a1b2c3d4e5f6",
+    cards = {},
+    alerts = {},
+  }), "one")
+  deliver(modem, "bb000000", "tablet", "boiler-room", versionsOf({
+    uptime = 4200,
+    program = { name = "ocwatch", version = "0.22.0" },
+    installed = { commit = "a1b2c3d4e5f6",
+      files = { ["programs/ocwatch.lua"] = "0.22.0" } },
+  }), "two")
+
+  oc.run("ocview", "--once")
+
+  local shown = oc.screen()
+  check(contains(shown, "boiler-room"), "did not name the machine")
+  check(contains(shown, "ocwatch v0.22.0"), "did not say what it is running")
+  check(contains(shown, "a1b2c3d"), "did not show the commit")
+  check(contains(shown, "up 70m"), "did not show how long it has been up")
+end)
+
+-- A base spread across two commits is the thing this screen exists to show. One
+-- machine left behind after an update looks exactly like a machine that is fine
+-- until somebody puts the versions side by side.
+test("the update view says when the base does not agree with itself", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] =
+    require("serialization").serialize({ view = "update" })
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
+    address = "aa000000-0000-0000-0000-000000000001",
+    program = { name = "ocwatch", version = "0.22.0" },
+    commit = "a1b2c3d4", cards = {}, alerts = {},
+  }), "one")
+  deliver(modem, "bb000000", "tablet", "tank-farm", answerOf({
+    address = "aa000000-0000-0000-0000-000000000002",
+    program = { name = "ocwatch", version = "0.21.0" },
+    commit = "9f8e7d6c", cards = {}, alerts = {},
+  }), "two")
+  deliver(modem, "bb000000", "tablet", "boiler-room", versionsOf({
+    uptime = 100, installed = { files = { ["lib/ocnet.lua"] = "0.14.0" } },
+  }), "three")
+  deliver(modem, "bb000000", "tablet", "tank-farm", versionsOf({
+    uptime = 100, installed = { files = { ["lib/ocnet.lua"] = "0.15.0" } },
+  }), "four")
+
+  oc.run("ocview", "--once")
+
+  local shown = oc.screen()
+  check(contains(shown, "2 different commits"), "did not say the base disagrees")
+  check(contains(shown, "behind on 1 file"),
+    "did not say which machine is behind, on the one it has selected")
+  check(contains(shown, "lib/ocnet.lua"), "did not name the file that differs")
+end)
+
+-- 0.9.0 sorts after 0.10.0 in every comparison of strings, and that is exactly
+-- the pair a base gets to eventually.
+test("a version further on is told from one that only looks it", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] =
+    require("serialization").serialize({ view = "update" })
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
+    address = "aa000000-0000-0000-0000-000000000001",
+    commit = "aaaa1111", cards = {}, alerts = {},
+  }), "one")
+  deliver(modem, "bb000000", "tablet", "boiler-room", versionsOf({
+    uptime = 100, installed = { files = { ["lib/ocnet.lua"] = "0.9.0" } },
+  }), "two")
+  deliver(modem, "bb000000", "tablet", "tank-farm", answerOf({
+    address = "aa000000-0000-0000-0000-000000000002",
+    commit = "aaaa1111", cards = {}, alerts = {},
+  }), "three")
+  deliver(modem, "bb000000", "tablet", "tank-farm", versionsOf({
+    uptime = 100, installed = { files = { ["lib/ocnet.lua"] = "0.10.0" } },
+  }), "four")
+
+  oc.run("ocview", "--once")
+
+  local shown = oc.screen()
+  check(contains(shown, "base has 0.10.0"),
+    "took 0.9.0 for the newer of the two")
+end)
+
+test("pressing u tells the selected machine to update itself", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] =
+    require("serialization").serialize({ view = "update" })
+  startMinitel("tablet")
+
+  deliver(modem, "bb000000", "tablet", "boiler-room", answerOf({
+    address = "aa000000-0000-0000-0000-000000000001",
+    cards = {}, alerts = {},
+  }), "one")
+  -- pressed once there is a screen to press it at: anything queued before the
+  -- program starts is eaten by the loopback net.up waits on
+  oc.pushAfter(2, "key_down", "keyboard", 117, 0x16)
+  oc.pushAfter(3, "key_down", "keyboard", 113, 0x10)
+
+  oc.run("ocview")
+  oc.pump()
+
+  local told = nil
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "ocupdate?" then
+      told = packet.dest
+    end
+  end
+  check(told == "boiler-room", "told " .. tostring(told) .. " rather than the machine on the cursor")
+end)
+
+-- Twelve satellites fetching at once go through one gateway and one internet
+-- card, and a base with every computer rebooting together is watching nothing
+-- at all for as long as it takes.
+test("update all goes one machine at a time, with the gateway last", function()
+  oc.width, oc.height = 120, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    view = "update",
+    gateway = "main-hall",
+    peers = { "boiler-room", "main-hall", "tank-farm" },
+  })
+  startMinitel("tablet")
+
+  oc.pushAfter(2, "key_down", "keyboard", 97, 0x1E)
+  oc.pushAfter(3, "key_down", "keyboard", 113, 0x10)
+
+  oc.run("ocview")
+  oc.pump()
+
+  local told = {}
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "ocupdate?" then
+      told[#told + 1] = packet.dest
+    end
+  end
+  check(#told == 1, "told " .. #told .. " machines at once rather than one")
+  check(told[1] ~= "main-hall", "started with the gateway everybody fetches through")
 end)
 
 test("a satellite answers for the log it keeps", function()
@@ -6331,6 +6708,40 @@ test("every metric name and label is one the specification allows", function()
     end
   end
   check(seen > 0, "checked nothing")
+end)
+
+-- A version is not a number and cannot be made into one, so the series carries
+-- a constant and the version rides in a label. Somebody looking at Grafana
+-- wants one line per machine saying what it is on, and this is that line.
+test("what a machine is running goes out as a metric of its own", function()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000001", true)
+  oc.components = { modem, SUPER_TANK }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    watch = { { address = SUPER_TANK.address } },
+    alerts = {},
+    telemetry = { host = "ovw-core-obs-01" },
+    installed = { commit = "a1b2c3d4e5f6", files = {} },
+  })
+  startMinitel("ovw-pwr-steam-col-01")
+
+  oc.run("ocwatch")
+  oc.pump()
+
+  local message = gtpOf(modem)[1] and gtpOf(modem)[1].message
+  check(message ~= nil, "nothing went to the telemetry service")
+
+  local build = message and sampleNamed(message, "software.build_info")
+  check(build ~= nil, "no software.build_info went out")
+  check(build and build.value == 1,
+    "sent " .. tostring(build and build.value) .. " where the value must be a constant")
+  check(build and build.labels and build.labels.program == "ocwatch",
+    "did not say which program is running")
+  check(build and build.labels and build.labels.version ~= nil,
+    "did not say what version it is on")
+  check(build and build.labels and build.labels.commit == "a1b2c3d",
+    "did not carry the short commit: " .. tostring(build and build.labels
+      and build.labels.commit))
+  check(build and wellNamed(build.name), "the metric name is not one the spec allows")
 end)
 
 test("an alert becomes a number, because a metric value cannot be a boolean", function()

@@ -17,7 +17,10 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.16.0"
+local VERSION = "0.17.0"
+
+-- what this machine tells the network it is running, in every report it sends
+net.running("ocview", VERSION)
 
 -- How long to give up on before saying so on screen. Answers are absorbed as
 -- they arrive rather than waited for, so this is only how long a blank screen
@@ -100,6 +103,23 @@ local learned = false
 -- that machine said instead of piling another copy of it on top.
 local log = { byHost = {}, answered = 0 }
 
+-- What each machine is running, and where it has got to in an update. Asked for
+-- only while the update view is open, and answered from what ocup wrote into
+-- each machine's configuration, so neither end goes to a disk for any of it.
+--
+--   state    nil while nothing is happening, then "told", "rebooting", "back"
+--   uptime   the machine's own clock, which going backwards is the reboot
+local upkeep = { byHost = {}, cursor = 1, queue = {} }
+
+local function keeping(host)
+  local kept = upkeep.byHost[host]
+  if not kept then
+    kept = {}
+    upkeep.byHost[host] = kept
+  end
+  return kept
+end
+
 -- Which machine to ask, or nil for all of them. A named collector holds a copy
 -- of everybody's records already, so asking it alone is the whole history and
 -- asking the satellites too would hear each record twice.
@@ -153,8 +173,8 @@ local function records()
   return all
 end
 
-local function ago(record)
-  local seconds = record.age or 0
+local function duration(seconds)
+  seconds = seconds or 0
   if seconds < 90 then
     return math.floor(seconds) .. "s"
   end
@@ -162,6 +182,10 @@ local function ago(record)
     return math.floor(seconds / 60) .. "m"
   end
   return math.floor(seconds / 3600) .. "h"
+end
+
+local function ago(record)
+  return duration(record.age)
 end
 
 -- One row of the frame, drawn in pieces so each piece keeps its own colour. The
@@ -228,9 +252,48 @@ local function levelColor(level)
   return DIM
 end
 
+-- A machine that has been round the houses. Its uptime is its own clock, so the
+-- only thing it can be compared with is what the same machine said last time:
+-- a number that has gone down is a machine that has been off in between.
+local function absorbVersions(from, port, data)
+  local answer = net.decodeVersions(port, from, data)
+  if not answer then
+    return false
+  end
+
+  local kept = keeping(from)
+  if kept.uptime and answer.uptime < kept.uptime then
+    kept.state = "back"
+  elseif kept.state == "told" then
+    -- it took the order and is still up, which is ocup running
+    kept.state = "updating"
+  end
+  kept.uptime = answer.uptime
+  kept.program = answer.program
+  kept.installed = answer.installed
+  return true
+end
+
+local function absorbUpdate(from, port, data)
+  local answer = net.decodeUpdate(port, from, data)
+  if not answer then
+    return false
+  end
+  local kept = keeping(from)
+  kept.state = "told"
+  kept.said = answer.word
+  return true
+end
+
 local function absorb(from, port, data)
   seen.heard = seen.heard + 1
   if absorbLog(from, port, data) then
+    return true
+  end
+  if absorbVersions(from, port, data) then
+    return true
+  end
+  if absorbUpdate(from, port, data) then
     return true
   end
   local answer, why = net.decode(port, from, data)
@@ -359,13 +422,14 @@ end
 -- three answers to that, because which one is right depends on how much there
 -- is to show and what you are looking for.
 
-local MODES = { "columns", "cards", "alerts", "log" }
+local MODES = { "columns", "cards", "alerts", "log", "update" }
 
 local MODE_HELP = {
   columns = "every machine, one line each, across as many columns as fit",
   cards = "one machine at a time, roomy, with a wide bar",
   alerts = "what is wrong, and nothing that is not",
   log = "what the base has written down, newest first",
+  update = "what every machine is running, and the way to move it on",
 }
 
 local mode = config.view
@@ -415,6 +479,26 @@ local function drawBars(tripped, machines)
       rule(left)
       left[#left + 1] = { bad .. " " .. plural(bad, "error"), ALARM }
     end
+  elseif mode == "update" then
+    -- how many commits the base is spread across. One is a base that agrees
+    -- with itself, which is the only reading anybody wants off this screen.
+    local commits, spread = {}, 0
+    for _, host in ipairs(order) do
+      local at = satellites[host].commit or "?"
+      if not commits[at] then
+        commits[at] = true
+        spread = spread + 1
+      end
+    end
+    rule(left)
+    counted(left, #order, "satellite")
+    rule(left)
+    if spread <= 1 then
+      left[#left + 1] = { "all on one commit", DIM }
+    else
+      left[#left + 1] = { tostring(spread), FG }
+      left[#left + 1] = { " different commits", ALARM }
+    end
   elseif #order == 0 then
     rule(left)
     left[#left + 1] = { "no data", DIM }
@@ -443,11 +527,118 @@ local function drawBars(tripped, machines)
   end
   bottom[#bottom + 1] = { "   " .. MODE_HELP[mode], RULE }
 
-  drawBar(H, bottom, {
+  local keys = {
     { "v", ACTIVE }, { " view  ", DIM },
     { "r", ACTIVE }, { " refresh  ", DIM },
     { "q", ACTIVE }, { " quit  ", DIM },
-  })
+  }
+  if mode == "update" then
+    keys = {
+      { "u", ACTIVE }, { " update  ", DIM },
+      { "a", ACTIVE }, { " all  ", DIM },
+      { "v", ACTIVE }, { " view  ", DIM },
+      { "q", ACTIVE }, { " quit  ", DIM },
+    }
+  end
+  drawBar(H, bottom, keys)
+end
+
+-- Which of two versions is further on. Compared a number at a time rather than
+-- as text, because 0.9.0 sorts after 0.10.0 in every comparison of strings and
+-- that is exactly the pair this has to get right.
+local function newer(a, b)
+  local left, right = {}, {}
+  for part in tostring(a or ""):gmatch("%d+") do
+    left[#left + 1] = tonumber(part)
+  end
+  for part in tostring(b or ""):gmatch("%d+") do
+    right[#right + 1] = tonumber(part)
+  end
+  for index = 1, math.max(#left, #right) do
+    local one, two = left[index] or 0, right[index] or 0
+    if one ~= two then
+      return one > two
+    end
+  end
+  return false
+end
+
+local function filesOf(kept)
+  return kept and kept.installed and kept.installed.files or {}
+end
+
+-- The furthest-on copy of each file anywhere in the base. This is the closest
+-- thing to "the latest" that a tablet can work out without asking GitHub, and
+-- it is the useful comparison anyway: a base where every machine agrees is a
+-- base that is fine, whatever the repository has moved on to since.
+local function latestKnown()
+  local best = {}
+  for _, kept in pairs(upkeep.byHost) do
+    for source, version in pairs(filesOf(kept)) do
+      if not best[source] or newer(version, best[source]) then
+        best[source] = version
+      end
+    end
+  end
+  return best
+end
+
+local function behindOn(kept, best)
+  local out = {}
+  for source, version in pairs(best) do
+    local mine = filesOf(kept)[source]
+    if mine ~= version then
+      out[#out + 1] = { source = source, mine = mine, best = version }
+    end
+  end
+  table.sort(out, function(one, two)
+    return one.source < two.source
+  end)
+  return out
+end
+
+-- how long a machine that has taken the order is given to fetch, reboot and
+-- answer again before the queue stops waiting for it and moves on
+local UPDATE_TIMEOUT = 180
+
+-- Where a machine has got to. Read out of what it last said rather than kept as
+-- a state machine: a machine that took the order and then went quiet is one
+-- that is rebooting, and that is the same fact as its answers having stopped.
+local function stateOf(host)
+  local kept = upkeep.byHost[host]
+  if not kept or not kept.state then
+    return nil
+  end
+  if kept.state == "back" then
+    return "back up", OK_COLOR
+  end
+  if kept.state == "lost" then
+    return "no answer", ALARM
+  end
+  local answer = satellites[host]
+  if not answer or computer.uptime() - answer.at > QUIET_SECONDS then
+    return "rebooting", ACTIVE
+  end
+  return kept.state, ACTIVE
+end
+
+local function busy(host)
+  local kept = upkeep.byHost[host]
+  return kept ~= nil and (kept.state == "told" or kept.state == "updating")
+end
+
+-- Every machine this screen can act on: the ones that have answered, and the
+-- ones on the peer list that have not, since a satellite that has gone quiet is
+-- exactly the one somebody wants to prod.
+local function updateRows()
+  local rows = {}
+  for _, host in ipairs(order) do
+    rows[#rows + 1] = { host = host }
+  end
+  for _, host in ipairs(missing()) do
+    rows[#rows + 1] = { host = host }
+  end
+  return rows
 end
 
 -- A machine is worth showing in the alerts view when something about it is
@@ -686,6 +877,74 @@ local function render()
 
   drawBars(tripped, machines)
 
+  -- The same: a list of machines rather than a base of them, read top to bottom
+  -- and acted on a row at a time.
+  if mode == "update" then
+    local best = latestKnown()
+    local rows = updateRows()
+    upkeep.cursor = math.max(1, math.min(upkeep.cursor, math.max(1, #rows)))
+
+    for line = 0, H - 4 do
+      write(2, 3 + line, fit("", W - 2), FG, BG)
+    end
+
+    if #rows == 0 then
+      write(3, 3, fit("no satellite has answered yet", W - 4), DIM, BG)
+      paint.flush(W, H, BG, FG)
+      return
+    end
+
+    for index, row in ipairs(rows) do
+      local y = 2 + index
+      if y >= H then
+        break
+      end
+      local here = index == upkeep.cursor
+      local word, color = stateOf(row.host)
+      local kept = upkeep.byHost[row.host] or {}
+      local answer = satellites[row.host] or {}
+      local running = answer.program or kept.program
+      write(2, y, fit(string.format("%s%-14s %-16s %-8s %-7s %s",
+        here and "> " or "  ",
+        row.host,
+        running and (running.name .. " v" .. running.version) or "-",
+        (answer.commit or "-"):sub(1, 7),
+        kept.uptime and ("up " .. duration(kept.uptime)) or "",
+        word or ""), W - 2), color or (here and FG or DIM), BG)
+    end
+
+    -- What the selected machine is behind on, against the furthest-on copy of
+    -- each file anywhere in the base. Nothing here knows what the repository
+    -- holds, and does not need to: a machine behind the one beside it is the
+    -- whole question this screen exists to answer.
+    local chosen = rows[upkeep.cursor]
+    local detail = 3 + math.min(#rows, H - 4) + 1
+    if chosen and detail < H then
+      local off = behindOn(upkeep.byHost[chosen.host], best)
+      if not upkeep.byHost[chosen.host] or not upkeep.byHost[chosen.host].installed then
+        write(3, detail, fit(chosen.host .. " has not said what it is running",
+          W - 4), DIM, BG)
+      elseif #off == 0 then
+        write(3, detail, fit(chosen.host .. " has what the rest of the base has",
+          W - 4), OK_COLOR, BG)
+      else
+        write(3, detail, fit(chosen.host .. " is behind on " .. #off .. " "
+          .. plural(#off, "file"), W - 4), ALARM, BG)
+        for index, file in ipairs(off) do
+          local y = detail + index
+          if y >= H then
+            break
+          end
+          write(5, y, fit(string.format("%-26s %-9s base has %s",
+            file.source, file.mine or "-", file.best), W - 6), DIM, BG)
+        end
+      end
+    end
+
+    paint.flush(W, H, BG, FG)
+    return
+  end
+
   -- The log is a list rather than a base, so it does not go through the block
   -- and column machinery at all: no satellite owns these lines, and they are
   -- read top to bottom rather than scanned.
@@ -801,7 +1060,33 @@ while true do
     if mode == "log" then
       net.askLog(minitel, config, collector())
     end
+    -- the same rule: what a machine is running is worth a packet only while
+    -- somebody is looking at the screen that shows it
+    if mode == "update" then
+      net.askVersions(minitel, config)
+    end
     asked = now
+  end
+
+  -- One machine at a time. Twelve satellites all fetching at once go through
+  -- one gateway and one internet card, and a base with every computer rebooting
+  -- together is a base watching nothing at all for as long as it takes.
+  if upkeep.queue[1] then
+    local waiting = upkeep.told ~= nil and busy(upkeep.told)
+    -- A machine that fetched through a gateway that went down first, or that
+    -- came up into something that does not run, never answers again. Waiting
+    -- for it forever is a queue that silently stops, so it is given up on and
+    -- said so on the screen.
+    if waiting and now - upkeep.sentAt > UPDATE_TIMEOUT then
+      keeping(upkeep.told).state = "lost"
+      waiting = false
+    end
+    if not waiting then
+      local host = table.remove(upkeep.queue, 1)
+      net.tellUpdate(minitel, host)
+      keeping(host).state = "told"
+      upkeep.told, upkeep.sentAt = host, now
+    end
   end
   -- a satellite heard from for the first time is worth keeping, and the round
   -- it was heard in is the only time anything here has a reason to write
@@ -832,6 +1117,30 @@ while true do
       asked = 0
     elseif code == keyboard.keys.v then
       nextMode()
+    elseif mode == "update" then
+      local rows = updateRows()
+      if code == keyboard.keys.up and upkeep.cursor > 1 then
+        upkeep.cursor = upkeep.cursor - 1
+      elseif code == keyboard.keys.down and upkeep.cursor < #rows then
+        upkeep.cursor = upkeep.cursor + 1
+      elseif code == keyboard.keys.u and rows[upkeep.cursor] then
+        upkeep.queue[#upkeep.queue + 1] = rows[upkeep.cursor].host
+      elseif code == keyboard.keys.a then
+        -- The gateway goes last on purpose. Every machine without an internet
+        -- card fetches through it, so a gateway that rebooted first would take
+        -- the rest of the base's only way of getting anything with it.
+        local gateway = config.gateway
+        for _, row in ipairs(rows) do
+          if row.host ~= gateway then
+            upkeep.queue[#upkeep.queue + 1] = row.host
+          end
+        end
+        for _, row in ipairs(rows) do
+          if row.host == gateway then
+            upkeep.queue[#upkeep.queue + 1] = row.host
+          end
+        end
+      end
     end
   end
 end

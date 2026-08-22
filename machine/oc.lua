@@ -16,6 +16,9 @@ local frame = {}
 -- looks like from in here
 local emptyPulls = 0
 
+-- how many event.pulls have happened, which is the clock oc.pushAfter runs on
+local pulls = 0
+
 -- Our own libraries, dropped from package.loaded on every reset. A real machine
 -- gives every program its own Lua state, and this process runs the lot, so a
 -- library that remembers something across a run carried the last test's machine
@@ -40,6 +43,9 @@ function oc.reset()
   oc.colors = {}
   oc.reads = {}
   oc.opened = {}
+  oc.shutdowns = {}
+  oc.later = {}
+  pulls = 0
   oc.elapsed = 0
   -- how many times a program waiting on a clock is allowed to hear nothing;
   -- tests that watch something happen on a timer raise it
@@ -84,6 +90,17 @@ end
 
 function oc.push(...)
   oc.events[#oc.events + 1] = table.pack(...)
+end
+
+-- A keypress that happens while the program is running, counted in event.pulls.
+--
+-- Anything pushed before a program starts is gone by the time it reaches its own
+-- loop. net.up asks the Minitel daemon for its own loopback through a filtered
+-- pull, and a filtered pull drops whatever does not match it, here and in
+-- OpenOS both. So a test that wants to press a key at a screen has to wait until
+-- there is a screen to press it at.
+function oc.pushAfter(round, ...)
+  oc.later[#oc.later + 1] = { at = round, signal = table.pack(...) }
 end
 
 -- the frame captured when the program last blocked on an event, so the exit
@@ -351,6 +368,12 @@ end
 function computer.pushSignal(...)
   oc.push(...)
 end
+-- Recorded rather than obeyed. A real machine never returns from this, so a
+-- program that calls it has said everything it is going to say, and what a test
+-- wants to know is that it asked.
+function computer.shutdown(reboot)
+  oc.shutdowns[#oc.shutdowns + 1] = reboot == true and "reboot" or "off"
+end
 
 local event = {}
 
@@ -427,6 +450,11 @@ end
 -- put on the wire by its timer.
 function oc.pump(rounds)
   for _ = 1, rounds or 4 do
+    -- A round is a moment passing. Without it the clock stands still once the
+    -- program has stopped pulling, and a daemon whose timer is due a fraction of
+    -- a second from now never gets there: the last thing a program sends before
+    -- it exits sits in the queue forever.
+    oc.elapsed = oc.elapsed + 0.05
     fireTimers()
     while oc.events[1] do
       local queued = table.remove(oc.events, 1)
@@ -453,6 +481,17 @@ function event.pull(timeout, filter)
   end
   -- every frame is kept, so a test can assert that a redraw changed something
   oc.frames[#oc.frames + 1] = table.concat(frame, "\n")
+
+  pulls = pulls + 1
+  local due = {}
+  for index = #oc.later, 1, -1 do
+    if oc.later[index].at <= pulls then
+      table.insert(due, 1, table.remove(oc.later, index).signal)
+    end
+  end
+  for _, signal in ipairs(due) do
+    oc.events[#oc.events + 1] = signal
+  end
 
   fireTimers()
 
@@ -483,6 +522,12 @@ function event.pull(timeout, filter)
     return nil
   end
   emptyPulls = 0
+  -- A test with input still to come has not finished with the program, so it is
+  -- not sent the q below. How many pulls a round of network traffic takes is not
+  -- something a test should have to count.
+  if oc.later[1] then
+    return nil
+  end
   -- A program that works on a clock only does so between events, so a test that
   -- wants to watch it tick asks for a number of quiet waits first. Without them
   -- nothing on a timer is ever seen to happen; without a limit a test hangs.
@@ -499,7 +544,8 @@ local keyboard = {
     up = 0xC8, down = 0xD0, left = 0xCB, right = 0xCD,
     pageUp = 0xC9, pageDown = 0xD1,
     space = 0x39, enter = 0x1C,
-    d = 0x20, m = 0x32, n = 0x31, v = 0x2F, t = 0x14, w = 0x11, back = 0x0E,
+    a = 0x1E, d = 0x20, m = 0x32, n = 0x31, u = 0x16, v = 0x2F, t = 0x14,
+    w = 0x11, back = 0x0E,
   },
 }
 

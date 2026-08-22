@@ -27,7 +27,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.14.0"
+net.VERSION = "0.15.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -43,6 +43,21 @@ net.GATEWAY_REPLY = "ocgateway!"
 -- number means nothing on the machine reading it.
 net.LOG_ASK = "oclog?"
 net.LOG_REPLY = "oclog!"
+
+-- What a machine has installed, and how long it has been up. Asked only while
+-- somebody is looking at the maintenance screen, and answered out of the
+-- configuration, which every program already holds: ocup writes down what it
+-- installed, so nothing has to go back to the disk to say what it is running.
+--
+-- The uptime is what tells a reboot from a machine that has merely gone quiet.
+-- It is the only number here that cannot be inferred from anything else.
+net.VERSION_ASK = "ocver?"
+net.VERSION_REPLY = "ocver!"
+
+-- Update yourself and come back. A command rather than a question: the answer
+-- says only that it was heard, and what it means happens afterwards.
+net.UPDATE_ASK = "ocupdate?"
+net.UPDATE_REPLY = "ocupdate!"
 
 -- how many records travel. Beyond a screenful nobody is reading them here.
 local RECORDS = 40
@@ -134,6 +149,18 @@ function net.hostname(config)
     return computer.address():sub(1, 8)
   end
   return name
+end
+
+-- Which of our programs is running here, and what version of it. Set once at
+-- startup by the program itself, because nothing else knows: a library cannot
+-- read the version of the file that required it.
+--
+-- It travels in every report, so a dashboard and the telemetry service both
+-- learn what a machine is running without asking a second question.
+local running = nil
+
+function net.running(name, version)
+  running = { name = name, version = version }
 end
 
 -- Renames this machine. The Minitel daemon reads /etc/hostname when it starts
@@ -289,6 +316,11 @@ function net.report(config, cards, movers, fluids)
     -- the card address is the only thing that tells two satellites sharing a
     -- hostname apart, and a hostname is what everything else keys on
     address = computer.address(),
+    -- what this machine is running, and what ocup last installed from. Small
+    -- enough to ride along rather than be asked for, which is what lets a
+    -- dashboard show the base's versions without a question of its own.
+    program = running,
+    commit = config and config.installed and config.installed.commit or nil,
     cards = {},
     alerts = {},
     items = {},
@@ -373,12 +405,36 @@ local function room(minitel, to)
   return mtu - (44 + #net.hostname() + #tostring(to))
 end
 
--- Answers one request with a report somebody else has already prepared. Returns
--- a description of what was sent, or nil when the message was not a question
--- this understands.
-function net.answer(minitel, port, from, request, report)
+-- Answers one request with a report somebody else has already prepared.
+--
+-- Returns a description of what was sent, or nil when the message was not a
+-- question this understands, and beside it the word for anything the caller has
+-- to do afterwards. Only "update" is such a word today, and it is returned
+-- rather than acted on because ocup waits on events and this runs inside a
+-- program's loop: a library that rebooted here would take the machine down from
+-- somewhere no test could reach and no program could refuse.
+function net.answer(minitel, config, port, from, request, report)
   if port ~= core.PORT then
     return nil
+  end
+
+  if request == net.VERSION_ASK then
+    minitel.usend(from, core.PORT, net.VERSION_REPLY .. "\n"
+      .. serialization.serialize({
+        uptime = computer.uptime(),
+        program = running,
+        -- what ocup wrote down when it last installed. A file copied on by hand
+        -- is not in it, which is the price of never going to the disk for this.
+        installed = config and config.installed or {},
+      }))
+    return from .. "  versions"
+  end
+
+  if request == net.UPDATE_ASK then
+    -- said before anything happens, because what happens next is a machine
+    -- that stops answering for half a minute
+    minitel.usend(from, core.PORT, net.UPDATE_REPLY .. "\nstarting")
+    return from .. "  update", "update"
   end
 
   if request == net.GATEWAY_ASK then
@@ -437,17 +493,34 @@ function net.answer(minitel, port, from, request, report)
   return from .. "  " .. #payload .. " bytes"
 end
 
--- Puts the question to everyone in range, and by name to every satellite this
+-- Puts a question to everyone in range, and by name to every satellite this
 -- machine has heard from before. A broadcast is never forwarded, so the peer
 -- list is the only thing that crosses the mesh.
-function net.ask(minitel, config)
-  minitel.usend(net.EVERYONE, core.PORT, net.ASK)
+local function askEverybody(minitel, config, request)
+  minitel.usend(net.EVERYONE, core.PORT, request)
   local here = net.hostname(config)
   for _, host in ipairs(net.peers(config)) do
     if host ~= here then
-      minitel.usend(host, core.PORT, net.ASK)
+      minitel.usend(host, core.PORT, request)
     end
   end
+end
+
+function net.ask(minitel, config)
+  askEverybody(minitel, config, net.ASK)
+end
+
+-- Asks every machine what it is running. Sent only while the maintenance screen
+-- is open, since nothing else on a dashboard is the least bit interested.
+function net.askVersions(minitel, config)
+  askEverybody(minitel, config, net.VERSION_ASK)
+end
+
+-- Tells one machine to update itself and come back. Never broadcast: updating a
+-- base is done a machine at a time, so the gateway everybody fetches through is
+-- still up when the rest of them ask it for files.
+function net.tellUpdate(minitel, host)
+  minitel.usend(host, core.PORT, net.UPDATE_ASK)
 end
 
 -- Asks whoever can reach the internet to say so. Answered by any machine
@@ -467,13 +540,7 @@ function net.askLog(minitel, config, host)
     minitel.usend(host, core.PORT, net.LOG_ASK)
     return
   end
-  minitel.usend(net.EVERYONE, core.PORT, net.LOG_ASK)
-  local here = net.hostname(config)
-  for _, peer in ipairs(net.peers(config)) do
-    if peer ~= here then
-      minitel.usend(peer, core.PORT, net.LOG_ASK)
-    end
-  end
+  askEverybody(minitel, config, net.LOG_ASK)
 end
 
 -- Reads one message off the network. Returns the answer it carries, or nil, and
@@ -497,6 +564,8 @@ function net.decode(port, from, data)
   return {
     host = from,
     address = report.address,
+    program = report.program,
+    commit = report.commit,
     cards = report.cards,
     alerts = report.alerts or {},
     items = report.items or {},
@@ -524,6 +593,74 @@ function net.decodeLog(port, from, data)
   end
 
   return { host = from, now = answer.now or 0, records = answer.records }
+end
+
+-- Reads an answer to net.askVersions. The uptime is the answering machine's
+-- own, which means nothing next to anybody else's and everything next to what
+-- the same machine said last time: a number that has gone down is a machine
+-- that has been round the houses and come back.
+function net.decodeVersions(port, from, data)
+  if port ~= core.PORT or type(data) ~= "string" then
+    return nil
+  end
+  local body = data:match("^" .. net.VERSION_REPLY .. "\n(.*)$")
+  if not body then
+    return nil
+  end
+
+  local ok, answer = pcall(serialization.unserialize, body)
+  if not ok or type(answer) ~= "table" then
+    return nil, "unreadable"
+  end
+
+  return {
+    host = from,
+    uptime = answer.uptime or 0,
+    program = answer.program,
+    installed = type(answer.installed) == "table" and answer.installed or {},
+  }
+end
+
+-- Reads a machine saying it heard the order to update.
+function net.decodeUpdate(port, from, data)
+  if port ~= core.PORT or type(data) ~= "string" then
+    return nil
+  end
+  local word = data:match("^" .. net.UPDATE_REPLY .. "\n(.*)$")
+  if not word then
+    return nil
+  end
+  return { host = from, word = word }
+end
+
+-- What a machine does when it is told to update: runs ocup on a cleared screen
+-- and reboots into what it fetched.
+--
+-- Called from a program's loop rather than from a packet handler. ocup waits on
+-- events of its own, and OpenOS runs a handler from inside event.pull, so an
+-- ocup started there would sit in an inner pull eating the signals the outer
+-- one is waiting for.
+--
+-- The reboot is the point. Overwriting a file does not change a program that is
+-- already running, a library already required stays required, and a daemon
+-- reads its own file once when rc starts it. Coming up again is the only thing
+-- that puts a machine on what was just downloaded.
+function net.applyUpdate()
+  local sh = require("sh")
+  local term = require("term")
+
+  term.clear()
+  print("updating on request from the network")
+  print("")
+  pcall(sh.execute, _ENV, "ocup")
+
+  -- Minitel queues what it is given and its pusher puts it on the wire on a
+  -- timer, so a machine that shut down the instant ocup returned took the
+  -- answer with it and looked, from the other end, like one that had died.
+  print("")
+  print("rebooting")
+  os.sleep(1)
+  computer.shutdown(true)
 end
 
 -- Hands every packet that arrives to one function, which is how a program with

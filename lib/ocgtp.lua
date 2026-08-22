@@ -15,7 +15,7 @@ local serialization = require("serialization")
 
 local gtp = {}
 
-gtp.VERSION = "0.1.0"
+gtp.VERSION = "0.2.0"
 
 -- The service is configuration rather than protocol, so this is only where to
 -- look first. The name is the one the specification names as the deployment.
@@ -218,6 +218,20 @@ function gtp.samples(report)
   -- Nothing about the item network travels. A base holds thousands of item
   -- names and each one as a label is a series of its own, which is the one
   -- mistake the specification asks twice not to make.
+
+  -- What this machine is running. A version is not a number and cannot be made
+  -- into one, so the series carries a constant and the version rides in a
+  -- label, which is how a build stamp reaches a metrics database anywhere. The
+  -- point of it is the comparison: one line per machine on a dashboard says at
+  -- a glance which of them is behind the rest.
+  if report.program then
+    sample(out, "software.build_info", 1, {
+      program = gtp.slug(report.program.name),
+      version = gtp.slug(report.program.version),
+      -- short, because that is the form anybody types back into git
+      commit = report.commit and gtp.slug(report.commit):sub(1, 7) or nil,
+    })
+  end
 
   sample(out, "telemetry.messages_sent_total", totals.messages, nil, "counter")
   sample(out, "telemetry.samples_sent_total", totals.samples, nil, "counter")
