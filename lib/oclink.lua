@@ -34,7 +34,7 @@ local serialization = require("serialization")
 
 local link = {}
 
-link.VERSION = "0.1.0"
+link.VERSION = "0.2.0"
 link.PROTOCOL = 1
 
 link.CONTROL = 0
@@ -511,6 +511,41 @@ function link.obey(command)
     return { kind = "result", id = command.id, ok = true, output = output }
   end
   return { kind = "result", id = command.id, ok = false, error = output, output = partial }
+end
+
+-------------------------------------------------------------------------------
+-- linking a machine
+
+-- The one line typed on a machine to link it: host:port, the proxy secret and
+-- the link key, as `ocharness keys` printed them. Short secrets are on purpose,
+-- since they are typed on an OpenComputers keyboard: the proxy refuses an
+-- address that keeps failing to join, so a guess costs more than it finds.
+function link.configure(config, address, secret, key)
+  local host, port = tostring(address or ""):match("^([^:]+):(%d+)$")
+  if not host or not secret or secret == "" or not key or key == "" then
+    return nil, "usage: --link host:port <proxy secret> <link key>"
+  end
+  config.link = { host = host, port = tonumber(port), secret = secret, key = key }
+  return core.saveConfig(config)
+end
+
+local function masked(secret)
+  secret = tostring(secret or "")
+  if #secret <= 4 then
+    return string.rep("*", #secret)
+  end
+  return secret:sub(1, 2) .. string.rep("*", #secret - 4) .. secret:sub(-2)
+end
+
+-- What a machine is linked to, with the secrets mostly hidden: a screen in a
+-- shared base is read by whoever walks past it.
+function link.describe(settings)
+  if not settings or not settings.host or settings.host == "" or not settings.port
+    or not settings.secret or settings.secret == "" or not settings.key or settings.key == "" then
+    return "not linked, run: --link host:port <proxy secret> <link key>"
+  end
+  return settings.host .. ":" .. tostring(settings.port)
+    .. "  secret " .. masked(settings.secret) .. "  key " .. masked(settings.key)
 end
 
 return link

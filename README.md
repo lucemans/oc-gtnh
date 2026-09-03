@@ -28,8 +28,20 @@ https://ocdoc.cil.li/api:internet
 
 Two programs let something outside the game hold a computer here: `occonnect`
 hands over its shell, and `ocagent` hands over chat, the mesh and its shell to
-a language model. Both go through one proxy, and both are configured the same
-way, on the network screen of `ocwatch --edit` under `link`.
+a language model. Both go through one proxy, and both are linked the same way:
+
+```
+ocharness keys vps:7071                       here, once: mints both secrets
+ocagent --link vps:7071 <secret> <key>        on the machine, one line
+ocagent --link                                what it is linked to, secrets masked
+```
+
+`ocharness keys` prints the two lines to type. The secrets are twelve
+characters from an alphabet nothing is mistaken for, because they are typed on
+an OpenComputers keyboard; the proxy stops challenging an address after five
+failed joins in ten minutes, so a short secret is not a guessable one. The
+network screen of `ocwatch --edit` shows the same `link` row for editing by
+hand.
 
 ```
  shell / agent harness                         proxy                    the computer
@@ -184,6 +196,7 @@ wire does.
 ```
 cd remote
 cargo build --release
+./target/release/ocharness keys vps:7071                       mints the secrets
 PROXY_SECRET=... ./target/release/ocproxy                       on the VPS
 PROXY_ADDR=vps:7071 PROXY_SECRET=... LINK_KEY=... DEVICE=agent-01 \
   LLM_BASE_URL=https://your-litellm/v1 LLM_API_KEY=... LLM_MODEL=... \

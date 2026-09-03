@@ -6973,13 +6973,41 @@ test("occonnect refuses to start without a link or a data card", function()
   oc.components = { INTERNET }
   local ok = oc.run("occonnect", "--once")
   check(ok, "crashed instead of saying so")
-  check(contains(oc.printed(), "no link configured"), "did not say what is missing")
+  check(contains(oc.printed(), "not linked"), "did not say what is missing")
 
   linkConfig()
   ok = oc.run("occonnect", "--once")
   check(ok, "crashed instead of saying so")
   check(contains(oc.printed(), "data card"), "did not say the card is missing")
   check(oc.socket.connections == nil, "connected anyway")
+end)
+
+test("occonnect --link writes the link in one line and says what it is", function()
+  oc.components = { INTERNET, fakeData() }
+  local ok = oc.run("occonnect", "--link", "vps.example:7071", "pq7rs2tv4wx", "k3m9n5p2q8r")
+  check(ok, "crashed instead of linking")
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  check(saved and saved.link and saved.link.host == "vps.example" and saved.link.port == 7071,
+    "did not write the proxy address")
+  check(saved and saved.link.secret == "pq7rs2tv4wx" and saved.link.key == "k3m9n5p2q8r",
+    "did not write both secrets")
+  check(oc.socket.connections == nil, "connected instead of only linking")
+
+  oc.output = { "" }
+  oc.run("occonnect", "--link")
+  local shown = oc.printed()
+  check(contains(shown, "vps.example:7071"), "did not say where it is linked: " .. shown)
+  check(not contains(shown, "pq7rs2tv4wx") and contains(shown, "pq*******wx"),
+    "showed a secret in full on the screen: " .. shown)
+end)
+
+test("occonnect --link refuses half a link and keeps the old one", function()
+  oc.components = { INTERNET, fakeData() }
+  linkConfig()
+  oc.run("occonnect", "--link", "vps.example", "onlyone")
+  check(contains(oc.printed(), "usage"), "did not say how to link")
+  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
+  check(saved and saved.link and saved.link.key == LINK_KEY, "lost the link that was there")
 end)
 
 test("occonnect joins the proxy under its name and runs what the controller sends", function()

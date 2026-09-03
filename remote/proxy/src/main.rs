@@ -8,7 +8,9 @@
 //! relay channel is between exactly two ends.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use oclink::frame::{self, Keys};
@@ -46,10 +48,36 @@ struct Slot {
     control: Option<Peer>,
 }
 
+/// how many failed joins from one address, inside the window, close the door
+const STRIKES: usize = 5;
+const STRIKE_WINDOW: Duration = Duration::from_secs(600);
+
 #[derive(Default)]
 struct Registry {
     slots: HashMap<String, Slot>,
     next_id: u64,
+    /// when each address last failed to join, newest last
+    failures: HashMap<IpAddr, Vec<Instant>>,
+}
+
+impl Registry {
+    fn prune(&mut self, address: IpAddr) -> &mut Vec<Instant> {
+        let now = Instant::now();
+        let times = self.failures.entry(address).or_default();
+        times.retain(|at| now.duration_since(*at) < STRIKE_WINDOW);
+        times
+    }
+
+    /// Whether an address has failed to join too often to be given a challenge.
+    /// The secrets are short enough to type in the game, so guessing them has
+    /// to cost more connections than anybody gets.
+    fn blocked(&mut self, address: IpAddr) -> bool {
+        self.prune(address).len() >= STRIKES
+    }
+
+    fn strike(&mut self, address: IpAddr) {
+        self.prune(address).push(Instant::now());
+    }
 }
 
 type Shared = Arc<Mutex<Registry>>;
@@ -142,6 +170,10 @@ async fn write_out(
 }
 
 async fn serve(stream: TcpStream, keys: Arc<Keys>, registry: Shared) -> Result<()> {
+    let address = stream.peer_addr()?.ip();
+    if registry.lock().await.blocked(address) {
+        bail!("{address} has failed to join {STRIKES} times, not challenged");
+    }
     stream.set_nodelay(true)?;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -155,7 +187,11 @@ async fn serve(stream: TcpStream, keys: Arc<Keys>, registry: Shared) -> Result<(
     if channel != CONTROL {
         bail!("relayed before joining");
     }
-    let (role, name, nonce) = match proxy::open_control(&keys, &body).context("opening the join")? {
+    let opened = proxy::open_control(&keys, &body).context("opening the join");
+    if opened.is_err() {
+        registry.lock().await.strike(address);
+    }
+    let (role, name, nonce) = match opened? {
         (
             1,
             Control::Join {
@@ -167,6 +203,7 @@ async fn serve(stream: TcpStream, keys: Arc<Keys>, registry: Shared) -> Result<(
             },
         ) => {
             if given != oclink::hex(&challenge) {
+                registry.lock().await.strike(address);
                 bail!("the join answers a different challenge");
             }
             if protocol != PROTOCOL {
@@ -342,10 +379,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_wrong_secret_is_refused_before_anything_is_relayed() {
-        let (address, _) = start().await;
+    async fn a_wrong_secret_is_refused_and_guessing_closes_the_door() {
+        let (address, keys) = start().await;
         let wrong = Keys::from_secret(b"not the proxy secret");
-        let result = Link::connect(&address, &wrong, Role::Device, "chem-01").await;
-        assert!(result.is_err());
+        for _ in 0..STRIKES {
+            let result = Link::connect(&address, &wrong, Role::Device, "chem-01").await;
+            assert!(result.is_err());
+        }
+        // the right secret no longer gets a challenge from this address
+        let result = Link::connect(&address, &keys, Role::Device, "chem-01").await;
+        assert!(
+            result.is_err(),
+            "still challenged after {STRIKES} failed joins"
+        );
     }
 }

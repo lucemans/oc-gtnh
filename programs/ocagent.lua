@@ -1,7 +1,9 @@
 -- ocagent: the base's agent, addressed from chat.
 --
---   ocagent          connect and serve
---   ocagent --once   one round, for checking it works
+--   ocagent                                  connect and serve
+--   ocagent --once                           one round, for checking it works
+--   ocagent --link host:port secret key      link this machine to the proxy
+--   ocagent --link                           say what it is linked to
 --
 -- A line in chat starting with @c or @computer goes out to the harness, which
 -- holds the model. What comes back is words for the chat box, questions for
@@ -10,8 +12,8 @@
 -- answers everything occonnect answers, so the same link drives its shell.
 --
 -- Needs an internet card, a tier 2 data card for the sealing, and a chat box
--- on an adapter. The proxy and the keys are set on the network screen of
--- `ocwatch --edit`, under `link`.
+-- on an adapter. The proxy and the keys come from `--link`, or the network
+-- screen of `ocwatch --edit`, under `link`.
 
 local component = require("component")
 local computer = require("computer")
@@ -21,7 +23,7 @@ local keyboard = require("keyboard")
 local net = require("ocnet")
 local link = require("oclink")
 
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 
 net.running("ocagent", VERSION)
 
@@ -94,14 +96,28 @@ local function chat(text)
 end
 
 local config = core.loadConfig()
-local settings = config.link or {}
 
 local arguments = { ... }
 local once = arguments[1] == "--once"
 
+if arguments[1] == "--link" then
+  if arguments[2] then
+    local saved, why = link.configure(config, arguments[2], arguments[3], arguments[4])
+    if not saved then
+      io.stderr:write("ocagent: " .. tostring(why) .. "\n")
+      return 1
+    end
+    print("linked to " .. link.describe(config.link))
+    return 0
+  end
+  print(link.describe(config.link))
+  return 0
+end
+
+local settings = config.link or {}
 if not settings.host or settings.host == "" or not settings.port
   or not settings.secret or settings.secret == "" or not settings.key or settings.key == "" then
-  io.stderr:write("ocagent: no link configured, set it in ocwatch --edit under network\n")
+  io.stderr:write("ocagent: not linked, run: ocagent --link host:port <proxy secret> <link key>\n")
   return 1
 end
 

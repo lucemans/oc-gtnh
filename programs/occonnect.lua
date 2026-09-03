@@ -1,7 +1,9 @@
 -- occonnect: lets someone off the machine run commands on it.
 --
---   occonnect          connect and wait for commands
---   occonnect --once   one round, for checking it works
+--   occonnect                                  connect and wait for commands
+--   occonnect --once                           one round, for checking it works
+--   occonnect --link host:port secret key      link this machine to the proxy
+--   occonnect --link                           say what it is linked to
 --
 -- The machine joins the proxy under its hostname and waits for a controller,
 -- which is `ocharness shell`, `lua` or `file` on somebody's computer. What
@@ -9,8 +11,8 @@
 -- out is sent back. Nothing here is restricted: whoever holds the link key
 -- drives the shell.
 --
--- Needs an internet card and a tier 2 data card. The proxy and the keys are
--- set on the network screen of `ocwatch --edit`, under `link`.
+-- Needs an internet card and a tier 2 data card. The proxy and the keys come
+-- from `--link`, or the network screen of `ocwatch --edit`, under `link`.
 
 local component = require("component")
 local computer = require("computer")
@@ -19,7 +21,7 @@ local event = require("event")
 local keyboard = require("keyboard")
 local link = require("oclink")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
 
 local REST = 0.1
 
@@ -42,11 +44,25 @@ local arguments = { ... }
 local once = arguments[1] == "--once"
 
 local config = core.loadConfig()
-local settings = config.link or {}
 
+if arguments[1] == "--link" then
+  if arguments[2] then
+    local saved, why = link.configure(config, arguments[2], arguments[3], arguments[4])
+    if not saved then
+      io.stderr:write("occonnect: " .. tostring(why) .. "\n")
+      return 1
+    end
+    print("linked to " .. link.describe(config.link))
+    return 0
+  end
+  print(link.describe(config.link))
+  return 0
+end
+
+local settings = config.link or {}
 if not settings.host or settings.host == "" or not settings.port
   or not settings.secret or settings.secret == "" or not settings.key or settings.key == "" then
-  io.stderr:write("occonnect: no link configured, set it in ocwatch --edit under network\n")
+  io.stderr:write("occonnect: not linked, run: occonnect --link host:port <proxy secret> <link key>\n")
   return 1
 end
 if not component.isAvailable("internet") then

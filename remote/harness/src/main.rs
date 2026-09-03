@@ -5,6 +5,7 @@
 //! ocharness shell <device> <command...>    run a shell line there, print what it wrote
 //! ocharness lua <device> <file.lua>        run a chunk there, print what it printed
 //! ocharness file <device> <remote path> <local file>   write a file there
+//! ocharness keys [host:port]               mint a proxy secret and a link key, and the line to type in game
 //! ```
 //!
 //! Every mode joins the proxy as the controller of one device. The device
@@ -211,12 +212,47 @@ async fn main() -> Result<()> {
             )
             .await?
         }
+        "keys" => {
+            keys(
+                arguments
+                    .get(1)
+                    .map(String::as_str)
+                    .unwrap_or("<proxy host>:7071"),
+            );
+            0
+        }
         _ => {
             eprintln!(
-                "usage: ocharness serve | shell <device> <command...> | lua <device> <file.lua> | file <device> <remote path> <local file>"
+                "usage: ocharness serve | shell <device> <command...> | lua <device> <file.lua> | file <device> <remote path> <local file> | keys [host:port]"
             );
             2
         }
     };
     std::process::exit(code);
+}
+
+/// Letters and digits that are not mistaken for one another on a screen in
+/// the game, where the secrets are typed by hand. Twelve of them is about
+/// sixty bits, and the proxy refuses an address that keeps guessing.
+const TYPEABLE: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+const SECRET_LENGTH: usize = 12;
+
+fn mint() -> String {
+    use rand::seq::SliceRandom;
+    let mut rng = rand::thread_rng();
+    (0..SECRET_LENGTH)
+        .map(|_| *TYPEABLE.choose(&mut rng).expect("not empty") as char)
+        .collect()
+}
+
+/// Two fresh secrets, and every place each one goes.
+fn keys(proxy: &str) {
+    let secret = mint();
+    let key = mint();
+    println!("PROXY_SECRET={secret}     on the VPS for ocproxy, and here for ocharness");
+    println!("LINK_KEY={key}         here for ocharness only");
+    println!();
+    println!("on each machine in the game, then start ocagent or occonnect:");
+    println!("  ocagent --link {proxy} {secret} {key}");
+    println!("  occonnect --link {proxy} {secret} {key}");
 }
