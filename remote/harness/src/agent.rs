@@ -32,15 +32,31 @@ const QUEUE: usize = 4;
 const LINE: usize = 200;
 const LINES: usize = 6;
 
-fn system_prompt(host: &str, extra: Option<&str>) -> String {
+fn system_prompt(host: &str, web: bool, extra: Option<&str>) -> String {
     let mut text = format!(
         "You are the computer of a GregTech: New Horizons base, answering players in Minecraft chat. \
 You are addressed as @c or @computer. You run on an OpenComputers machine called {host}, and you \
 reach the rest of the base's computers over a mesh network through the tools you are given.\n\
 \n\
+The game is GregTech: New Horizons (GTNH), a Minecraft 1.7.10 modpack built around GregTech 5 \
+Unofficial. Its recipes, tiers and machine behaviour differ from what the same mods do elsewhere, \
+so never answer from memory of the plain mods. GTNH forks most of its mods, and the forks at \
+https://github.com/GTNewHorizons are the authoritative source for how a mod behaves here. The \
+wiki is https://gtnh.miraheze.org, and https://wiki.gtnewhorizons.com is the same wiki. The \
+players already know all of this and are in the game with you: do not explain the pack, name the \
+version or say where you looked unless they ask.\n\
+\n\
 Answer in one or two short chat lines. No markdown, no lists, no headings. Numbers with units \
 (L for litres, EU for energy, K for temperature). Say which machine or tank a number comes from \
 when there is more than one. If a tool answers with nothing, say so plainly rather than guessing.\n\
+\n\
+The game draws plain ASCII only. Use letters, digits, spaces and the punctuation . , : ; ! ? \
+( ) - / % + = @ # * ' and straight double quotes. Never an em dash, a curly quote, an ellipsis \
+character, an accented letter or an emoji: they come out as boxes.\n\
+\n\
+The agent computer sees only its own components: a chat box, an internet card, a data card, \
+a modem, screens and disks. Every furnace, tank, generator and pipe belongs to a satellite, \
+reached through the tools, never through a chunk run on the agent computer.\n\
 \n\
 Use fluid_totals for how much of a fluid there is. Use base_status for what machines are doing. \
 Use base_log for what happened. Use run_lua for anything the other tools do not cover; only \
@@ -51,6 +67,12 @@ run_lua runs on OpenOS with Lua 5.3. component.list(kind) iterates components, \
 component.invoke(address, method, ...) calls one, component.proxy(address) wraps one. \
 Print what you want back. Keep chunks small."
     );
+    if web {
+        text.push_str(
+            "\n\nweb_search and web_fetch reach the internet through the base's search engine, for \
+             mod mechanics, recipes and anything not about this base.",
+        );
+    }
     if let Some(extra) = extra {
         text.push_str("\n\n");
         text.push_str(extra.trim());
@@ -58,8 +80,28 @@ Print what you want back. Keep chunks small."
     text
 }
 
+/// What the game font can draw. Typographic characters a model likes become
+/// their plain forms; anything else outside ASCII is dropped.
+pub fn ascii(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\u{2013}' | '\u{2014}' | '\u{2212}' => out.push('-'),
+            '\u{2018}' | '\u{2019}' | '\u{201A}' => out.push('\''),
+            '\u{201C}' | '\u{201D}' | '\u{201E}' => out.push('"'),
+            '\u{2026}' => out.push_str("..."),
+            '\u{00D7}' => out.push('x'),
+            '\u{00A0}' => out.push(' '),
+            c if c.is_ascii() => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Splits an answer into chat-sized lines, on whitespace where it can.
 pub fn lines(text: &str) -> Vec<String> {
+    let text = ascii(text);
     let mut out = Vec::new();
     for paragraph in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let mut current = String::new();
@@ -106,17 +148,21 @@ async fn turn(
     line: ChatLine,
     confirm: mpsc::Sender<ConfirmRequest>,
 ) -> Result<String> {
+    let web = config.searxng.is_some();
     let mut messages = vec![Message::system(system_prompt(
         &bridge.host,
+        web,
         config.extra_prompt.as_deref(),
     ))];
     messages.extend(history);
     messages.push(Message::user(format!("{}: {}", line.player, line.text)));
-    let definitions = tools::definitions();
+    let definitions = tools::definitions(web);
     let context = tools::Context {
         bridge: bridge.clone(),
         player: line.player.clone(),
         confirm,
+        http: reqwest::Client::new(),
+        searxng: config.searxng.clone(),
     };
 
     for round in 0..=MAX_TOOL_ROUNDS {
@@ -286,6 +332,14 @@ mod tests {
         assert!(out.iter().all(|line| line.len() <= LINE), "{out:?}");
         assert!(out.len() <= LINES);
         assert!(out.last().unwrap().ends_with("..."));
+    }
+
+    #[test]
+    fn typography_becomes_plain_ascii() {
+        assert_eq!(
+            ascii("it\u{2019}s \u{2014} fine\u{2026} caf\u{e9}"),
+            "it's - fine... caf"
+        );
     }
 
     #[test]

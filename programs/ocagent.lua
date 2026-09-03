@@ -23,7 +23,7 @@ local keyboard = require("keyboard")
 local net = require("ocnet")
 local link = require("oclink")
 
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 
 net.running("ocagent", VERSION)
 
@@ -172,7 +172,9 @@ local awaySaid = -AWAY_EVERY
 local shown = nil
 
 local function decodeFor(what, packet)
-  if what == "status" then
+  if what == "run" then
+    return net.decodeRun(packet.port, packet.from, packet.data)
+  elseif what == "status" then
     return net.decode(packet.port, packet.from, packet.data)
   elseif what == "log" then
     return net.decodeLog(packet.port, packet.from, packet.data)
@@ -202,8 +204,22 @@ local function ask(command)
   say("ask   " .. what, DIM)
 end
 
+-- A chunk for another machine goes over the mesh and is answered like a
+-- question; one for this machine runs here like occonnect would run it.
+local function runElsewhere(command)
+  net.askRun(minitel, command.host, command.id, tostring(command.code or ""))
+  asking[#asking + 1] = {
+    id = command.id, what = "run", host = command.host, hosts = 0,
+    until_ = computer.uptime() + (tonumber(command.wait) or ANSWER_WAIT * 2),
+  }
+  say("run   on " .. command.host, DIM)
+end
+
 local function obey(command)
-  if command.kind == "say" then
+  if command.kind == "run" and command.host and command.host ~= ""
+    and command.host ~= net.hostname(config) then
+    runElsewhere(command)
+  elseif command.kind == "say" then
     local text = tostring(command.text or "")
     if chat(text) then
       say("say   " .. text, GREEN)
@@ -227,9 +243,18 @@ end
 -- a packet is an answer to whatever is still asking for its kind; a question
 -- for this machine is answered like any satellite would, minus the machines
 local function heard(packet)
-  for _, pending in ipairs(asking) do
+  for index, pending in ipairs(asking) do
     local answer = decodeFor(pending.what, packet)
-    if answer then
+    if answer and pending.what == "run" then
+      if answer.id == pending.id then
+        table.remove(asking, index)
+        say("run   " .. packet.from .. " " .. (answer.ok and "ok" or tostring(answer.error)),
+          answer.ok and GREEN or RED)
+        me.send({ kind = "result", id = pending.id, ok = answer.ok,
+          output = answer.output, error = answer.error })
+        return
+      end
+    elseif answer then
       pending.hosts = pending.hosts + 1
       net.remember(config, packet.from)
       me.send({ kind = "partial", id = pending.id, host = packet.from, data = answer })
@@ -256,7 +281,12 @@ local function finishAsking()
   local index = 1
   while asking[index] do
     local pending = asking[index]
-    if now >= pending.until_ then
+    if now >= pending.until_ and pending.what == "run" then
+      me.send({ kind = "result", id = pending.id, ok = false,
+        error = pending.host .. " did not answer" })
+      say("run   " .. pending.host .. " did not answer", RED)
+      table.remove(asking, index)
+    elseif now >= pending.until_ then
       me.send({ kind = "result", id = pending.id, ok = true, hosts = pending.hosts })
       say("ask   " .. pending.what .. ", " .. pending.hosts .. " answered", DIM)
       table.remove(asking, index)

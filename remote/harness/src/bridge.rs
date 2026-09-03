@@ -73,7 +73,11 @@ pub enum Outbound {
         wait: f64,
     },
     #[serde(rename = "run")]
-    Run { id: String, code: String },
+    Run {
+        id: String,
+        code: String,
+        host: Option<String>,
+    },
     #[serde(rename = "shell")]
     Shell { id: String, command: String },
     #[serde(rename = "file")]
@@ -193,11 +197,13 @@ impl Handle {
         Ok(outcome.partials)
     }
 
-    pub async fn run(&self, code: &str) -> Result<Outcome> {
+    /// Runs a chunk on the agent computer, or on a named machine over the mesh.
+    pub async fn run(&self, code: &str, host: Option<String>) -> Result<Outcome> {
         self.request(
             |id| Outbound::Run {
                 id,
                 code: code.to_string(),
+                host,
             },
             Duration::from_secs(30),
         )

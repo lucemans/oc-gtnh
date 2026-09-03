@@ -110,7 +110,7 @@ real card, and the values are pinned in `remote/link/src/frame.rs`.
 | --- | --- |
 | `welcome` | the hello was accepted; the link is open |
 | `shell` | a shell line to run, output read back from a file |
-| `run` | a chunk of Lua to run, with `print` collected, 4 KB at most |
+| `run` | a chunk of Lua to run, with `print` collected, 4 KB at most; `ocagent` runs it on a named satellite over the mesh when told a host |
 | `file` | a file to write |
 | `say` | one line for the chat box, `ocagent` only |
 | `ask` | `status`, `log` or `versions` for the mesh, `ocagent` only |
@@ -213,14 +213,27 @@ PROXY_ADDR=vps:7071 PROXY_SECRET=... LINK_KEY=... DEVICE=agent-01 \
 | `LLM_BASE_URL` | harness | an OpenAI-compatible base, up to and including `/v1` |
 | `LLM_API_KEY` | harness | sent as a bearer token when set |
 | `LLM_MODEL` | harness | the model name the proxy knows |
+| `SEARXNG_URL` | harness | a SearXNG instance; when set the model gets `web_search` and `web_fetch` |
 | `AGENT_PROMPT_FILE` | harness | a file appended to the system prompt, for what the base is like |
 | `RUST_LOG` | both | `info` when unset |
 
 The model gets six tools: `base_status`, `fluid_totals`, `base_log`,
 `base_versions`, `run_lua` and `confirm`. The first four are the questions the
-mesh already answers, compacted into a few lines each. `run_lua` runs on the
-agent computer with any method available, and the system prompt tells the
-model to call `confirm` before anything that changes the world. `confirm`
+mesh already answers, compacted into a few lines each, and the status names
+every machine's component address beside it. `run_lua` runs on the agent
+computer, or on a named satellite through a new mesh request, `ocrun?`, which
+every machine answers the way it answers `ocupdate?`. That is how the model
+stops a furnace: `setWorkAllowed(false)` on the address, on the host that
+reported it. Any method is available, and the system prompt tells the model to
+call `confirm` before anything that changes the world. With `SEARXNG_URL` set
+it also gets `web_search`, the top results from that instance, and
+`web_fetch`, one page reduced to plain text.
+
+The system prompt tells the model the agent computer sees only its own
+components, and to write plain ASCII, because the game font draws anything
+else as a box. The harness enforces the second: typographic dashes, quotes
+and ellipses become their plain forms and any other non-ASCII character is
+dropped before a line is said. `confirm`
 says the question in chat and waits a minute for the same player to answer
 `@c yes`; anything else is a refusal.
 

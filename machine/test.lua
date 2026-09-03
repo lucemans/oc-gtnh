@@ -1428,6 +1428,29 @@ test("ocserve answers a status request", function()
   check(report and report.address ~= nil, "sent no address to tell a name clash by")
 end)
 
+test("a satellite runs a chunk for the mesh and says what it printed", function()
+  local modem = satellite("aa000000-0000-0000-0000-000000000001")
+  startMinitel("boiler-room")
+  local ask = require("serialization").serialize({ id = "r7", code = "print(6 * 7)\nreturn 'done'" })
+  deliver(modem, "bb000000", "boiler-room", "agent-01", "ocrun?\n" .. ask)
+
+  local ok, reason = oc.run("ocserve", "--once")
+  check(ok, "ocserve crashed: " .. tostring(reason))
+  oc.pump()
+
+  local reply
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 7) == "ocrun!\n" then
+      reply = packet
+    end
+  end
+  check(reply ~= nil, "no answer went out")
+  local answer = reply and require("serialization").unserialize(reply.data:sub(8))
+  check(answer and answer.id == "r7" and answer.ok == true, "did not answer with the id and ok")
+  check(answer and contains(answer.output or "", "42") and contains(answer.output or "", "done"),
+    "lost what the chunk printed or returned: " .. tostring(answer and answer.output))
+end)
+
 test("ocserve raises a wireless card off zero strength", function()
   local modem = satellite("aa000000-0000-0000-0000-000000000001")
   startMinitel("boiler-room")
@@ -7177,6 +7200,47 @@ test("ocagent asks the mesh and relays each answer", function()
   check(partial and partial.host == "boiler-room", "did not say who answered")
   check(partial and partial.data.fluids[1].name == "Diesel", "lost the fluids")
   check(result and result.ok == true and result.hosts == 1, "did not close the question with a count")
+end)
+
+test("ocagent runs a chunk on another machine through the mesh", function()
+  local modem = agentMachine()
+  oc.idle = 30
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "run", id = "r1", host = "boiler-room", code = "print(1)", wait = 1 })
+    end
+  end)
+  local answer = require("serialization").serialize({ id = "r1", ok = true, output = "1" })
+  deliverAfter(12, modem, "bb000000", "agent-01", "boiler-room", "ocrun!\n" .. answer)
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local asked
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 7) == "ocrun?\n" then
+      asked = packet
+    end
+  end
+  check(asked ~= nil and asked.dest == "boiler-room", "did not send the chunk to the named machine")
+  local got = results(received)
+  check(got.r1 and got.r1.ok == true and got.r1.output == "1",
+    "did not bring the answer back: " .. kinds(received))
+end)
+
+test("ocagent says when the named machine does not answer a chunk", function()
+  agentMachine()
+  oc.idle = 30
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "run", id = "r1", host = "nowhere", code = "print(1)", wait = 0.5 })
+    end
+  end)
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local got = results(received)
+  check(got.r1 and got.r1.ok == false and contains(got.r1.error or "", "did not answer"),
+    "did not report the silence: " .. kinds(received))
 end)
 
 test("ocagent drops a frame that goes backwards", function()

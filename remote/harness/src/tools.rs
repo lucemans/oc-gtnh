@@ -14,7 +14,8 @@ const RESULT_CAP: usize = 6000;
 const MESH_WAIT: f64 = 5.0;
 const CONFIRM_WAIT: Duration = Duration::from_secs(60);
 
-pub fn definitions() -> Vec<Value> {
+/// The tools the model sees; the web ones only when there is a SearXNG to search with.
+pub fn definitions(web: bool) -> Vec<Value> {
     let tool = |name: &str, description: &str, properties: Value, required: Vec<&str>| {
         json!({
             "type": "function",
@@ -25,7 +26,7 @@ pub fn definitions() -> Vec<Value> {
             }
         })
     };
-    vec![
+    let mut out = vec![
         tool(
             "base_status",
             "Every machine every satellite watches right now: gauges, status, alerts, moving items, fluid stock. Costs one broadcast and five seconds.",
@@ -52,8 +53,8 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "run_lua",
-            "Run a chunk of Lua on the agent computer, an OpenComputers machine running OpenOS. print() output and returned values come back, up to 4 KB. component, computer and require are available. Methods starting with set, cancel or similar change the world: ask with confirm first.",
-            json!({ "code": { "type": "string" } }),
+            "Run a chunk of Lua on an OpenComputers machine running OpenOS: the agent computer by default, or the named host from base_status. print() output and returned values come back, up to 4 KB. component, computer and require are available. A machine is reached by the address base_status shows after the @, on the host that reported it. Methods starting with set, cancel or similar change the world: ask with confirm first.",
+            json!({ "code": { "type": "string" }, "host": { "type": "string", "description": "a host from base_status; leave out for the agent computer" } }),
             vec!["code"],
         ),
         tool(
@@ -62,7 +63,22 @@ pub fn definitions() -> Vec<Value> {
             json!({ "question": { "type": "string", "description": "one line, what you are about to do" } }),
             vec!["question"],
         ),
-    ]
+    ];
+    if web {
+        out.push(tool(
+            "web_search",
+            "Search the web through the base's own SearXNG. Returns the top results with a title, a URL and a snippet each. Use it for recipes, mod mechanics and anything not about this base.",
+            json!({ "query": { "type": "string" } }),
+            vec!["query"],
+        ));
+        out.push(tool(
+            "web_fetch",
+            "Read one web page as plain text, up to a few thousand characters. Use it after web_search when a snippet is not enough.",
+            json!({ "url": { "type": "string" } }),
+            vec!["url"],
+        ));
+    }
+    out
 }
 
 /// A turn asking the loop that owns the chat stream for one player's next line.
@@ -75,6 +91,8 @@ pub struct Context {
     pub bridge: Handle,
     pub player: String,
     pub confirm: mpsc::Sender<ConfirmRequest>,
+    pub http: reqwest::Client,
+    pub searxng: Option<String>,
 }
 
 fn cap(text: String) -> String {
@@ -115,13 +133,19 @@ fn status_text(hosts: &[(String, Value)]) -> String {
         out.push_str(&format!("== {host}\n"));
         for card in items_of(report, "cards") {
             let status = str_of(card, "status");
+            let address = str_of(card, "address");
             out.push_str(&format!(
-                "- {}{}",
+                "- {}{}{}",
                 str_of(card, "name"),
                 if status.is_empty() {
                     String::new()
                 } else {
                     format!(" [{status}]")
+                },
+                if address.is_empty() {
+                    String::new()
+                } else {
+                    format!(" @{address}")
                 }
             ));
             for gauge in items_of(card, "gauges") {
@@ -345,7 +369,12 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
             .map(|hosts| versions_text(&hosts)),
         "run_lua" => {
             let code = arguments.get("code").and_then(Value::as_str).unwrap_or("");
-            context.bridge.run(code).await.map(|outcome| {
+            let host = arguments
+                .get("host")
+                .and_then(Value::as_str)
+                .filter(|h| !h.is_empty())
+                .map(String::from);
+            context.bridge.run(code, host).await.map(|outcome| {
                 let output = outcome.output.unwrap_or_default();
                 if outcome.ok {
                     if output.is_empty() {
@@ -409,12 +438,149 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
                 )),
             }
         }
+        "web_search" => match &context.searxng {
+            Some(base) => {
+                let query = arguments.get("query").and_then(Value::as_str).unwrap_or("");
+                web_search(&context.http, base, query).await
+            }
+            None => Err(anyhow::anyhow!("no search engine is configured")),
+        },
+        "web_fetch" => match &context.searxng {
+            Some(_) => {
+                let url = arguments.get("url").and_then(Value::as_str).unwrap_or("");
+                web_fetch(&context.http, url).await
+            }
+            None => Err(anyhow::anyhow!("no web access is configured")),
+        },
         other => Err(anyhow::anyhow!("no tool called {other}")),
     };
     match outcome {
         Ok(text) => cap(text),
         Err(why) => format!("error: {why:#}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// the web, through SearXNG
+
+/// how many results a search brings back
+const SEARCH_RESULTS: usize = 6;
+/// how much of a page is read before it is turned into text
+const PAGE_BYTES: usize = 512 * 1024;
+const WEB_TIMEOUT: Duration = Duration::from_secs(15);
+
+async fn web_search(http: &reqwest::Client, base: &str, query: &str) -> anyhow::Result<String> {
+    if query.trim().is_empty() {
+        anyhow::bail!("nothing to search for");
+    }
+    let response = http
+        .get(format!("{base}/search"))
+        .query(&[("q", query), ("format", "json")])
+        .timeout(WEB_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?;
+    let body: Value = response.json().await?;
+    let results = items_of(&body, "results");
+    if results.is_empty() {
+        return Ok("no results".into());
+    }
+    Ok(results
+        .iter()
+        .take(SEARCH_RESULTS)
+        .enumerate()
+        .map(|(index, result)| {
+            format!(
+                "{}. {}\n   {}\n   {}",
+                index + 1,
+                str_of(result, "title"),
+                str_of(result, "url"),
+                str_of(result, "content")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+async fn web_fetch(http: &reqwest::Client, url: &str) -> anyhow::Result<String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        anyhow::bail!("not a web address: {url}");
+    }
+    let response = http
+        .get(url)
+        .timeout(WEB_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?;
+    let html = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|kind| kind.contains("html"));
+    let bytes = response.bytes().await?;
+    let bytes = &bytes[..bytes.len().min(PAGE_BYTES)];
+    let text = String::from_utf8_lossy(bytes);
+    if html {
+        Ok(html_to_text(&text))
+    } else {
+        Ok(text.into_owned())
+    }
+}
+
+/// Enough of an HTML page to read: scripts and styles gone, tags gone, the
+/// common entities back to characters, and the whitespace collapsed.
+fn html_to_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len() / 4);
+    let lower = html.to_lowercase();
+    let mut at = 0;
+    while at < html.len() {
+        let Some(open) = html[at..].find('<').map(|o| o + at) else {
+            out.push_str(&html[at..]);
+            break;
+        };
+        out.push_str(&html[at..open]);
+        let tag = &lower[open..];
+        let skip_to = if tag.starts_with("<script") {
+            tag.find("</script>")
+                .map(|end| open + end + "</script>".len())
+        } else if tag.starts_with("<style") {
+            tag.find("</style>")
+                .map(|end| open + end + "</style>".len())
+        } else if tag.starts_with("<!--") {
+            tag.find("-->").map(|end| open + end + 3)
+        } else {
+            tag.find('>').map(|end| open + end + 1)
+        };
+        let Some(next) = skip_to else { break };
+        if tag.starts_with("</p")
+            || tag.starts_with("<br")
+            || tag.starts_with("</div")
+            || tag.starts_with("</h")
+            || tag.starts_with("</li")
+            || tag.starts_with("</tr")
+        {
+            out.push('\n');
+        } else {
+            out.push(' ');
+        }
+        at = next;
+    }
+    let decoded = out
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    decoded
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -438,16 +604,22 @@ mod tests {
     }
 
     #[test]
+    fn a_page_becomes_readable_text() {
+        let html = "<html><head><style>p{}</style><script>x()</script></head><body><h1>Diesel</h1><p>Made from &amp; oil.</p><!-- no --><ul><li>one</li><li>two</li></ul></body></html>";
+        assert_eq!(html_to_text(html), "Diesel\nMade from & oil.\none\ntwo");
+    }
+
+    #[test]
     fn status_reads_a_report() {
         let hosts = vec![(
             "boiler".to_string(),
             json!({
-                "cards": [{ "name": "Super Tank", "status": "ok", "gauges": [{ "label": "Diesel", "current": "42,000", "maximum": "4,000,000", "unit": "L", "percent": 1.05 }] }],
+                "cards": [{ "name": "Super Tank", "status": "ok", "address": "aa11", "gauges": [{ "label": "Diesel", "current": "42,000", "maximum": "4,000,000", "unit": "L", "percent": 1.05 }] }],
                 "alerts": [{ "name": "diesel low", "tripped": true }],
             }),
         )];
         let text = status_text(&hosts);
-        assert!(text.contains("Super Tank [ok]"), "{text}");
+        assert!(text.contains("Super Tank [ok] @aa11"), "{text}");
         assert!(text.contains("Diesel: 42,000 / 4,000,000 L 1%"), "{text}");
         assert!(text.contains("alerts tripped: diesel low"), "{text}");
     }

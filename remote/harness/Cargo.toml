@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+dotenvy.workspace = true
 oclink = { path = "../link" }
 rand.workspace = true
 reqwest.workspace = true

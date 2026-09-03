@@ -27,7 +27,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.16.0"
+net.VERSION = "0.17.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -58,6 +58,16 @@ net.VERSION_REPLY = "ocver!"
 -- says only that it was heard, and what it means happens afterwards.
 net.UPDATE_ASK = "ocupdate?"
 net.UPDATE_REPLY = "ocupdate!"
+
+-- Run a chunk of Lua here and say what it printed. Sent by the agent computer
+-- on behalf of whoever is driving it, to the one machine that can see the
+-- component in question. The chunk travels serialized with an id, and the
+-- answer carries the id back, since two questions may be in flight at once.
+--
+-- Anybody on the mesh can send this, as they can already send an update. The
+-- mesh is a base's own network, and the status port was never a locked door.
+net.RUN_ASK = "ocrun?"
+net.RUN_REPLY = "ocrun!"
 
 -- how many records travel. Beyond a screenful nobody is reading them here.
 local RECORDS = 40
@@ -382,6 +392,9 @@ function net.report(config, cards, movers, fluids)
   for _, card in ipairs(cards) do
     local out = {
       name = card.name,
+      -- the address is what a chunk run on this machine needs to reach the
+      -- component behind the card
+      address = card.entry and card.entry.address or nil,
       status = card.status,
       alarm = card.alarm,
       -- how it is drawn belongs to the machine, not to whoever is looking
@@ -458,6 +471,43 @@ function net.answer(minitel, config, port, from, request, report)
         installed = config and config.installed or {},
       }))
     return from .. "  versions"
+  end
+
+  -- matched by length rather than pattern: the question mark in the word is a
+  -- quantifier to a pattern
+  local runPrefix = net.RUN_ASK .. "\n"
+  local runBody = request:sub(1, #runPrefix) == runPrefix and request:sub(#runPrefix + 1) or nil
+  if runBody then
+    local okBody, wanted = pcall(serialization.unserialize, runBody)
+    if not okBody or type(wanted) ~= "table" or type(wanted.code) ~= "string" then
+      return nil
+    end
+    -- Required here rather than at the top of the file, like ocnotify below:
+    -- a machine is asked to run something rarely, and the library that runs it
+    -- need not sit in memory the rest of the time.
+    local okLink, link = pcall(require, "oclink")
+    if not okLink then
+      minitel.usend(from, core.PORT, net.RUN_REPLY .. "\n" .. serialization.serialize({
+        id = wanted.id, ok = false, error = "this machine cannot run chunks, run ocup",
+      }))
+      return from .. "  run refused"
+    end
+    local ran, output, partial = link.run(wanted.code)
+    local answer = { id = wanted.id, ok = ran }
+    if ran then
+      answer.output = output
+    else
+      answer.error = output
+      answer.output = partial
+    end
+    local payload = serialization.serialize(answer)
+    if #payload > room(minitel, from) then
+      answer.output = nil
+      answer.error = (answer.error or "") .. " (output too long to send)"
+      payload = serialization.serialize(answer)
+    end
+    minitel.usend(from, core.PORT, net.RUN_REPLY .. "\n" .. payload)
+    return from .. "  ran " .. (ran and "ok" or "and failed")
   end
 
   if request == net.UPDATE_ASK then
@@ -551,6 +601,12 @@ end
 -- still up when the rest of them ask it for files.
 function net.tellUpdate(minitel, host)
   minitel.usend(host, core.PORT, net.UPDATE_ASK)
+end
+
+-- Asks one machine to run a chunk and say what it printed.
+function net.askRun(minitel, host, id, code)
+  minitel.usend(host, core.PORT, net.RUN_ASK .. "\n"
+    .. serialization.serialize({ id = id, code = code }))
 end
 
 -- Asks whoever can reach the internet to say so. Answered by any machine
@@ -652,6 +708,22 @@ function net.decodeVersions(port, from, data)
 end
 
 -- Reads a machine saying it heard the order to update.
+-- Reads a machine's answer to net.askRun.
+function net.decodeRun(port, from, data)
+  if port ~= core.PORT or type(data) ~= "string" then
+    return nil
+  end
+  local body = data:match("^" .. net.RUN_REPLY .. "\n(.*)$")
+  if not body then
+    return nil
+  end
+  local ok, answer = pcall(serialization.unserialize, body)
+  if not ok or type(answer) ~= "table" then
+    return nil, "unreadable"
+  end
+  return { host = from, id = answer.id, ok = answer.ok == true, output = answer.output, error = answer.error }
+end
+
 function net.decodeUpdate(port, from, data)
   if port ~= core.PORT or type(data) ~= "string" then
     return nil

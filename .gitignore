@@ -1,2 +1,5 @@
 .tmp/
 remote/target/
+.env
+remote/.env
+remote/harness/.env

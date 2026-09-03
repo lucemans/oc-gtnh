@@ -34,7 +34,7 @@ local serialization = require("serialization")
 
 local link = {}
 
-link.VERSION = "0.2.0"
+link.VERSION = "0.3.0"
 link.PROTOCOL = 1
 
 link.CONTROL = 0
@@ -427,7 +427,12 @@ function link.run(code)
     out[#out + 1] = text
   end
 
+  -- component and computer are handed in by name: a program's globals do not
+  -- hold them, and a chunk that has to require them first fails once per turn
   local env = setmetatable({
+    component = component,
+    computer = computer,
+    require = require,
     print = function(...)
       local parts = table.pack(...)
       for index = 1, parts.n do

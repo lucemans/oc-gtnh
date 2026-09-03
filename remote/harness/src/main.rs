@@ -32,6 +32,8 @@ pub struct Config {
     pub link_keys: Keys,
     pub device: String,
     pub llm: llm::Settings,
+    /// a SearXNG instance; without one the model has no web tools
+    pub searxng: Option<String>,
     pub extra_prompt: Option<String>,
 }
 
@@ -70,6 +72,9 @@ fn config(device: Option<String>, with_model: bool) -> Result<Config> {
             None => env_required("DEVICE")?,
         },
         llm,
+        searxng: std::env::var("SEARXNG_URL")
+            .ok()
+            .map(|url| url.trim_end_matches('/').to_string()),
         extra_prompt,
     })
 }
@@ -158,6 +163,8 @@ async fn once(config: Arc<Config>, command: bridge::Outbound) -> Result<i32> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // a .env beside the binary or in the working directory; the environment wins
+    let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -194,6 +201,7 @@ async fn main() -> Result<()> {
                 bridge::Outbound::Run {
                     id: "1".into(),
                     code,
+                    host: None,
                 },
             )
             .await?
