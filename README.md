@@ -214,18 +214,24 @@ PROXY_ADDR=vps:7071 PROXY_SECRET=... LINK_KEY=... DEVICE=agent-01 \
 | `LLM_API_KEY` | harness | sent as a bearer token when set |
 | `LLM_MODEL` | harness | the model name the proxy knows |
 | `SEARXNG_URL` | harness | a SearXNG instance; when set the model gets `web_search` and `web_fetch` |
+| `AGENT_NOTES_FILE` | harness | where `remember` writes what players teach it, `agent-notes.txt` when unset |
 | `AGENT_PROMPT_FILE` | harness | a file appended to the system prompt, for what the base is like |
 | `RUST_LOG` | both | `info` when unset |
 
-The model gets six tools: `base_status`, `fluid_totals`, `base_log`,
-`base_versions`, `run_lua` and `confirm`. The first four are the questions the
+The model gets seven tools: `base_status`, `fluid_totals`, `base_log`,
+`base_versions`, `run_lua`, `confirm` and `remember`. The first four are the questions the
 mesh already answers, compacted into a few lines each, and the status names
 every machine's component address beside it. `run_lua` runs on the agent
 computer, or on a named satellite through a new mesh request, `ocrun?`, which
 every machine answers the way it answers `ocupdate?`. That is how the model
 stops a furnace: `setWorkAllowed(false)` on the address, on the host that
-reported it. Any method is available, and the system prompt tells the model to
-call `confirm` before anything that changes the world. With `SEARXNG_URL` set
+reported it. Any method is available. The system prompt makes a player's request the
+permission for what it asks, and keeps `confirm` for stopping or starting a
+production machine the player did not name, and for anything that cannot be
+undone. `remember` appends one line to a notes file on your machine, and the
+file rides in every system prompt, which is how the agent keeps what a player
+taught it: which door is which, what an address belongs to, how things are
+done here. Edit the file by hand when a note is wrong. With `SEARXNG_URL` set
 it also gets `web_search`, the top results from that instance, and
 `web_fetch`, one page reduced to plain text.
 

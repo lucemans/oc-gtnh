@@ -63,6 +63,12 @@ pub fn definitions(web: bool) -> Vec<Value> {
             json!({ "question": { "type": "string", "description": "one line, what you are about to do" } }),
             vec!["question"],
         ),
+        tool(
+            "remember",
+            "Write down one fact a player taught you about the base, so you know it in every later conversation: what a machine is for, which door is which, what an address belongs to, how they like things done. One short line.",
+            json!({ "note": { "type": "string" } }),
+            vec!["note"],
+        ),
     ];
     if web {
         out.push(tool(
@@ -93,6 +99,7 @@ pub struct Context {
     pub confirm: mpsc::Sender<ConfirmRequest>,
     pub http: reqwest::Client,
     pub searxng: Option<String>,
+    pub notes: std::path::PathBuf,
 }
 
 fn cap(text: String) -> String {
@@ -438,6 +445,14 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
                 )),
             }
         }
+        "remember" => {
+            let note = arguments
+                .get("note")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            remember(&context.notes, &context.player, note).await
+        }
         "web_search" => match &context.searxng {
             Some(base) => {
                 let query = arguments.get("query").and_then(Value::as_str).unwrap_or("");
@@ -458,6 +473,46 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
         Ok(text) => cap(text),
         Err(why) => format!("error: {why:#}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// what players teach the agent
+
+/// how much of the notes file rides in the system prompt; the oldest lines go first
+const NOTES_CAP: usize = 8 * 1024;
+
+/// The notes as the prompt gets them: the file, or nothing, cut to the newest part.
+pub async fn notes(path: &std::path::Path) -> String {
+    let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    if text.len() <= NOTES_CAP {
+        return text;
+    }
+    let mut cut = text.len() - NOTES_CAP;
+    while !text.is_char_boundary(cut) {
+        cut += 1;
+    }
+    match text[cut..].find('\n') {
+        Some(newline) => text[cut + newline + 1..].to_string(),
+        None => text[cut..].to_string(),
+    }
+}
+
+async fn remember(path: &std::path::Path, player: &str, note: &str) -> anyhow::Result<String> {
+    if note.is_empty() {
+        anyhow::bail!("nothing to remember");
+    }
+    let line = format!(
+        "- {} (from {player})\n",
+        note.split_whitespace().collect::<Vec<_>>().join(" ")
+    );
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
+    file.write_all(line.as_bytes()).await?;
+    Ok("remembered".into())
 }
 
 // ---------------------------------------------------------------------------

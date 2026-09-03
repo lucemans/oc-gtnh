@@ -34,6 +34,8 @@ pub struct Config {
     pub llm: llm::Settings,
     /// a SearXNG instance; without one the model has no web tools
     pub searxng: Option<String>,
+    /// where what players teach the agent is kept, one line per fact
+    pub notes: std::path::PathBuf,
     pub extra_prompt: Option<String>,
 }
 
@@ -75,6 +77,9 @@ fn config(device: Option<String>, with_model: bool) -> Result<Config> {
         searxng: std::env::var("SEARXNG_URL")
             .ok()
             .map(|url| url.trim_end_matches('/').to_string()),
+        notes: std::env::var("AGENT_NOTES_FILE")
+            .unwrap_or_else(|_| "agent-notes.txt".to_string())
+            .into(),
         extra_prompt,
     })
 }

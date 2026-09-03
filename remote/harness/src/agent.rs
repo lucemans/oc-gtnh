@@ -32,7 +32,7 @@ const QUEUE: usize = 4;
 const LINE: usize = 200;
 const LINES: usize = 6;
 
-fn system_prompt(host: &str, web: bool, extra: Option<&str>) -> String {
+fn system_prompt(host: &str, web: bool, notes: &str, extra: Option<&str>) -> String {
     let mut text = format!(
         "You are the computer of a GregTech: New Horizons base, answering players in Minecraft chat. \
 You are addressed as @c or @computer. You run on an OpenComputers machine called {host}, and you \
@@ -59,19 +59,32 @@ a modem, screens and disks. Every furnace, tank, generator and pipe belongs to a
 reached through the tools, never through a chunk run on the agent computer.\n\
 \n\
 Use fluid_totals for how much of a fluid there is. Use base_status for what machines are doing. \
-Use base_log for what happened. Use run_lua for anything the other tools do not cover; only \
-methods starting with get, is or has are safe to call freely. Before calling any method that \
-changes the world, use confirm, and only proceed on a confirmed answer.\n\
+Use base_log for what happened. Use run_lua for anything the other tools do not cover.\n\
 \n\
-run_lua runs on OpenOS with Lua 5.3. component.list(kind) iterates components, \
-component.invoke(address, method, ...) calls one, component.proxy(address) wraps one. \
-Print what you want back. Keep chunks small."
+A player asking you to do something is the permission to do it: do it, then report. Use the \
+confirm tool only when you would stop or start a production machine the player did not name, \
+or when the action cannot be undone, such as deleting or overwriting a file. Doors, lamps, \
+notes and reading are never worth a confirmation. Never ask for confirmation in your reply \
+text; the confirm tool is the only way to ask, and one answer covers the whole request.\n\
+\n\
+Use remember for anything a player teaches you about the base: what a machine is for, which \
+door is which, what an address belongs to, how they like things done. Those notes come back \
+to you in every conversation; nothing else does.\n\
+\n\
+run_lua runs on OpenOS with Lua 5.3. component.list(kind) iterates components with their \
+full addresses, component.invoke(address, method, ...) calls one, component.proxy(address) \
+wraps one, and component.get(prefix) turns the short form of an address into the full one, \
+which invoke and proxy need. Print what you want back. Keep chunks small."
     );
     if web {
         text.push_str(
             "\n\nweb_search and web_fetch reach the internet through the base's search engine, for \
              mod mechanics, recipes and anything not about this base.",
         );
+    }
+    if !notes.trim().is_empty() {
+        text.push_str("\n\nWhat players have taught you about this base, newest last:\n");
+        text.push_str(notes.trim());
     }
     if let Some(extra) = extra {
         text.push_str("\n\n");
@@ -149,9 +162,11 @@ async fn turn(
     confirm: mpsc::Sender<ConfirmRequest>,
 ) -> Result<String> {
     let web = config.searxng.is_some();
+    let notes = tools::notes(&config.notes).await;
     let mut messages = vec![Message::system(system_prompt(
         &bridge.host,
         web,
+        &notes,
         config.extra_prompt.as_deref(),
     ))];
     messages.extend(history);
@@ -163,6 +178,7 @@ async fn turn(
         confirm,
         http: reqwest::Client::new(),
         searxng: config.searxng.clone(),
+        notes: config.notes.clone(),
     };
 
     for round in 0..=MAX_TOOL_ROUNDS {

@@ -3,3 +3,6 @@ remote/target/
 .env
 remote/.env
 remote/harness/.env
+agent-notes.txt
+remote/agent-notes.txt
+remote/harness/agent-notes.txt
