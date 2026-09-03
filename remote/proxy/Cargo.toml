@@ -1,0 +1,18 @@
+[package]
+name = "ocproxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The relay on the public internet: authenticates every connection and forwards frames between a device in the game and its one controller"
+
+[[bin]]
+name = "ocproxy"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+oclink = { path = "../link" }
+rand.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

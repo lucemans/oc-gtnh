@@ -1,0 +1,17 @@
+[package]
+name = "oclink"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The wire shared by the proxy, the harness and the computers in the game: sealed frames, OpenOS serialization as a serde format, and the proxy handshake"
+
+[dependencies]
+aes.workspace = true
+anyhow.workspace = true
+cbc.workspace = true
+hmac.workspace = true
+rand.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true

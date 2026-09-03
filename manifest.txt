@@ -8,6 +8,7 @@ lib/ocsecurity.lua
 lib/ocnotify.lua
 lib/ocnet.lua
 lib/ocgtp.lua
+lib/oclink.lua
 lib/minitel.lua
 lib/syslog.lua
 etc/minitel.lua
@@ -28,3 +29,4 @@ programs/ocglass.lua
 programs/ocserve.lua
 programs/ocview.lua
 programs/ocping.lua
+programs/ocagent.lua

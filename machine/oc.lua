@@ -25,7 +25,7 @@ local pulls = 0
 -- into the next one. ocnet reads /etc/hostname once and is the first to do it.
 local LIBRARIES = {
   "oclib", "ocgt", "oclogistics", "ocrailcraft", "octank", "occomputronics",
-  "ocsecurity", "ocnotify", "ocgtp", "ocnet", "minitel", "syslog",
+  "ocsecurity", "ocnotify", "ocgtp", "ocnet", "oclink", "minitel", "syslog",
 }
 
 function oc.reset()
@@ -35,6 +35,7 @@ function oc.reset()
   oc.files = {}
   oc.events = {}
   oc.requests = {}
+  oc.socket = { inbound = {}, written = {} }
   oc.components = {}
   oc.invoked = {}
   oc.frames = {}
@@ -333,6 +334,41 @@ function component.internet.request(url, body, headers)
       return text
     end,
     close = function() end,
+  }
+end
+
+-- A TCP socket, scripted by the test through oc.socket: `refuse` makes the
+-- connect fail, `inbound` is a list of chunks handed out one per read, and
+-- `answer(written)` when set is asked for the next chunk instead, so a test can
+-- play the far end of a conversation. Everything the program wrote is in
+-- `written`, one entry per write.
+function component.internet.connect(host, port)
+  local socket = oc.socket
+  socket.connections = (socket.connections or 0) + 1
+  socket.host, socket.port = host, port
+  if socket.refuse then
+    return nil, "connection refused"
+  end
+  return {
+    finishConnect = function()
+      return true
+    end,
+    read = function()
+      if socket.closed then
+        return nil
+      end
+      if socket.answer then
+        return socket.answer(socket.written) or ""
+      end
+      return table.remove(socket.inbound, 1) or ""
+    end,
+    write = function(bytes)
+      socket.written[#socket.written + 1] = bytes
+      return #bytes
+    end,
+    close = function()
+      socket.closedBy = "program"
+    end,
   }
 end
 
@@ -769,6 +805,9 @@ function oc.install()
   end
   package.preload["ocnet"] = function()
     return dofile("lib/ocnet.lua")
+  end
+  package.preload["oclink"] = function()
+    return dofile("lib/oclink.lua")
   end
   package.preload["minitel"] = function()
     return dofile("lib/minitel.lua")

@@ -15,40 +15,210 @@ https://ocdoc.cil.li/api:internet
 | `ocping`    | whether the network works, at either layer                             |
 | `ocdebug`   | live on-screen browser for components, their methods and values        |
 | `ocdump`    | uploads a full system dump as an unlisted paste, `--net` for the mesh  |
-| `occonnect` | lets someone off the machine run commands on it, over HTTPS            |
+| `occonnect` | lets someone off the machine run commands on it, through the proxy     |
 | `ockeypad`  | a PIN lock on an OpenSecurity keypad                                   |
 | `ocmkfs`    | flashes a floppy with the programs you pick, for a computer with no net |
 | `ocinstall` | on the new machine: keeps what it wants of the floppy, records the choice |
 | `ocsweeper` | minesweeper, up to 21x21                                               |
 | `octiles`   | 2048, from 2x2 up to 8x8                                               |
 | `ocitems`   | everything the Logistics Pipes network holds, items and fluids alike   |
+| `ocagent`   | the base's agent: `@c` in chat reaches a model that can ask the mesh and run Lua |
+
+## Driving a computer from outside the game
+
+Two programs let something outside the game hold a computer here: `occonnect`
+hands over its shell, and `ocagent` hands over chat, the mesh and its shell to
+a language model. Both go through one proxy, and both are configured the same
+way, on the network screen of `ocwatch --edit` under `link`.
+
+```
+ shell / agent harness                         proxy                    the computer
+ (your machine)         ---- TCP, sealed ---->  (a VPS)  <---- TCP, sealed ----  (in the game)
+                              controller                        device
+```
+
+The proxy is on the public internet. It authenticates every connection with a
+secret of its own, knows a device by the hostname it joined under, lets one
+controller attach to it, and forwards frames between the two without reading
+them. It holds the proxy secret and nothing else: what the frames carry is
+sealed with the link key, which only the computer and its controller have.
+Changing the harness never touches the proxy, and changing the proxy never
+touches the computers, which is the point of having two.
+
+The computer needs an internet card and a tier 2 data card. The data card does
+the sealing, and a tier 1 has only the hashes.
+
+### The link
+
+One TCP stream from the internet card, carrying frames both ways:
+
+```
+u16 length, u8 channel, body
+```
+
+Channel 0 is the proxy's own. On connect the proxy sends a 16 byte challenge in
+the clear; the client answers with a join sealed under keys from the proxy
+secret, naming itself, its role, the challenge and a nonce of its own, and both
+sides then run the channel under keys derived from challenge and nonce
+together. A recorded join answers a challenge that will never be asked again.
+After that the proxy says `joined`, and `attached` or `detached` as the other
+end comes and goes. A quiet client says `ping` once a minute, and the proxy
+drops one that says nothing for three.
+
+Channel 1 is relayed as it is between a device and its controller. A sealed
+body, on either channel, is
+
+```
+iv .. aes_128_cbc(key, iv, text) .. hmac_sha256(mac, iv .. ct)[1..16]
+```
+
+with the data card doing the arithmetic. The device says hello under the
+static link keys when the proxy attaches it, carrying a fresh nonce, and
+everything after runs under keys derived from that nonce, so a frame recorded
+yesterday verifies against nothing today. Every message numbers itself, on both
+channels, and a number that does not go up is dropped.
+
+Inside a frame the text is OpenOS serialization both ways. The computer reads
+and writes it out of the standard library, and the other side carries a serde
+dialect for it in `remote/link/src/wire.rs`, so nothing is parsed by hand and
+there is no JSON library on a machine that cannot afford one.
+
+The card's AES, its HMAC and its padding were checked against this crate on a
+real card, and the values are pinned in `remote/link/src/frame.rs`.
+
+| from the device | meaning |
+| --- | --- |
+| `hello` | protocol, hostname, nonce; under the static link keys |
+| `chat` | a player and what they typed after the trigger, `ocagent` only |
+| `partial` | one machine's answer to a mesh question, as the mesh sent it |
+| `result` | a command done, with its output, or a question closed with a count |
+| `heartbeat` | free memory and uptime every thirty seconds, `ocagent` only |
+
+| from the controller | meaning |
+| --- | --- |
+| `welcome` | the hello was accepted; the link is open |
+| `shell` | a shell line to run, output read back from a file |
+| `run` | a chunk of Lua to run, with `print` collected, 4 KB at most |
+| `file` | a file to write |
+| `say` | one line for the chat box, `ocagent` only |
+| `ask` | `status`, `log` or `versions` for the mesh, `ocagent` only |
 
 ## occonnect
 
-OpenComputers cannot open a TLS socket, so MQTT over `wss://` is out of reach.
-`occonnect` uses [ntfy](https://ntfy.sh) instead, which is plain HTTPS request
-and response, the one transport this machine already does reliably. Nothing
-needs hosting; `--server` points it at your own ntfy if you would rather.
-
 ```
-occonnect            connect and wait for commands
-occonnect --once     one poll, for checking it works
-occonnect --reset    issue a new pairing code
+occonnect          connect and wait for commands
+occonnect --once   one round, for checking it works
 ```
 
-The topic comes from half the computer address, so it is not something anyone
-stumbles onto. The pairing code is generated on the machine, shown on its
-screen, and travels inside each command where `occonnect` checks it, so a topic
-being public does not let anyone run anything. Commands are not restricted:
-whatever arrives with the right code goes to the shell.
+The machine joins the proxy under its hostname and waits. Its controller is
+`ocharness` on your machine:
 
 ```
-send     curl -d "<code> ocup"  https://ntfy.sh/<topic>
-read     curl -s "https://ntfy.sh/<topic>-out/raw?poll=1"
+ocharness shell <host> ocup                       run a shell line, print what it wrote
+ocharness lua <host> probe.lua                    run a chunk, print what it printed
+ocharness file <host> /home/notes.txt notes.txt   write a file
 ```
 
-Whatever is already in the topic when `occonnect` starts is treated as history,
-so restarting cannot replay a command sent hours ago.
+Nothing is restricted: whoever holds the link key drives the shell. A machine
+that is not connected is said to be so within ten seconds rather than waited
+for. The old ntfy path is gone: a public relay that anybody could post to was
+authenticated by a code inside each message, and this one is authenticated
+before a byte of content moves.
+
+## ocagent
+
+A line in chat that starts with `@c` or `@computer` goes to a language model,
+and what it says comes back through the chat box. The model can ask the mesh
+what every satellite sees, add up the fluids, read the log, say what every
+computer is running, and run a chunk of Lua on the agent computer.
+
+```
+@c how much diesel do we have
+@c what tripped last night
+@c list every tank under ten percent
+```
+
+The model does not run in the game. A computer with under a megabyte cannot
+hold a conversation, a tool schema and a parsed response, so it holds none of
+them. `ocagent` is a bridge: it carries chat lines out and carries back three
+kinds of command, say this, ask the mesh that, run this Lua. It answers
+everything `occonnect` answers as well, so the same link drives its shell.
+
+```
+ocagent          connect to the proxy and serve
+ocagent --once   one round, for checking it works
+```
+
+The agent computer needs a Computronics chat box on an adapter as well. The
+chat box raises a `chat_message` signal for every line typed within its range,
+forty blocks unless changed, and is what the reply is said through. Nothing
+else on the base changes: the bridge asks the satellites the questions
+`ocview` already asks.
+
+### Staying up
+
+The bridge is a program with its own loop, started from `/home/.shrc` like
+`ocserve`, and never an `rc` daemon: a loop that runs scripts and pumps a
+socket does not return promptly. Listeners only queue what arrived; every
+reply, question and script runs from the loop. A script runs under `pcall`
+with its output bounded at 4 KB, and the game's own watchdog stops one that
+never yields, as an error the bridge survives. Before a script runs the bridge
+asks for its memory back the way `ocitems` does, and refuses when there is not
+enough. Three loop errors in a minute, or memory that stays gone after a
+collection, reboot the machine, and the reboot lands back in `ocagent`.
+
+When the proxy is away, chat is told so, once every thirty seconds at most,
+and the bridge reconnects with a pause that doubles up to a minute. A connect,
+a challenge or a join that never completes is dropped after ten seconds, since
+the card itself never gives up. When the harness is away the proxy says
+`detached`, the bridge goes back to waiting, and greets the next controller
+with a fresh hello.
+
+### The proxy and the harness
+
+Both live in `remote/`, a Cargo workspace: `link` is the wire they share,
+`proxy` builds `ocproxy`, `harness` builds `ocharness`. Both binaries start at
+0.0.1 and are versioned separately, since the proxy changes only when the
+wire does.
+
+```
+cd remote
+cargo build --release
+PROXY_SECRET=... ./target/release/ocproxy                       on the VPS
+PROXY_ADDR=vps:7071 PROXY_SECRET=... LINK_KEY=... DEVICE=agent-01 \
+  LLM_BASE_URL=https://your-litellm/v1 LLM_API_KEY=... LLM_MODEL=... \
+  ./target/release/ocharness serve                              on your machine
+```
+
+| variable | who reads it | what it is |
+| --- | --- | --- |
+| `PROXY_LISTEN` | proxy | address to listen on, `0.0.0.0:7071` when unset |
+| `PROXY_SECRET` | both | the proxy secret, as the network screen was given it |
+| `PROXY_ADDR` | harness | host and port of the proxy |
+| `LINK_KEY` | harness | the link key, as the network screen was given it |
+| `DEVICE` | harness | hostname of the agent computer, for `serve` |
+| `LLM_BASE_URL` | harness | an OpenAI-compatible base, up to and including `/v1` |
+| `LLM_API_KEY` | harness | sent as a bearer token when set |
+| `LLM_MODEL` | harness | the model name the proxy knows |
+| `AGENT_PROMPT_FILE` | harness | a file appended to the system prompt, for what the base is like |
+| `RUST_LOG` | both | `info` when unset |
+
+The model gets six tools: `base_status`, `fluid_totals`, `base_log`,
+`base_versions`, `run_lua` and `confirm`. The first four are the questions the
+mesh already answers, compacted into a few lines each. `run_lua` runs on the
+agent computer with any method available, and the system prompt tells the
+model to call `confirm` before anything that changes the world. `confirm`
+says the question in chat and waits a minute for the same player to answer
+`@c yes`; anything else is a refusal.
+
+One turn may take eight tool rounds and ninety seconds, and a turn past four
+seconds says so in chat. A player gets five questions a minute, a line while a
+turn runs is queued, and the last twenty exchanges ride along into the next
+turn. An answer is split into lines of two hundred characters, six at most.
+
+A second controller for a device is refused by the proxy, so `ocharness shell`
+onto the agent computer while `ocharness serve` holds it is answered with
+`busy`. Stop the harness first, or drive it through chat.
 
 ## The network
 
@@ -169,6 +339,53 @@ out of memory looking at its own history. Only the view that shows them fetches
 them, for the same reason: it is a screenful that barely changes, where the
 machines change every two seconds.
 
+### Updating the base from one screen
+
+`ocview`'s fifth view is `update`. It lists every machine, what it is running,
+the commit `ocup` last installed from, how long it has been up, and how far
+through an update it is.
+
+| key | what it does |
+| --- | --- |
+| up and down | move between machines |
+| `u` | update the machine on the cursor |
+| `a` | update every machine |
+
+A machine told to update answers to say it heard, runs `ocup` on a cleared
+screen, and reboots. The reboot is the point: overwriting a file changes nothing
+that is already running, a library already required stays required, and a daemon
+reads its own file once when `rc` starts it. Coming up again is the only thing
+that puts a machine on what it just fetched.
+
+Coming up again needs something to come up into. `ocup install` has a row saying
+what starts at boot, and `ocup` writes that to `/home/.shrc`, which is what
+OpenOS runs for an interactive shell. Without it a machine reboots to a prompt
+and is never heard from again. `rc` is not the answer here: a service has to
+return promptly so it can register its listeners, and a dashboard that owns the
+screen and reads the keyboard never returns at all.
+
+`a` goes one machine at a time and leaves the gateway until last. Twelve
+satellites fetching at once go through one internet card, a gateway that rebooted
+first takes away everybody else's way of getting anything, and a base with every
+computer rebooting together is watching nothing at all for as long as it takes.
+A machine that has not answered three minutes after being told is given up on,
+said so on the screen, and the queue moves on.
+
+What each machine is running is asked for only while this view is open, and is
+answered out of the configuration, where `ocup` wrote it. Neither end goes to a
+disk for any of it, which matters: a disk in this game is audible across the
+room, and a dozen satellites answering the same question on a clock is a dozen
+disks going round.
+
+There is nothing checked against the repository here. A tablet has no idea what
+GitHub holds and does not need one: what the view compares is the base against
+itself, so a machine behind the one beside it is named along with the files it is
+behind on. A base where every machine agrees is a base that is fine, whatever
+the repository has moved on to since.
+
+Anybody who can put a packet on the mesh can trigger this. Everything on the
+status port is already like that.
+
 ### Metrics, for Grafana
 
 Readings also go to a telemetry service, as GTP/1, which is a specification of
@@ -193,11 +410,19 @@ translation, and the part of it that matters is refusing to guess:
 | a machine's status | `machine.active`, 1 when it is working |
 | an alert | `alert.tripped`, 1 or 0, labelled `alert` |
 | the fluid network | `fluid.amount_liters`, labelled `fluid` |
+| the program running | `software.build_info`, always 1, labelled `program`, `version` and `commit` |
 | a unit nothing here recognises | nothing at all |
 
 That last row is the rule the rest follows from. A series invented out of a unit
 nobody recognised sits in the database being wrong for as long as the database
 exists, and no dashboard is worth that.
+
+`software.build_info` is the one whose value says nothing. A version is not a
+number and cannot be made into one, so the series carries a constant and the
+version rides in a label, which is how a build stamp reaches a metrics database
+anywhere. One line per machine on a dashboard then says which of them is behind
+the rest. The commit is the short one, and it comes from what `ocup` wrote down
+on its last run.
 
 Nothing about the item network is sent. A base holds thousands of item names and
 each one as a label value is a series of its own, which is the one mistake the
@@ -250,6 +475,23 @@ Three services, installed from `etc/` to `/etc/rc.d` and enabled by `ocup` in
 | `syslogd` | writes records down, and relays them to the collector | every machine |
 | `fserv` | serves files and proxies HTTP over the network | the machine with the internet card |
 
+`rc` starts them at boot: `/boot/89_rc.lua` listens for the `init` signal, which
+is raised before the shell, so a service in `enabled` is up before anything on
+`/home/.shrc` runs.
+
+When that has not happened, the program starts the daemon rather than telling
+somebody to. `net.up` sends this machine a packet addressed to itself, which the
+daemon hands straight back and nothing else does; if nothing comes back it runs
+`rc minitel enable` and `rc minitel start` and asks again. Enabling as well as
+starting is the point: starting fixes this boot, enabling is what stops the next
+one going the same way. It says on screen that it had to.
+
+If it still does not answer, the daemon is either failing to start or running
+under a name this machine does not call itself. It hands a packet back only when
+the address matches what it read out of `/etc/hostname` when `rc` started it, so
+a name changed since then looks exactly like a daemon that is not there.
+`rc minitel restart` is what makes it read the file again.
+
 `ocping` says whether any of it works. `ocping <host>` sends a packet to a named
 machine and times the acknowledgement, which tests routing, and prints what the
 daemon has in its route cache. `ocping --l2` is the bare modem, which tests
@@ -298,17 +540,19 @@ The mod-specific ones all build on `oclib` and know nothing of each other. A pro
 another mod is a new library and one more `or` rather than an edit to an
 existing one.
 
-`ocview` has four views, cycled with `v` and remembered between runs: `columns`
+`ocview` has five views, cycled with `v` and remembered between runs: `columns`
 gives every satellite its own column of one-line machines, `cards` gives one
-machine at a time with a wide bar, `alerts` shows only what is wrong, and `log`
-shows what the base has written down. A
+machine at a time with a wide bar, `alerts` shows only what is wrong, `log`
+shows what the base has written down, and `update` shows what every machine is
+running and moves it on. A
 machine set to compact in `ocwatch` draws as one line with no bar wherever it is
 shown, and the order of the watch list is the order on screen, so a group of
 pipes sits under the tank they belong to.
 
 The first three are what the base is doing now. `log` is what it did while
 nobody was watching, which is the only view that answers "what happened at four
-this morning".
+this morning". `update` is not about the base at all but about the computers
+watching it, and is the only view that changes anything.
 
 `ocwatch --edit` is one drawn screen listing what is watched and what will fire,
 with the actions it offers as buttons along the bottom. Click a row to select
@@ -508,6 +752,16 @@ machine from a floppy. Once a choice exists it is the whole truth:
 is installed is always what was chosen. `ocup` itself cannot be opted out,
 since nothing would be left to opt back in with. Libraries are not part of the
 choice, because the programs that stay need whichever of them they require.
+The same list has a row at the bottom saying what starts at boot, cycled through
+the programs this machine is keeping. `ocup` writes that to `/home/.shrc`, which
+is the only autostart OpenOS has, and offering a program the machine is not
+installing would name a file that is about to be deleted.
+
+Every run also records what it put where, as `installed` in `/etc/ocgt.cfg`: the
+commit it fetched from and the version of each file. That is what a machine
+answers with when a dashboard asks what it is running, so nothing has to open a
+file to say. `ocmkfs` writes the same thing onto a floppy, so a machine installed
+off one can answer before it has ever reached the internet.
 
 ## Install
 

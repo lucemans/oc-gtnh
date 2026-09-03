@@ -22,7 +22,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.23.0"
+local VERSION = "0.24.0"
 
 -- what this machine tells the network it is running, in every report it sends
 net.running("ocwatch", VERSION)
@@ -1273,6 +1273,11 @@ local function editNetwork()
         text = string.format("%-12s %s", "telemetry",
           telemetry.on and (telemetry.host .. " every " .. telemetry.interval .. "s")
           or "off") },
+      { what = "link",
+        text = string.format("%-12s %s", "link",
+          config.link and config.link.host
+          and (config.link.host .. ":" .. tostring(config.link.port))
+          or "none, for occonnect and ocagent") },
       { heading = true, text = "SATELLITES" },
     }
     for index, host in ipairs(peers) do
@@ -1335,6 +1340,22 @@ local function editNetwork()
           telemetry.interval))
         if seconds and seconds > 0 then
           gtp.set(config, "interval", seconds)
+        end
+      end
+      save()
+    elseif row and code == keyboard.keys.enter and row.what == "link" then
+      local current = config.link or {}
+      local host = prompt("proxy host, blank to forget it", current.host)
+      if host == nil or host == "" then
+        config.link = nil
+      else
+        local port = tonumber(prompt("proxy port", current.port or 7071))
+        local secret = prompt("proxy secret, as the proxy has it", current.secret)
+        local key = prompt("link key, as the harness has it", current.key)
+        if port and secret and secret ~= "" and key and key ~= "" then
+          config.link = { host = host, port = math.floor(port), secret = secret, key = key }
+        else
+          notice("a port, a proxy secret and a link key are all needed")
         end
       end
       save()

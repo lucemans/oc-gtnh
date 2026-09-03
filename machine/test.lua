@@ -1128,194 +1128,6 @@ test("ocdump keeps scalar returns on one line", function()
 end)
 
 -------------------------------------------------------------------------------
--- occonnect
-
-local function connected(code)
-  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
-    nicknames = {}, watch = {}, alerts = {},
-    connect = { server = "https://ntfy.sh", topic = "oc-755c25caccec", code = code },
-  })
-end
-
--- shaped exactly like a real ntfy line, captured from ntfy.sh
-local function ntfyLine(id, message)
-  return '{"id":"' .. id .. '","time":1787070203,"expires":1787113403,'
-    .. '"event":"message","topic":"oc-755c25caccec","message":"' .. message .. '"}'
-end
-
-local function posted()
-  local body = nil
-  for _, request in ipairs(oc.requests) do
-    if request.url:find("-out", 1, true) then
-      body = request.body
-    end
-  end
-  return body
-end
-
-test("occonnect shows a pairing code and a topic", function()
-  oc.components = { INTERNET }
-  oc.respond = function()
-    return 200, "OK", ""
-  end
-
-  oc.run("occonnect", "--once")
-  local out = oc.printed()
-  check(contains(out, "pairing code"), "no pairing code shown")
-  check(contains(out, "oc-755c25ca"), "topic not shown")
-  -- both have to survive a restart or the pairing is worthless
-  local saved = require("serialization").unserialize(oc.files["/etc/ocgt.cfg"] or "")
-  check(saved and saved.connect and saved.connect.code ~= nil, "code not saved")
-  check(saved and saved.connect.topic ~= nil, "topic not saved")
-end)
-
-test("occonnect runs a command carrying the right code", function()
-  connected("ABC12345")
-  oc.components = { INTERNET }
-  local polls = 0
-  oc.respond = function(url)
-    if url:find("poll=1", 1, true) then
-      polls = polls + 1
-      -- the first poll only learns where the log is; the second carries work
-      if polls == 1 then
-        return 200, "OK", ntfyLine("OLD1", "ABC12345 should-not-run")
-      end
-      return 200, "OK", ntfyLine("NEW1", "ABC12345 ocup")
-    end
-    return 200, "OK", ""
-  end
-
-  oc.run("occonnect", "--once")
-  check(#oc.executed == 1, "expected exactly one command, got " .. #oc.executed)
-  check(contains(oc.executed[1] or "", "ocup"), "did not run the command")
-  check(not contains(table.concat(oc.executed, " "), "should-not-run"),
-    "replayed a command that was already in the topic at startup")
-  check(posted() ~= nil, "no output published back")
-end)
-
-test("occonnect refuses a command with the wrong code", function()
-  connected("ABC12345")
-  oc.components = { INTERNET }
-  local polls = 0
-  oc.respond = function(url)
-    if url:find("poll=1", 1, true) then
-      polls = polls + 1
-      if polls == 1 then
-        return 200, "OK", ""
-      end
-      return 200, "OK", ntfyLine("NEW1", "WRONGCODE reboot")
-    end
-    return 200, "OK", ""
-  end
-
-  oc.run("occonnect", "--once")
-  -- an ntfy topic is a public pipe, so this is the only thing between a leaked
-  -- topic name and someone running whatever they like on the machine
-  check(#oc.executed == 0, "ran a command that carried the wrong code")
-  check(contains(oc.printed(), "refused"), "did not report the refusal")
-end)
-
-test("occonnect reads a command containing quotes", function()
-  connected("ABC12345")
-  oc.components = { INTERNET }
-  local polls = 0
-  oc.respond = function(url)
-    if url:find("poll=1", 1, true) then
-      polls = polls + 1
-      if polls == 1 then
-        return 200, "OK", ""
-      end
-      -- ntfy escapes the quotes, so a pattern would stop at the first one
-      return 200, "OK", ntfyLine("NEW1", 'ABC12345 echo \\"hi there\\"')
-    end
-    return 200, "OK", ""
-  end
-
-  oc.run("occonnect", "--once")
-  check(#oc.executed == 1, "did not run the quoted command")
-  check(contains(oc.executed[1] or "", 'echo "hi there"'), "mangled the quotes")
-end)
-
--- Pushing a file through echo and a redirect costs a round trip per line, and
--- the shell eats the quotes on the way past.
-test("occonnect writes a file straight from a message", function()
-  connected("ABC12345")
-  oc.components = { INTERNET }
-  local polls = 0
-  oc.respond = function(url)
-    if url:find("poll=1", 1, true) then
-      polls = polls + 1
-      if polls == 1 then
-        return 200, "OK", ""
-      end
-      return 200, "OK", ntfyLine("NEW1",
-        'ABC12345 :file /bin/hello.lua\\nprint(\\"hi\\")\\nreturn 0')
-    end
-    return 200, "OK", ""
-  end
-
-  oc.run("occonnect", "--once")
-  check(#oc.executed == 0, "sent it to the shell instead of writing it")
-  check(oc.files["/bin/hello.lua"] == 'print("hi")\nreturn 0',
-    "wrote " .. tostring(oc.files["/bin/hello.lua"]))
-  check(contains(posted() or "", "/bin/hello.lua"), "did not say what it wrote")
-end)
-
-test("occonnect runs Lua and sends back what it printed", function()
-  connected("ABC12345")
-  oc.components = { INTERNET }
-  local polls = 0
-  oc.respond = function(url)
-    if url:find("poll=1", 1, true) then
-      polls = polls + 1
-      if polls == 1 then
-        return 200, "OK", ""
-      end
-      return 200, "OK", ntfyLine("NEW1",
-        'ABC12345 :lua\\nprint(2 + 3, [[answer]])')
-    end
-    return 200, "OK", ""
-  end
-
-  oc.run("occonnect", "--once")
-  check(#oc.executed == 0, "sent it to the shell instead of running it")
-  local out = posted() or ""
-  check(contains(out, "5\tanswer"), "did not send back what it printed: " .. out)
-end)
-
-test("occonnect reports Lua that does not compile", function()
-  connected("ABC12345")
-  oc.components = { INTERNET }
-  local polls = 0
-  oc.respond = function(url)
-    if url:find("poll=1", 1, true) then
-      polls = polls + 1
-      if polls == 1 then
-        return 200, "OK", ""
-      end
-      return 200, "OK", ntfyLine("NEW1", 'ABC12345 :lua\\nthis is not lua')
-    end
-    return 200, "OK", ""
-  end
-
-  oc.run("occonnect", "--once")
-  -- silence here would look exactly like a command that worked
-  check(contains(posted() or "", "failed"), "did not report the broken chunk")
-end)
-
-test("occonnect survives ntfy being down", function()
-  connected("ABC12345")
-  oc.components = { INTERNET }
-  oc.respond = function()
-    return 502, "Bad Gateway", ""
-  end
-
-  local ok = oc.run("occonnect", "--once")
-  check(ok, "crashed when ntfy was down")
-  check(#oc.executed == 0, "ran something despite the poll failing")
-end)
-
--------------------------------------------------------------------------------
 -- ocglass
 
 -- a widget shaped like the real thing: methods are callable but the metatable
@@ -6926,6 +6738,436 @@ test("a reading grouped for a screen becomes a number for a metric", function()
   check(gtp.number("nonsense") == nil, "took something that is not a number")
   check(gtp.number(0 / 0) == nil, "took a value that is not a finite number")
   check(gtp.number(math.huge) == nil, "took an infinite value")
+end)
+
+-------------------------------------------------------------------------------
+-- occonnect and ocagent through a scripted proxy
+--
+-- The data card is faked with reversible arithmetic rather than AES, so what is
+-- tested is the framing, the numbering and the two handshakes, and never the
+-- cipher. The proxy and the controller are both played by the test, which
+-- opens what the program wrote and seals what it sends back with the same
+-- library.
+
+local PROXY_SECRET = "the proxy secret"
+local LINK_KEY = "the link key"
+
+local function hex(raw)
+  return (raw:gsub(".", function(char)
+    return string.format("%02x", char:byte())
+  end))
+end
+
+local function unhex(text)
+  return (text:gsub("%x%x", function(pair)
+    return string.char(tonumber(pair, 16))
+  end))
+end
+
+local function fakeData()
+  local counter = 0
+  local function mix(text, key)
+    local out = {}
+    for index = 1, #text do
+      local k = key:byte((index - 1) % #key + 1)
+      out[index] = string.char(text:byte(index) ~ k)
+    end
+    return table.concat(out)
+  end
+  local function digest(text)
+    local h = {}
+    for index = 1, 32 do
+      h[index] = index * 7
+    end
+    for index = 1, #text do
+      local slot = (index - 1) % 32 + 1
+      h[slot] = (h[slot] * 31 + text:byte(index) + index) % 256
+    end
+    -- mixed across every slot, or a change late in the text stays out of the
+    -- half of the digest a tag keeps
+    for _ = 1, 2 do
+      for index = 2, 32 do
+        h[index] = (h[index] + h[index - 1] * 31 + 1) % 256
+      end
+      for index = 31, 1, -1 do
+        h[index] = (h[index] + h[index + 1] * 31 + 1) % 256
+      end
+    end
+    for index = 1, 32 do
+      h[index] = string.char(h[index])
+    end
+    return table.concat(h)
+  end
+  return {
+    address = "da7a0000-0000-0000-0000-000000000001",
+    kind = "data",
+    methods = { encrypt = "f", decrypt = "f", sha256 = "f", random = "f",
+      encode64 = "f", decode64 = "f" },
+    values = {
+      encrypt = function(text, key, iv)
+        return mix(text, key .. iv)
+      end,
+      decrypt = function(text, key, iv)
+        return mix(text, key .. iv)
+      end,
+      sha256 = function(text, key)
+        if key then
+          return digest(key .. "\1" .. text)
+        end
+        return digest(text)
+      end,
+      random = function(n)
+        local out = {}
+        for index = 1, n do
+          counter = counter + 1
+          out[index] = string.char((counter * 13) % 256)
+        end
+        return table.concat(out)
+      end,
+    },
+  }
+end
+
+local function fakeChat()
+  return {
+    address = "c4a7b0c0-0000-0000-0000-000000000001",
+    kind = "chat_box",
+    methods = { say = "f" },
+    values = {
+      say = function(text)
+        oc.said = oc.said or {}
+        oc.said[#oc.said + 1] = text
+        return true
+      end,
+    },
+  }
+end
+
+local function linkConfig()
+  oc.said = {}
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({
+    link = { host = "vps.example", port = 7071, secret = PROXY_SECRET, key = LINK_KEY },
+  })
+end
+
+local function agentMachine()
+  local modem = fakeModem("aa000000-0000-0000-0000-000000000009")
+  oc.components = { INTERNET, fakeData(), fakeChat(), modem }
+  linkConfig()
+  startMinitel("agent-01")
+  return modem
+end
+
+-- The proxy and the controller in one. Every frame the program writes is
+-- opened: a join is answered with joined and attached, a hello with welcome
+-- and then handed to `script(message, far)`, and anything else goes to the
+-- script as well. `far.send` seals a message for the program, `far.control`
+-- a proxy message, `far.again` queues a raw frame a second time.
+local function proxy(script)
+  local link = require("oclink")
+  local serialization = require("serialization")
+  local data = require("component").proxy(fakeData().address)
+  local proxyStatic = link.keys(data, PROXY_SECRET)
+  local farStatic = link.keys(data, LINK_KEY)
+  local proxyKeys, keys = proxyStatic, farStatic
+  local challenge = string.rep("\7", 16)
+  local controlSeq, seq = 0, 0
+  local seen, received = 0, {}
+  local queued = { link.frame(link.CONTROL, challenge) }
+
+  local far = {}
+  function far.control(message)
+    controlSeq = controlSeq + 1
+    message.seq = controlSeq
+    queued[#queued + 1] = link.frame(link.CONTROL,
+      link.seal(data, proxyKeys, serialization.serialize(message)))
+  end
+  function far.send(message)
+    seq = seq + 1
+    message.seq = seq
+    local frame = link.frame(link.RELAY,
+      link.seal(data, keys, serialization.serialize(message)))
+    queued[#queued + 1] = frame
+    return frame
+  end
+  function far.again(frame)
+    queued[#queued + 1] = frame
+  end
+
+  oc.socket.answer = function(written)
+    while seen < #written do
+      seen = seen + 1
+      local frame = written[seen]
+      local channel, body = frame:byte(3), frame:sub(4)
+      if channel == link.CONTROL then
+        local text = link.open(data, proxyKeys, body)
+        local message = text and serialization.unserialize(text)
+        if message and message.kind == "join" then
+          received[#received + 1] = message
+          proxyKeys = link.session(data, proxyStatic, challenge .. unhex(message.nonce))
+          far.control({ kind = "joined" })
+          far.control({ kind = "attached" })
+        end
+      else
+        -- a hello is under the static keys, whether it is the first or a later one
+        local text = link.open(data, farStatic, body) or link.open(data, keys, body)
+        local message = text and serialization.unserialize(text)
+        if message then
+          received[#received + 1] = message
+          if message.kind == "hello" then
+            keys = link.session(data, farStatic, unhex(message.nonce))
+            seq = 0
+            far.send({ kind = "welcome" })
+          end
+          if script then
+            script(message, far)
+          end
+        end
+      end
+    end
+    return table.remove(queued, 1)
+  end
+  return received, far
+end
+
+local function kinds(received)
+  local out = {}
+  for _, message in ipairs(received) do
+    out[#out + 1] = message.kind
+  end
+  return table.concat(out, ",")
+end
+
+local function results(received)
+  local out = {}
+  for _, message in ipairs(received) do
+    if message.kind == "result" then
+      out[message.id] = message
+    end
+  end
+  return out
+end
+
+test("oclink seals a body the other side can open, and refuses a forged one", function()
+  oc.components = { fakeData() }
+  local link = require("oclink")
+  local data = link.card()
+  check(data ~= nil, "did not find the data card")
+  local keys = link.keys(data, LINK_KEY)
+  local body = link.seal(data, keys, "hello there")
+  check(link.open(data, keys, body) == "hello there", "did not open its own body")
+
+  local frame = link.frame(link.RELAY, body)
+  check(string.unpack(">I2", frame) == #body + 1, "the length does not cover the channel byte")
+  check(frame:byte(3) == 1, "the channel byte is not the relay channel")
+
+  local other = link.keys(data, "some other key")
+  local text, why = link.open(data, other, body)
+  check(text == nil and why == "bad tag", "opened a body under the wrong key: " .. tostring(why))
+
+  local forged = body:sub(1, 18) .. string.char(body:byte(19) ~ 1) .. body:sub(20)
+  check(link.open(data, keys, forged) == nil, "opened a body that was changed in flight")
+end)
+
+test("occonnect refuses to start without a link or a data card", function()
+  oc.components = { INTERNET }
+  local ok = oc.run("occonnect", "--once")
+  check(ok, "crashed instead of saying so")
+  check(contains(oc.printed(), "no link configured"), "did not say what is missing")
+
+  linkConfig()
+  ok = oc.run("occonnect", "--once")
+  check(ok, "crashed instead of saying so")
+  check(contains(oc.printed(), "data card"), "did not say the card is missing")
+  check(oc.socket.connections == nil, "connected anyway")
+end)
+
+test("occonnect joins the proxy under its name and runs what the controller sends", function()
+  oc.components = { INTERNET, fakeData() }
+  linkConfig()
+  oc.files["/etc/hostname"] = "chem-01"
+  oc.idle = 16
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "shell", id = "s1", command = "ocup" })
+      far.send({ kind = "run", id = "r1", code = "print(2 + 3, [[answer]])\nreturn 7" })
+      far.send({ kind = "run", id = "r2", code = "this is not lua" })
+      far.send({ kind = "file", id = "f1", path = "/home/hello.lua", body = "print('hi')\n" })
+    end
+  end)
+
+  local ok, reason = oc.run("occonnect")
+  check(ok, "occonnect crashed: " .. tostring(reason))
+  check(oc.socket.host == "vps.example" and oc.socket.port == 7071, "connected somewhere else")
+  check(received[1] and received[1].kind == "join", "did not join first: " .. kinds(received))
+  check(received[1] and received[1].role == "device" and received[1].name == "chem-01",
+    "the join does not name this machine as a device")
+  check(received[1] and received[1].challenge == hex(string.rep("\7", 16)),
+    "the join does not answer the challenge")
+  check(received[2] and received[2].kind == "hello" and received[2].host == "chem-01",
+    "did not say hello once attached: " .. kinds(received))
+
+  local got = results(received)
+  check(oc.executed[1] == "ocup > /tmp/oclink.out",
+    "did not run the shell line: " .. tostring(oc.executed[1]))
+  check(got.s1 and got.s1.ok == true and contains(got.s1.output or "", "output of ocup"),
+    "did not send back what the shell printed")
+  check(got.r1 and got.r1.ok == true and contains(got.r1.output or "", "5\tanswer")
+    and contains(got.r1.output or "", "7"), "lost what the chunk printed or returned")
+  check(got.r2 and got.r2.ok == false and contains(got.r2.error or "", "compile"),
+    "the broken chunk was not reported")
+  check(oc.files["/home/hello.lua"] == "print('hi')\n", "did not write the file")
+  check(got.f1 and got.f1.ok == true, "did not report the file written")
+end)
+
+test("occonnect goes back to waiting when its controller leaves, and greets the next", function()
+  oc.components = { INTERNET, fakeData() }
+  linkConfig()
+  oc.files["/etc/hostname"] = "chem-01"
+  oc.idle = 20
+  local hellos = 0
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      hellos = hellos + 1
+      if hellos == 1 then
+        far.control({ kind = "detached" })
+        far.control({ kind = "attached" })
+      end
+    end
+  end)
+
+  local ok, reason = oc.run("occonnect")
+  check(ok, "occonnect crashed: " .. tostring(reason))
+  check(hellos == 2, "said hello " .. hellos .. " times, wanted one per controller: " .. kinds(received))
+  check(contains(oc.printed(), "waiting"), "never showed itself waiting")
+end)
+
+test("ocagent says hello, and speaks what the harness says", function()
+  agentMachine()
+  oc.idle = 16
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "say", text = "diesel is at 42,000 L" })
+    end
+  end)
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  check(received[2] and received[2].kind == "hello", "did not say hello after joining: " .. kinds(received))
+  check(received[2] and received[2].host == "agent-01", "hello does not name the machine")
+  check(received[2] and received[2].protocol == 1, "hello does not name the protocol")
+  check(oc.said[1] == "diesel is at 42,000 L", "did not say it in chat")
+  check(contains(kinds(received), "heartbeat"), "never sent a heartbeat")
+end)
+
+test("ocagent forwards a chat line addressed to it and ignores the rest", function()
+  agentMachine()
+  oc.idle = 16
+  oc.pushAfter(8, "chat_message", "c4a7b0c0", "Steve", "@c how much diesel?")
+  oc.pushAfter(8, "chat_message", "c4a7b0c0", "Someone", "hello everyone")
+  oc.pushAfter(9, "chat_message", "c4a7b0c0", "Steve", "@Computer Status")
+  local received = proxy()
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local chats = {}
+  for _, message in ipairs(received) do
+    if message.kind == "chat" then
+      chats[#chats + 1] = message
+    end
+  end
+  check(#chats == 2,
+    "forwarded " .. #chats .. " lines, wanted the two for the agent: " .. kinds(received))
+  check(chats[1] and chats[1].player == "Steve" and chats[1].text == "how much diesel?",
+    "did not strip the trigger: " .. tostring(chats[1] and chats[1].text))
+  check(chats[2] and chats[2].text == "Status", "did not take the long trigger in any case")
+end)
+
+test("ocagent tells chat when the proxy is away", function()
+  agentMachine()
+  oc.socket.refuse = true
+  oc.idle = 4
+  oc.pushAfter(3, "chat_message", "c4a7b0c0", "Steve", "@c anyone there?")
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  check(oc.said[1] ~= nil and contains(oc.said[1], "not connected"),
+    "said nothing about being away: " .. tostring(oc.said[1]))
+end)
+
+test("ocagent runs a chunk and a shell line like occonnect does", function()
+  agentMachine()
+  oc.idle = 16
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "run", id = "r1", code = "print(2 + 3)" })
+      far.send({ kind = "shell", id = "s1", command = "ocup" })
+    end
+  end)
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local got = results(received)
+  check(got.r1 and got.r1.ok == true and contains(got.r1.output or "", "5"),
+    "the chunk did not run: " .. kinds(received))
+  check(got.s1 and got.s1.ok == true, "the shell line did not run")
+end)
+
+test("ocagent asks the mesh and relays each answer", function()
+  local modem = agentMachine()
+  oc.idle = 30
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "ask", id = "a1", what = "status", wait = 1 })
+    end
+  end)
+  -- a satellite answering, once the question has had time to go out
+  local report = require("serialization").serialize({
+    address = "bb", cards = { { name = "Super Tank", gauges = {} } }, alerts = {},
+    fluids = { { name = "Diesel", amount = 42000 } },
+  })
+  deliverAfter(12, modem, "bb000000", "agent-01", "boiler-room", "ocstatus!\n" .. report)
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local partial, result
+  for _, message in ipairs(received) do
+    if message.kind == "partial" and message.id == "a1" then
+      partial = message
+    elseif message.kind == "result" and message.id == "a1" then
+      result = message
+    end
+  end
+  local asked = false
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "ocstatus?" then
+      asked = true
+    end
+  end
+  check(asked, "never put the question on the wire")
+  check(partial ~= nil, "did not relay the answer: " .. kinds(received))
+  check(partial and partial.host == "boiler-room", "did not say who answered")
+  check(partial and partial.data.fluids[1].name == "Diesel", "lost the fluids")
+  check(result and result.ok == true and result.hosts == 1, "did not close the question with a count")
+end)
+
+test("ocagent drops a frame that goes backwards", function()
+  agentMachine()
+  oc.idle = 16
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      local frame = far.send({ kind = "say", text = "once" })
+      -- the same numbered frame again, as a recording played back would be
+      far.again(frame)
+      far.send({ kind = "say", text = "twice" })
+    end
+  end)
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  check(#received > 0, "heard nothing")
+  check(#oc.said == 2 and oc.said[1] == "once" and oc.said[2] == "twice",
+    "expected the two fresh lines only, got " .. table.concat(oc.said, "|"))
 end)
 
 -------------------------------------------------------------------------------
