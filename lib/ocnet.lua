@@ -27,7 +27,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.17.0"
+net.VERSION = "0.18.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -68,6 +68,12 @@ net.UPDATE_REPLY = "ocupdate!"
 -- mesh is a base's own network, and the status port was never a locked door.
 net.RUN_ASK = "ocrun?"
 net.RUN_REPLY = "ocrun!"
+
+-- What the agent has put on its board: a title and a few lines somebody asked
+-- it to show, answered by the agent computer alone. ocview draws it as a view,
+-- so a recipe or a list the agent wrote up is on the base's own screen.
+net.BOARD_ASK = "ocboard?"
+net.BOARD_REPLY = "ocboard!"
 
 -- how many records travel. Beyond a screenful nobody is reading them here.
 local RECORDS = 40
@@ -603,6 +609,11 @@ function net.tellUpdate(minitel, host)
   minitel.usend(host, core.PORT, net.UPDATE_ASK)
 end
 
+-- Asks whoever keeps a board what is on it.
+function net.askBoard(minitel, config)
+  askEverybody(minitel, config, net.BOARD_ASK)
+end
+
 -- Asks one machine to run a chunk and say what it printed.
 function net.askRun(minitel, host, id, code)
   minitel.usend(host, core.PORT, net.RUN_ASK .. "\n"
@@ -708,6 +719,22 @@ function net.decodeVersions(port, from, data)
 end
 
 -- Reads a machine saying it heard the order to update.
+-- Reads the agent's answer to net.askBoard.
+function net.decodeBoard(port, from, data)
+  if port ~= core.PORT or type(data) ~= "string" then
+    return nil
+  end
+  local body = data:match("^" .. net.BOARD_REPLY .. "\n(.*)$")
+  if not body then
+    return nil
+  end
+  local ok, answer = pcall(serialization.unserialize, body)
+  if not ok or type(answer) ~= "table" or type(answer.lines) ~= "table" then
+    return nil, "unreadable"
+  end
+  return { host = from, title = tostring(answer.title or ""), lines = answer.lines }
+end
+
 -- Reads a machine's answer to net.askRun.
 function net.decodeRun(port, from, data)
   if port ~= core.PORT or type(data) ~= "string" then

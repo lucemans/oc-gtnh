@@ -10,7 +10,9 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::warn;
+
+use crate::console;
 
 use crate::bridge::{ChatLine, Handle};
 use crate::llm::{self, Message};
@@ -19,6 +21,8 @@ use crate::Config;
 
 /// tool rounds one turn may take before it is told to answer
 const MAX_TOOL_ROUNDS: usize = 8;
+/// how many times an empty reply is asked for again before the turn fails
+const MAX_NUDGES: usize = 2;
 const TURN_TIMEOUT: Duration = Duration::from_secs(90);
 /// past this, chat is told the agent is still on it
 const ACK_AFTER: Duration = Duration::from_secs(4);
@@ -32,7 +36,7 @@ const QUEUE: usize = 4;
 const LINE: usize = 200;
 const LINES: usize = 6;
 
-fn system_prompt(host: &str, web: bool, notes: &str, extra: Option<&str>) -> String {
+fn system_prompt(host: &str, web: bool, recipes: bool, notes: &str, extra: Option<&str>) -> String {
     let mut text = format!(
         "You are the computer of a GregTech: New Horizons base, answering players in Minecraft chat. \
 You are addressed as @c or @computer. You run on an OpenComputers machine called {host}, and you \
@@ -65,21 +69,46 @@ A player asking you to do something is the permission to do it: do it, then repo
 confirm tool only when you would stop or start a production machine the player did not name, \
 or when the action cannot be undone, such as deleting or overwriting a file. Doors, lamps, \
 notes and reading are never worth a confirmation. Never ask for confirmation in your reply \
-text; the confirm tool is the only way to ask, and one answer covers the whole request.\n\
+text; the confirm tool is the only way to ask, and one answer covers the whole request. A \
+player who has said to stop asking is never asked again.\n\
+\n\
+Call several tools in one turn when they do not depend on each other: they run at the same \
+time, and a turn with one call after another is slower for everybody.\n\
 \n\
 Use remember for anything a player teaches you about the base: what a machine is for, which \
 door is which, what an address belongs to, how they like things done. Those notes come back \
 to you in every conversation; nothing else does.\n\
 \n\
+The base has a display. board(title, lines) puts a recipe, a plan or a to-do list on it, and \
+stock(item) says what the base holds of something and whether AE could craft it. Asked for a \
+recipe, look it up, check the stock of each input, put the recipe with what is there and what \
+is missing on the board, and tell the player the short version in chat. Asked for a list or a \
+plan, keep it on the board and update it as things get done.\n\
+\n\
 run_lua runs on OpenOS with Lua 5.3. component.list(kind) iterates components with their \
 full addresses, component.invoke(address, method, ...) calls one, component.proxy(address) \
 wraps one, and component.get(prefix) turns the short form of an address into the full one, \
-which invoke and proxy need. Print what you want back. Keep chunks small."
+which invoke and proxy need. Print what you want back. Keep chunks small.\n\
+\n\
+A GregTech machine is a gt_machine component. Reading: getName, getCoordinates, isMachineActive, \
+isWorkAllowed, hasWork, getWorkProgress and getWorkMaxProgress in ticks, getSensorInformation \
+(the scanner lines, and the only detail a multiblock gives), getStoredEU, getEUCapacity, \
+getStoredEUString and getEUCapacityString for numbers too big for a double, getInputVoltage, \
+getOutputVoltage, getOutputAmperage, getAverageElectricInput, getAverageElectricOutput, \
+getStoredSteam, getSteamCapacity. The one thing that changes it: setWorkAllowed(boolean), which \
+soft-stops or restarts it. A Lapotronic Super Capacitor is an LSC component with the EU getters; \
+an energy hatch or battery buffer is gt_energyContainer with the voltage and EU getters."
     );
+    if recipes {
+        text.push_str(
+            "\n\nrecipe_search knows every recipe in this pack: what makes an item and what uses it, \
+             with the machine, tier and cost. Use it before answering any recipe question.",
+        );
+    }
     if web {
         text.push_str(
             "\n\nweb_search and web_fetch reach the internet through the base's search engine, for \
-             mod mechanics, recipes and anything not about this base.",
+             mod mechanics and anything not about this base.",
         );
     }
     if !notes.trim().is_empty() {
@@ -110,6 +139,29 @@ pub fn ascii(text: &str) -> String {
         }
     }
     out
+}
+
+/// The note written down when a player says to stop asking; its presence is
+/// what makes confirm answer yes for them from then on.
+fn no_questions_note(player: &str) -> String {
+    format!("{player} does not want to be asked for confirmation")
+}
+
+/// Whether a chat line is the player saying to stop asking.
+pub fn asks_for_no_questions(text: &str) -> bool {
+    let lowered = text.to_lowercase();
+    [
+        "stop asking",
+        "don't ask",
+        "dont ask",
+        "do not ask",
+        "no need to ask",
+        "never ask",
+        "without asking",
+        "quit asking",
+    ]
+    .iter()
+    .any(|phrase| lowered.contains(phrase))
 }
 
 /// Splits an answer into chat-sized lines, on whitespace where it can.
@@ -166,12 +218,13 @@ async fn turn(
     let mut messages = vec![Message::system(system_prompt(
         &bridge.host,
         web,
+        config.recipes.is_some(),
         &notes,
         config.extra_prompt.as_deref(),
     ))];
     messages.extend(history);
     messages.push(Message::user(format!("{}: {}", line.player, line.text)));
-    let definitions = tools::definitions(web);
+    let definitions = tools::definitions(web, config.recipes.is_some());
     let context = tools::Context {
         bridge: bridge.clone(),
         player: line.player.clone(),
@@ -179,8 +232,14 @@ async fn turn(
         http: reqwest::Client::new(),
         searxng: config.searxng.clone(),
         notes: config.notes.clone(),
+        trusted: config.trusted.contains(&line.player.to_lowercase())
+            || notes
+                .to_lowercase()
+                .contains(&no_questions_note(&line.player).to_lowercase()),
+        recipes: config.recipes.clone(),
     };
 
+    let mut nudges = 0;
     for round in 0..=MAX_TOOL_ROUNDS {
         let tools_now: &[Value] = if round == MAX_TOOL_ROUNDS {
             &[]
@@ -188,20 +247,59 @@ async fn turn(
             &definitions
         };
         let answer = client.complete(&config.llm, &messages, tools_now).await?;
+        console::thinking(answer.reasoning.as_deref().unwrap_or(""));
         let calls = answer.tool_calls.clone().unwrap_or_default();
         if calls.is_empty() {
-            return answer
-                .content
-                .filter(|text| !text.trim().is_empty())
-                .ok_or_else(|| anyhow!("the model said nothing"));
+            let text = answer.text();
+            if !text.is_empty() {
+                return Ok(text);
+            }
+            // A reasoning model sometimes stops after thinking, with nothing said.
+            // Asked once more for the words, it says them.
+            if nudges >= MAX_NUDGES {
+                return Err(anyhow!("the model said nothing"));
+            }
+            nudges += 1;
+            let thought: String = answer
+                .reasoning
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect();
+            console::trouble(&format!(
+                "empty reply from the model, asking again; it thought: {thought}"
+            ));
+            messages.push(Message::user(
+                "Your reply had no text. Answer the player now in one or two plain lines.",
+            ));
+            continue;
         }
         messages.push(answer);
+        // every call the model made at once runs at once, in the order it asked
+        let mut running = Vec::with_capacity(calls.len());
         for call in calls {
             let arguments: Value =
                 serde_json::from_str(&call.function.arguments).unwrap_or(Value::Null);
-            info!(player = %line.player, tool = %call.function.name, "tool call {}", call.function.arguments);
-            let result = tools::call(&call.function.name, &arguments, &context).await;
-            messages.push(Message::tool(call.id, result));
+            console::call(&call.function.name, &call.function.arguments);
+            let context = context.clone();
+            let name = call.function.name.clone();
+            running.push((
+                call.id,
+                name,
+                tokio::spawn(async move {
+                    let started = Instant::now();
+                    let result = tools::call(&call.function.name, &arguments, &context).await;
+                    (result, started.elapsed())
+                }),
+            ));
+        }
+        for (id, name, task) in running {
+            let (result, took) = task.await.unwrap_or_else(|why| {
+                (format!("error: the tool call died: {why}"), Duration::ZERO)
+            });
+            console::result(&name, &result, took);
+            messages.push(Message::tool(id, result));
         }
     }
     Err(anyhow!("ran out of tool rounds"))
@@ -278,12 +376,22 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
                     }
                     waiting = Some(request);
                 }
+                if asks_for_no_questions(&line.text) {
+                    let note = no_questions_note(&line.player);
+                    if !tools::notes(&config.notes).await.contains(&note) {
+                        if let Err(why) = tools::remember(&config.notes, &line.player, &note).await {
+                            warn!("could not write the note: {why:#}");
+                        }
+                    }
+                }
                 if !limit.allows(&line.player) {
+                    console::aside(&format!("{} asked too often", line.player));
                     bridge.say(&format!("{}, slow down: {TURNS_PER_MINUTE} questions a minute is the limit.", line.player)).await;
                     continue;
                 }
                 if running.is_some() {
                     if queue.len() >= QUEUE {
+                        console::aside(&format!("{} queued past the limit", line.player));
                         bridge.say(&format!("{}, still busy, ask again in a moment.", line.player)).await;
                     } else {
                         queue.push_back(line);
@@ -302,6 +410,7 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
                 if let Some((_, _, acked)) = running.as_mut() {
                     *acked = true;
                 }
+                console::aside("one moment, looking.");
                 bridge.say("one moment, looking.").await;
             }
             finished = async { match running.as_mut() { Some((task, _, _)) => task.await, None => std::future::pending().await } } => {
@@ -309,14 +418,14 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
                 waiting = None;
                 match finished {
                     Ok(Turn { player, reply: Ok(text) }) => {
-                        info!(%player, "reply: {text}");
+                        console::reply(&player, &text);
                         for line in lines(&text) {
                             bridge.say(&line).await;
                         }
                         history.push(Message::assistant(text));
                     }
                     Ok(Turn { player, reply: Err(why) }) => {
-                        warn!(%player, "turn failed: {why:#}");
+                        console::trouble(&format!("turn for {player} failed: {why:#}"));
                         bridge.say(&format!("{player}, that did not work: {why}")).await;
                         history.pop();
                     }
@@ -356,6 +465,15 @@ mod tests {
             ascii("it\u{2019}s \u{2014} fine\u{2026} caf\u{e9}"),
             "it's - fine... caf"
         );
+    }
+
+    #[test]
+    fn hears_a_player_say_stop_asking() {
+        assert!(asks_for_no_questions(
+            "yes, stop asking for confirmation when I ask"
+        ));
+        assert!(asks_for_no_questions("Dont ask, just do it"));
+        assert!(!asks_for_no_questions("how much diesel do we have?"));
     }
 
     #[test]

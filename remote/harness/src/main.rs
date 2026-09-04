@@ -14,16 +14,18 @@
 
 mod agent;
 mod bridge;
+mod console;
 mod llm;
+mod recipes;
 mod tools;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use oclink::frame::Keys;
 use oclink::proxy::{Event, Link, Role};
-use tracing::{error, info, warn};
 
 /// Everything read from the environment, once.
 pub struct Config {
@@ -36,6 +38,10 @@ pub struct Config {
     pub searxng: Option<String>,
     /// where what players teach the agent is kept, one line per fact
     pub notes: std::path::PathBuf,
+    /// players whose word is enough: confirm answers yes for them without asking
+    pub trusted: Vec<String>,
+    /// every recipe in the pack, when a dataset was named
+    pub recipes: Option<Arc<recipes::Recipes>>,
     pub extra_prompt: Option<String>,
 }
 
@@ -80,6 +86,13 @@ fn config(device: Option<String>, with_model: bool) -> Result<Config> {
         notes: std::env::var("AGENT_NOTES_FILE")
             .unwrap_or_else(|_| "agent-notes.txt".to_string())
             .into(),
+        trusted: std::env::var("TRUSTED_PLAYERS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|name| name.trim().to_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect(),
+        recipes: None,
         extra_prompt,
     })
 }
@@ -89,7 +102,7 @@ fn config(device: Option<String>, with_model: bool) -> Result<Config> {
 async fn serve(config: Arc<Config>) -> Result<()> {
     let mut pause = Duration::from_secs(2);
     loop {
-        info!(proxy = %config.proxy, device = %config.device, "joining");
+        console::status(&format!("joining {} for {}", config.proxy, config.device));
         match Link::connect(
             &config.proxy,
             &config.proxy_keys,
@@ -104,23 +117,26 @@ async fn serve(config: Arc<Config>) -> Result<()> {
                     match link.events.recv().await {
                         Some(Event::Attached) => {
                             match bridge::session(&mut link, Arc::clone(&config)).await {
-                                Ok(()) => info!(device = %config.device, "device detached"),
+                                Ok(()) => console::status(&format!("{} detached", config.device)),
                                 Err(why) => {
-                                    warn!(device = %config.device, "session ended: {why:#}");
+                                    console::trouble(&format!(
+                                        "session with {} ended: {why:#}",
+                                        config.device
+                                    ));
                                     break;
                                 }
                             }
                         }
                         Some(Event::Detached) | Some(Event::Relay(_)) => {}
                         Some(Event::Closed(why)) => {
-                            warn!("proxy link closed: {why}");
+                            console::trouble(&format!("proxy link closed: {why}"));
                             break;
                         }
                         None => break,
                     }
                 }
             }
-            Err(why) => error!("could not join the proxy: {why:#}"),
+            Err(why) => console::trouble(&format!("could not join the proxy: {why:#}")),
         }
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(Duration::from_secs(60));
@@ -181,8 +197,18 @@ async fn main() -> Result<()> {
     let mode = arguments.first().map(String::as_str).unwrap_or("serve");
     let code = match mode {
         "serve" => {
-            let config = Arc::new(config(None, true)?);
-            serve(config).await?;
+            let mut config = config(None, true)?;
+            let log =
+                std::env::var("AGENT_LOG_FILE").unwrap_or_else(|_| "agent-log.jsonl".to_string());
+            console::init(Path::new(&log)).with_context(|| format!("opening {log}"))?;
+            console::boot(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "proxy": config.proxy,
+                "device": config.device,
+                "model": config.llm.model,
+            }));
+            config.recipes = recipes::prepare().await?;
+            serve(Arc::new(config)).await?;
             0
         }
         "shell" if arguments.len() >= 3 => {

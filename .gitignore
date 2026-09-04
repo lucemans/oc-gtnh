@@ -6,3 +6,9 @@ remote/harness/.env
 agent-notes.txt
 remote/agent-notes.txt
 remote/harness/agent-notes.txt
+recipes.json.gz
+remote/recipes.json.gz
+remote/harness/recipes.json.gz
+agent-log.jsonl
+remote/agent-log.jsonl
+remote/harness/agent-log.jsonl

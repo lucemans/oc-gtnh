@@ -6,16 +6,23 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 
+use std::sync::Arc;
+
 use crate::bridge::Handle;
+use crate::recipes::{Direction, Recipes};
 
 /// how much of a tool result the model sees
 const RESULT_CAP: usize = 6000;
 /// how long a mesh question collects answers
 const MESH_WAIT: f64 = 5.0;
+/// how many recipes one search brings back
+const RECIPE_RESULTS: usize = 8;
+/// how wide a board line may be; the screen behind it is not wide
+const BOARD_WIDTH: usize = 60;
 const CONFIRM_WAIT: Duration = Duration::from_secs(60);
 
 /// The tools the model sees; the web ones only when there is a SearXNG to search with.
-pub fn definitions(web: bool) -> Vec<Value> {
+pub fn definitions(web: bool, recipes: bool) -> Vec<Value> {
     let tool = |name: &str, description: &str, properties: Value, required: Vec<&str>| {
         json!({
             "type": "function",
@@ -64,12 +71,36 @@ pub fn definitions(web: bool) -> Vec<Value> {
             vec!["question"],
         ),
         tool(
+            "board",
+            "Put a title and up to 18 short lines on the base's display: the agent computer's own screen and the board view of every ocview. Use it for a recipe, a to-do list, a shopping list, a plan. Plain ASCII, 60 characters a line. Call it again to replace the board; no lines takes it down. Say in chat what you put up.",
+            json!({ "title": { "type": "string" }, "lines": { "type": "array", "items": { "type": "string" } } }),
+            vec!["title", "lines"],
+        ),
+        tool(
+            "stock",
+            "What the base holds of an item, by name, from Applied Energistics and Logistics Pipes, and whether AE could craft it. Check every input of a recipe before saying what is missing.",
+            json!({ "item": { "type": "string" } }),
+            vec!["item"],
+        ),
+        tool(
             "remember",
             "Write down one fact a player taught you about the base, so you know it in every later conversation: what a machine is for, which door is which, what an address belongs to, how they like things done. One short line.",
             json!({ "note": { "type": "string" } }),
             vec!["note"],
         ),
     ];
+    if recipes {
+        out.push(tool(
+            "recipe_search",
+            "Every recipe in this pack, from the planner dataset. Ask what makes an item or what uses it, by display name, optionally in one kind of machine. Returns the cheapest few as one line each: machine, tier, EU/t, seconds, inputs -> outputs. Fluids are in L.",
+            json!({
+                "item": { "type": "string", "description": "the item or fluid as it is named in game" },
+                "direction": { "type": "string", "enum": ["makes", "uses"], "description": "recipes that make it, or recipes that use it" },
+                "machine": { "type": "string", "description": "only this kind of machine, for example Electric Blast Furnace" }
+            }),
+            vec!["item", "direction"],
+        ));
+    }
     if web {
         out.push(tool(
             "web_search",
@@ -93,6 +124,7 @@ pub struct ConfirmRequest {
     pub answer: oneshot::Sender<String>,
 }
 
+#[derive(Clone)]
 pub struct Context {
     pub bridge: Handle,
     pub player: String,
@@ -100,6 +132,8 @@ pub struct Context {
     pub http: reqwest::Client,
     pub searxng: Option<String>,
     pub notes: std::path::PathBuf,
+    pub trusted: bool,
+    pub recipes: Option<Arc<Recipes>>,
 }
 
 fn cap(text: String) -> String {
@@ -402,6 +436,9 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
                 }
             })
         }
+        "confirm" if context.trusted => {
+            Ok("confirmed: this player's word is enough, no need to ask".into())
+        }
         "confirm" => {
             let question = arguments
                 .get("question")
@@ -444,6 +481,74 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
                     CONFIRM_WAIT.as_secs()
                 )),
             }
+        }
+        "recipe_search" => match &context.recipes {
+            Some(recipes) => {
+                let item = arguments.get("item").and_then(Value::as_str).unwrap_or("");
+                let direction = match arguments.get("direction").and_then(Value::as_str) {
+                    Some("uses") => Direction::Uses,
+                    _ => Direction::Makes,
+                };
+                let machine = arguments.get("machine").and_then(Value::as_str);
+                let found = recipes.search(item, direction, machine, RECIPE_RESULTS);
+                if found.is_empty() {
+                    Ok(format!(
+                        "no recipe {} {item}",
+                        if direction == Direction::Uses {
+                            "uses"
+                        } else {
+                            "makes"
+                        }
+                    ))
+                } else {
+                    Ok(found
+                        .iter()
+                        .map(|recipe| recipe.line())
+                        .collect::<Vec<_>>()
+                        .join("\n"))
+                }
+            }
+            None => Err(anyhow::anyhow!("no recipe dataset is loaded")),
+        },
+        "board" => {
+            let title = arguments.get("title").and_then(Value::as_str).unwrap_or("");
+            let lines: Vec<String> = arguments
+                .get("lines")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|line| {
+                            crate::agent::ascii(line)
+                                .chars()
+                                .take(BOARD_WIDTH)
+                                .collect()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            context
+                .bridge
+                .show(&crate::agent::ascii(title), lines)
+                .await
+                .map(|outcome| {
+                    if outcome.ok {
+                        outcome.output.unwrap_or_else(|| "shown".into())
+                    } else {
+                        format!("failed: {}", outcome.error.unwrap_or_default())
+                    }
+                })
+        }
+        "stock" => {
+            let item = arguments.get("item").and_then(Value::as_str).unwrap_or("");
+            context.bridge.stock(item).await.map(|outcome| {
+                if outcome.ok {
+                    outcome.output.unwrap_or_else(|| "nothing".into())
+                } else {
+                    format!("failed: {}", outcome.error.unwrap_or_default())
+                }
+            })
         }
         "remember" => {
             let note = arguments
@@ -497,7 +602,7 @@ pub async fn notes(path: &std::path::Path) -> String {
     }
 }
 
-async fn remember(path: &std::path::Path, player: &str, note: &str) -> anyhow::Result<String> {
+pub async fn remember(path: &std::path::Path, player: &str, note: &str) -> anyhow::Result<String> {
     if note.is_empty() {
         anyhow::bail!("nothing to remember");
     }

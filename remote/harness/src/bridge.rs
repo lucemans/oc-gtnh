@@ -13,7 +13,9 @@ use oclink::{wire, PROTOCOL};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{info, warn};
+use tracing::{debug, warn};
+
+use crate::console;
 
 use crate::{agent, Config};
 
@@ -86,6 +88,14 @@ pub enum Outbound {
         path: String,
         body: String,
     },
+    #[serde(rename = "show")]
+    Show {
+        id: String,
+        title: String,
+        lines: Vec<String>,
+    },
+    #[serde(rename = "stock")]
+    Stock { id: String, query: String },
 }
 
 #[derive(Serialize)]
@@ -209,6 +219,32 @@ impl Handle {
         )
         .await
     }
+
+    /// Puts a title and some lines on the agent computer's screen, and on the
+    /// board view of every ocview; no lines takes the board down.
+    pub async fn show(&self, title: &str, lines: Vec<String>) -> Result<Outcome> {
+        self.request(
+            |id| Outbound::Show {
+                id,
+                title: title.to_string(),
+                lines,
+            },
+            Duration::from_secs(20),
+        )
+        .await
+    }
+
+    /// What Applied Energistics and Logistics Pipes hold of something.
+    pub async fn stock(&self, query: &str) -> Result<Outcome> {
+        self.request(
+            |id| Outbound::Stock {
+                id,
+                query: query.to_string(),
+            },
+            Duration::from_secs(30),
+        )
+        .await
+    }
 }
 
 /// Seals and numbers everything sent to the device, in one place so the
@@ -313,7 +349,7 @@ fn decode(keys: &Keys, seq_in: &mut i64, body: &[u8]) -> Option<Inbound> {
 /// One command to a freshly attached device, and its result.
 pub async fn once(link: &mut Link, link_keys: &Keys, command: Outbound) -> Result<Outcome> {
     let (keys, host, mut seq_in) = hello(link, link_keys).await?;
-    info!(%host, "hello");
+    console::status(&format!("{host} said hello"));
     let outgoing = spawn_writer(keys.clone(), link.relay_sender());
     outgoing
         .send(Outbound::Welcome)
@@ -348,7 +384,7 @@ pub async fn once(link: &mut Link, link_keys: &Keys, command: Outbound) -> Resul
 /// The agent's session with an attached device, until it detaches.
 pub async fn session(link: &mut Link, config: Arc<Config>) -> Result<()> {
     let (keys, host, mut seq_in) = hello(link, &config.link_keys).await?;
-    info!(%host, "hello");
+    console::status(&format!("{host} said hello"));
 
     let outgoing = spawn_writer(keys.clone(), link.relay_sender());
     let pending = Arc::new(Mutex::new(HashMap::new()));
@@ -384,7 +420,7 @@ pub async fn session(link: &mut Link, config: Arc<Config>) -> Result<()> {
         match message {
             Inbound::Hello { .. } => break Err(anyhow!("a second hello mid-session")),
             Inbound::Chat { player, text } => {
-                info!(%host, %player, "chat: {text}");
+                console::chat(&player, &text);
                 if chat_tx.send(ChatLine { player, text }).await.is_err() {
                     break Err(anyhow!("the agent task ended"));
                 }
@@ -406,7 +442,7 @@ pub async fn session(link: &mut Link, config: Arc<Config>) -> Result<()> {
                 hosts,
             } => {
                 if let Some(hosts) = hosts {
-                    info!(%host, %id, hosts, "mesh question closed");
+                    debug!(%host, %id, hosts, "mesh question closed");
                 }
                 if let Some(request) = pending.lock().await.remove(&id) {
                     let _ = request.done.send(Outcome {
@@ -418,7 +454,7 @@ pub async fn session(link: &mut Link, config: Arc<Config>) -> Result<()> {
                 }
             }
             Inbound::Heartbeat { free, uptime } => {
-                info!(%host, free = free as i64, uptime = uptime as i64, "heartbeat");
+                debug!(%host, free = free as i64, uptime = uptime as i64, "heartbeat");
             }
             Inbound::Pong => {}
         }

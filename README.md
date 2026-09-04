@@ -213,13 +213,19 @@ PROXY_ADDR=vps:7071 PROXY_SECRET=... LINK_KEY=... DEVICE=agent-01 \
 | `LLM_BASE_URL` | harness | an OpenAI-compatible base, up to and including `/v1` |
 | `LLM_API_KEY` | harness | sent as a bearer token when set |
 | `LLM_MODEL` | harness | the model name the proxy knows |
+| `GTNH_RECIPES` | harness | where the recipe dataset lives, `recipes.json.gz` when unset; `none` turns `recipe_search` off |
+| `GTNH_PLANNER_URL` | harness | where the dataset is fetched from when the file is missing, gtnhplanner.com when unset |
 | `SEARXNG_URL` | harness | a SearXNG instance; when set the model gets `web_search` and `web_fetch` |
+| `TRUSTED_PLAYERS` | harness | comma-separated player names whose `confirm` answers yes without asking |
 | `AGENT_NOTES_FILE` | harness | where `remember` writes what players teach it, `agent-notes.txt` when unset |
 | `AGENT_PROMPT_FILE` | harness | a file appended to the system prompt, for what the base is like |
+| `AGENT_LOG_FILE` | harness | where every console event is appended as JSON lines, `agent-log.jsonl` when unset |
+| `NO_COLOR` | harness | set to print the console view without colour |
 | `RUST_LOG` | both | `info` when unset |
 
 The model gets seven tools: `base_status`, `fluid_totals`, `base_log`,
-`base_versions`, `run_lua`, `confirm` and `remember`. The first four are the questions the
+`base_versions`, `run_lua`, `confirm` and `remember`, and two more with data
+behind them. The first four are the questions the
 mesh already answers, compacted into a few lines each, and the status names
 every machine's component address beside it. `run_lua` runs on the agent
 computer, or on a named satellite through a new mesh request, `ocrun?`, which
@@ -228,12 +234,57 @@ stops a furnace: `setWorkAllowed(false)` on the address, on the host that
 reported it. Any method is available. The system prompt makes a player's request the
 permission for what it asks, and keeps `confirm` for stopping or starting a
 production machine the player did not name, and for anything that cannot be
-undone. `remember` appends one line to a notes file on your machine, and the
-file rides in every system prompt, which is how the agent keeps what a player
-taught it: which door is which, what an address belongs to, how things are
-done here. Edit the file by hand when a note is wrong. With `SEARXNG_URL` set
+undone. A player who says "stop asking" in chat, in a few common wordings,
+is written down in the notes and never asked again, which `TRUSTED_PLAYERS`
+does ahead of time. `remember` appends one line to the same notes file on
+your machine, and the file rides in every system prompt, which is how the
+agent keeps what a player taught it: which door is which, what an address
+belongs to, how things are done here. Edit the file by hand when a note is
+wrong.
+
+`ocharness serve` prints the conversation on stderr as it happens: each chat
+line, what the model thought when the provider shares it, every tool call
+with its arguments, every result with how long it took, and the reply, each
+in its own colour. The plumbing, heartbeats and mesh bookkeeping, sits at
+debug level under `RUST_LOG`. The same events go to `AGENT_LOG_FILE` as one
+JSON object a line, with a `boot` line first on every start, so a run can be
+read back and a restart found.
+
+### The board and the stock
+
+The agent has a display. `board(title, lines)` puts up to eighteen lines on
+the agent computer's own screen, which stops showing its commentary while a
+board is up, and `ocview` gained a `board` view that asks the mesh for it and
+draws the same thing on the base's monitor. The board survives a reboot of
+the agent computer, and no lines takes it down.
+
+`stock(item)` asks Applied Energistics and Logistics Pipes, whichever the
+agent computer touches, what they hold of an item and whether AE could craft
+it. The system prompt puts the two together: asked for a recipe, the agent
+looks it up, checks the stock of every input, puts the recipe with what is
+there and what is missing on the board, and gives the short version in chat.
+
+Every tool call the model makes in one turn runs at the same time, so five
+chunks or three mesh questions cost one round trip. A reasoning model that
+stops after thinking with no text is asked once more for the words; the
+visible answer is read whether the provider sends it as a string or as parts. With `SEARXNG_URL` set
 it also gets `web_search`, the top results from that instance, and
 `web_fetch`, one page reduced to plain text.
+
+It also gets `recipe_search`: what makes an item or what uses it, by display
+name, cheapest first, one line each with machine, tier, EU/t and seconds.
+There is no hosted recipe API for the pack. The dataset is the gzipped JSON
+that gtnhplanner.com downloads for itself, about 54 MB. When the file named
+by `GTNH_RECIPES` is missing, `ocharness serve` reads the planner's manifest,
+takes the stable version, downloads it once and keeps it. It is never fetched
+again, since the site asks not to be polled; delete the file to refresh it.
+Loading takes a few seconds at start and a few hundred megabytes of memory,
+and `GTNH_RECIPES=none` leaves the tool out.
+
+The system prompt also carries the `gt_machine` method list from the GTNH
+fork of OpenComputers, split into what reads and the one call that changes a
+machine, and names the `LSC` and `gt_energyContainer` components, so a chunk
+is written against the real API rather than a guess.
 
 The system prompt tells the model the agent computer sees only its own
 components, and to write plain ASCII, because the game font draws anything

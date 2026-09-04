@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.17.0"
+local VERSION = "0.18.0"
 
 -- what this machine tells the network it is running, in every report it sends
 net.running("ocview", VERSION)
@@ -158,6 +158,18 @@ local function absorbLog(from, port, data)
   return true
 end
 
+-- What the agent has put on its board, as it last answered.
+local board = nil
+
+local function absorbBoard(from, port, data)
+  local answer = net.decodeBoard(port, from, data)
+  if not answer then
+    return false
+  end
+  board = answer
+  return true
+end
+
 -- Every machine's records in one list, oldest last. Ages are comparable across
 -- machines even though the uptimes they were worked out from are not.
 local function records()
@@ -288,6 +300,9 @@ end
 local function absorb(from, port, data)
   seen.heard = seen.heard + 1
   if absorbLog(from, port, data) then
+    return true
+  end
+  if absorbBoard(from, port, data) then
     return true
   end
   if absorbVersions(from, port, data) then
@@ -422,13 +437,14 @@ end
 -- three answers to that, because which one is right depends on how much there
 -- is to show and what you are looking for.
 
-local MODES = { "columns", "cards", "alerts", "log", "update" }
+local MODES = { "columns", "cards", "alerts", "log", "board", "update" }
 
 local MODE_HELP = {
   columns = "every machine, one line each, across as many columns as fit",
   cards = "one machine at a time, roomy, with a wide bar",
   alerts = "what is wrong, and nothing that is not",
   log = "what the base has written down, newest first",
+  board = "what the agent has put up to be looked at",
   update = "what every machine is running, and the way to move it on",
 }
 
@@ -478,6 +494,16 @@ local function drawBars(tripped, machines)
     if bad > 0 then
       rule(left)
       left[#left + 1] = { bad .. " " .. plural(bad, "error"), ALARM }
+    end
+  elseif mode == "board" then
+    rule(left)
+    if board then
+      counted(left, #board.lines, "line")
+      rule(left)
+      left[#left + 1] = { "from ", DIM }
+      left[#left + 1] = { board.host, FG }
+    else
+      left[#left + 1] = { "no board yet", DIM }
     end
   elseif mode == "update" then
     -- how many commits the base is spread across. One is a base that agrees
@@ -973,6 +999,22 @@ local function render()
     return
   end
 
+  -- The board is the agent's, drawn as it wrote it: a title, a rule, and
+  -- its lines, and nothing of the base's own.
+  if mode == "board" then
+    if board then
+      write(2, 3, fit(board.title, W - 2), FG, BG)
+      write(2, 4, string.rep("-", W - 2), DIM, BG)
+      for line = 1, H - 6 do
+        write(2, 4 + line, fit(board.lines[line] or "", W - 2), FG, BG)
+      end
+    else
+      write(3, 3, fit("asking the agent what is on its board", W - 4), DIM, BG)
+    end
+    paint.flush(W, H, BG, FG)
+    return
+  end
+
   local blocks = planBlocks()
   local body = H - 3
 
@@ -1059,6 +1101,9 @@ while true do
     -- barely changes, and the machines are what the other views are for
     if mode == "log" then
       net.askLog(minitel, config, collector())
+    end
+    if mode == "board" then
+      net.askBoard(minitel, config)
     end
     -- the same rule: what a machine is running is worth a packet only while
     -- somebody is looking at the screen that shows it

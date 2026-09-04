@@ -1814,6 +1814,30 @@ test("ocview asks and draws what comes back", function()
   check(asked, "never broadcast the question")
 end)
 
+test("ocview shows the agent's board", function()
+  oc.width, oc.height = 80, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({ view = "board" })
+  startMinitel("tablet")
+  deliver(modem, "bb000000", "tablet", "agent-01", "ocboard!\n"
+    .. require("serialization").serialize({ title = "Steel Ingot", lines = { "1x Iron Dust", "1000 L Oxygen" } }))
+
+  local ok, reason = oc.run("ocview", "--once")
+  check(ok, "ocview crashed: " .. tostring(reason))
+  local shown = oc.screen()
+  check(contains(shown, "Steel Ingot"), "did not show the title")
+  check(contains(shown, "1000 L Oxygen"), "did not show the lines")
+  local asked = false
+  for _, packet in ipairs(outbound(modem)) do
+    if packet.data == "ocboard?" then
+      asked = true
+    end
+  end
+  check(asked, "never asked for the board")
+end)
+
 test("ocview remembers a satellite so the next question is routed to it", function()
   oc.width, oc.height = 120, 30
   oc.reset()
@@ -7241,6 +7265,76 @@ test("ocagent says when the named machine does not answer a chunk", function()
   local got = results(received)
   check(got.r1 and got.r1.ok == false and contains(got.r1.error or "", "did not answer"),
     "did not report the silence: " .. kinds(received))
+end)
+
+test("ocagent puts up a board, keeps it, and answers ocview for it", function()
+  local modem = agentMachine()
+  oc.idle = 24
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "show", id = "b1", title = "Steel Ingot",
+        lines = { "EBF [HV] 480 EU/t", "1x Iron Dust + 1000 L Oxygen" } })
+    end
+  end)
+  deliverAfter(14, modem, "bb000000", "agent-01", "tablet", "ocboard?")
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local got = results(received)
+  check(got.b1 and got.b1.ok == true and contains(got.b1.output or "", "2 lines"),
+    "did not report the board: " .. kinds(received))
+  check(contains(oc.screen(), "Steel Ingot") and contains(oc.screen(), "Iron Dust"),
+    "did not draw the board on its own screen")
+  check(contains(oc.files["/home/board.cfg"] or "", "Steel Ingot"), "did not keep the board on disk")
+
+  local answered
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 9) == "ocboard!\n" then
+      answered = packet
+    end
+  end
+  check(answered ~= nil and answered.dest == "tablet", "did not answer the board question")
+  local answer = answered and require("serialization").unserialize(answered.data:sub(10))
+  check(answer and answer.title == "Steel Ingot" and #answer.lines == 2, "answered with a different board")
+end)
+
+test("ocagent reads stock from applied energistics", function()
+  oc.components = { INTERNET, fakeData(), fakeChat(), fakeModem("aa000000-0000-0000-0000-000000000009"),
+    {
+      address = "ae000000-0000-0000-0000-000000000001",
+      kind = "me_interface",
+      methods = { getItemsInNetwork = "f", getCraftables = "f" },
+      values = {
+        getItemsInNetwork = function()
+          return {
+            { label = "Iron Ingot", name = "minecraft:iron_ingot", size = 64, isCraftable = false },
+            { label = "Iron Plate", name = "gregtech:plate", size = 3, isCraftable = true },
+            { label = "Copper Ingot", name = "minecraft:copper", size = 9, isCraftable = false },
+          }
+        end,
+        getCraftables = function()
+          return { { getItemStack = function() return { label = "Iron Rod" } end } }
+        end,
+      },
+    } }
+  linkConfig()
+  startMinitel("agent-01")
+  oc.idle = 16
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "stock", id = "s1", query = "iron" })
+    end
+  end)
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local got = results(received)
+  local text = got.s1 and got.s1.output or ""
+  check(got.s1 and got.s1.ok == true, "did not answer the stock question: " .. kinds(received))
+  check(contains(text, "AE Iron Ingot x64"), "lost the ingots: " .. text)
+  check(contains(text, "AE Iron Plate x3 (craftable)"), "lost the craftable plates: " .. text)
+  check(contains(text, "AE Iron Rod x0 (craftable)"), "lost what is only craftable: " .. text)
+  check(not contains(text, "Copper"), "answered with an item that was not asked for")
 end)
 
 test("ocagent drops a frame that goes backwards", function()

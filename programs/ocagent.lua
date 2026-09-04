@@ -22,8 +22,11 @@ local event = require("event")
 local keyboard = require("keyboard")
 local net = require("ocnet")
 local link = require("oclink")
+local lp = require("oclogistics")
+local serialization = require("serialization")
+local term = require("term")
 
-local VERSION = "0.4.0"
+local VERSION = "0.5.0"
 
 net.running("ocagent", VERSION)
 
@@ -43,6 +46,11 @@ local REBOOT_FLOOR = 64 * 1024
 local STRIKES = 3
 -- how often chat is told the harness is away, at most
 local AWAY_EVERY = 30
+-- where the board survives a reboot
+local BOARD_PATH = "/home/board.cfg"
+-- how many lines a board holds, and how many stock lines an answer holds
+local BOARD_LINES = 18
+local STOCK_LINES = 20
 
 local WHITE = 0xFFFFFF
 local DIM = 0x999999
@@ -51,11 +59,152 @@ local RED = 0xCC6666
 
 local gpu = component.isAvailable("gpu") and component.gpu or nil
 
+-- What the harness put up to be looked at. While there is one, the screen is
+-- the board and the running commentary stays off it; the harness console
+-- shows all of that anyway.
+local board = nil
+
 local function say(text, color)
+  if board then
+    return
+  end
   if gpu then
     gpu.setForeground(color or WHITE)
   end
   print(text)
+end
+
+local function fit(text, width)
+  text = tostring(text or "")
+  if #text > width then
+    return text:sub(1, width)
+  end
+  return text .. string.rep(" ", width - #text)
+end
+
+local function drawBoard()
+  if not gpu or not board then
+    return
+  end
+  local width, height = core.viewport(gpu)
+  gpu.setBackground(0x000000)
+  gpu.fill(1, 1, width, height, " ")
+  gpu.setForeground(WHITE)
+  gpu.set(2, 1, fit(board.title, width - 2))
+  gpu.setForeground(DIM)
+  gpu.set(2, 2, string.rep("-", width - 2))
+  gpu.setForeground(WHITE)
+  for index, line in ipairs(board.lines) do
+    if index + 2 <= height then
+      gpu.set(2, index + 2, fit(line, width - 2))
+    end
+  end
+end
+
+local function saveBoard()
+  if board then
+    local file = io.open(BOARD_PATH, "w")
+    if file then
+      file:write(serialization.serialize({ title = board.title, lines = board.lines }))
+      file:close()
+    end
+  else
+    pcall(require("filesystem").remove, BOARD_PATH)
+  end
+end
+
+local function loadBoard()
+  local file = io.open(BOARD_PATH, "r")
+  if not file then
+    return
+  end
+  local text = file:read("*a")
+  file:close()
+  local ok, saved = pcall(serialization.unserialize, text or "")
+  if ok and type(saved) == "table" and type(saved.lines) == "table" and saved.lines[1] then
+    board = { title = tostring(saved.title or ""), lines = saved.lines }
+  end
+end
+
+-- Replaces the board, or takes it down when there are no lines. Lines are cut
+-- to what a screen holds, since the harness sends what a model wrote.
+local function show(title, lines)
+  local kept = {}
+  for _, line in ipairs(type(lines) == "table" and lines or {}) do
+    if #kept < BOARD_LINES then
+      kept[#kept + 1] = tostring(line)
+    end
+  end
+  if kept[1] then
+    board = { title = tostring(title or ""), lines = kept }
+    drawBoard()
+  elseif board then
+    board = nil
+    term.clear()
+  end
+  saveBoard()
+  return #kept
+end
+
+-- What the base holds of something, asked of Applied Energistics and of
+-- Logistics Pipes, whichever this computer touches. AE says whether it could
+-- craft more; Logistics Pipes says only what is there.
+local function stock(query)
+  local wanted = tostring(query or ""):lower()
+  if wanted == "" then
+    return false, "nothing to look for"
+  end
+  lp.reclaim()
+  local lines, seen = {}, {}
+
+  local function add(line)
+    if #lines < STOCK_LINES and not seen[line] then
+      seen[line] = true
+      lines[#lines + 1] = line
+    end
+  end
+
+  for address in component.list("me_") do
+    local proxy = component.proxy(address)
+    if proxy and proxy.getItemsInNetwork then
+      local ok, items = pcall(proxy.getItemsInNetwork)
+      if ok and type(items) == "table" then
+        for _, item in ipairs(items) do
+          local label = tostring(item.label or item.name or "")
+          if label:lower():find(wanted, 1, true) then
+            add(string.format("AE %s x%d%s", label, tonumber(item.size) or 0,
+              item.isCraftable and " (craftable)" or ""))
+          end
+        end
+      end
+      local fine, craftables = pcall(proxy.getCraftables)
+      if fine and type(craftables) == "table" then
+        for _, craftable in ipairs(craftables) do
+          local got, stack = pcall(craftable.getItemStack)
+          local label = got and type(stack) == "table" and tostring(stack.label or stack.name or "") or ""
+          if label ~= "" and label:lower():find(wanted, 1, true) then
+            add("AE " .. label .. " x0 (craftable)")
+          end
+        end
+      end
+      break
+    end
+  end
+
+  local pipe = lp.requestPipe()
+  if pipe then
+    local items = lp.available(pipe)
+    for _, item in ipairs(items or {}) do
+      if tostring(item.name):lower():find(wanted, 1, true) then
+        add(string.format("LP %s x%d", item.name, item.amount or 0))
+      end
+    end
+  end
+
+  if not lines[1] then
+    return true, "nothing matching " .. query .. " in AE or Logistics Pipes"
+  end
+  return true, table.concat(lines, "\n")
 end
 
 local function log(text, level)
@@ -156,6 +305,7 @@ if reason then
 end
 
 local me = link.connect(settings, data, net.hostname(config))
+loadBoard()
 
 say("ocagent v" .. VERSION .. "   " .. net.hostname(config), WHITE)
 say("  proxy " .. settings.host .. ":" .. settings.port, DIM)
@@ -164,6 +314,7 @@ if not component.isAvailable("chat_box") then
 end
 say("  [q] to stop", DIM)
 say("")
+drawBoard()
 
 -- questions to the mesh still collecting answers, by the id the harness gave
 local asking = {}
@@ -228,6 +379,19 @@ local function obey(command)
     end
   elseif command.kind == "ask" then
     ask(command)
+  elseif command.kind == "show" then
+    local held = show(command.title, command.lines)
+    say("board " .. (held > 0 and (held .. " lines") or "cleared"), GREEN)
+    me.send({ kind = "result", id = command.id, ok = true,
+      output = held > 0 and ("showing " .. held .. " lines") or "board cleared" })
+  elseif command.kind == "stock" then
+    local ok, text = stock(command.query)
+    say("stock " .. tostring(command.query), ok and GREEN or RED)
+    if ok then
+      me.send({ kind = "result", id = command.id, ok = true, output = text })
+    else
+      me.send({ kind = "result", id = command.id, ok = false, error = text })
+    end
   else
     local reply = link.obey(command)
     if reply then
@@ -260,6 +424,13 @@ local function heard(packet)
       me.send({ kind = "partial", id = pending.id, host = packet.from, data = answer })
       return
     end
+  end
+  if packet.data == net.BOARD_ASK then
+    if board then
+      minitel.usend(packet.from, core.PORT, net.BOARD_REPLY .. "\n"
+        .. serialization.serialize({ title = board.title, lines = board.lines }))
+    end
+    return
   end
   if packet.data ~= net.ASK then
     local sent, command =

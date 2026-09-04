@@ -24,11 +24,32 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
+/// What a provider puts in `content`: a string, or parts, as OpenRouter does
+/// for some models.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum Content {
+    Text(String),
+    Parts(Vec<Part>),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Part {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Message {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<Content>,
+    /// a reasoning model's thinking, read so it is not mistaken for silence and
+    /// never sent back
+    #[serde(default, skip_serializing, alias = "reasoning_content")]
+    pub reasoning: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -39,9 +60,25 @@ impl Message {
     fn plain(role: &str, text: impl Into<String>) -> Message {
         Message {
             role: role.into(),
-            content: Some(text.into()),
+            content: Some(Content::Text(text.into())),
+            reasoning: None,
             tool_calls: None,
             tool_call_id: None,
+        }
+    }
+
+    /// The visible text, whichever shape it came in, trimmed.
+    pub fn text(&self) -> String {
+        match &self.content {
+            Some(Content::Text(text)) => text.trim().to_string(),
+            Some(Content::Parts(parts)) => parts
+                .iter()
+                .filter(|part| part.kind == "text" || part.kind.is_empty())
+                .map(|part| part.text.trim())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => String::new(),
         }
     }
 
@@ -60,7 +97,8 @@ impl Message {
     pub fn tool(call_id: impl Into<String>, text: impl Into<String>) -> Message {
         Message {
             role: "tool".into(),
-            content: Some(text.into()),
+            content: Some(Content::Text(text.into())),
+            reasoning: None,
             tool_calls: None,
             tool_call_id: Some(call_id.into()),
         }
