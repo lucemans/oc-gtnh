@@ -7345,7 +7345,7 @@ test("ocagent reads stock from applied energistics", function()
   oc.idle = 16
   local received = proxy(function(message, far)
     if message.kind == "hello" then
-      far.send({ kind = "stock", id = "s1", query = "iron" })
+      far.send({ kind = "stock", id = "s1", queries = { "iron", "Iron Rod", "gold" } })
     end
   end)
 
@@ -7354,9 +7354,10 @@ test("ocagent reads stock from applied energistics", function()
   local got = results(received)
   local text = got.s1 and got.s1.output or ""
   check(got.s1 and got.s1.ok == true, "did not answer the stock question: " .. kinds(received))
-  check(contains(text, "AE Iron Ingot x64"), "lost the ingots: " .. text)
+  check(contains(text, "iron:\n  AE Iron Ingot x64"), "lost the ingots: " .. text)
   check(contains(text, "AE Iron Plate x3 (craftable)"), "lost the craftable plates: " .. text)
-  check(contains(text, "AE Iron Rod x0 (craftable)"), "lost what is only craftable: " .. text)
+  check(contains(text, "Iron Rod:\n  AE Iron Rod x0 (craftable)"), "the exact name did not come first: " .. text)
+  check(contains(text, "gold:\n  nothing in AE"), "did not say what is absent: " .. text)
   check(not contains(text, "Copper"), "answered with an item that was not asked for")
 end)
 

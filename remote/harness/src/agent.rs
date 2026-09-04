@@ -88,8 +88,12 @@ to you in every conversation; nothing else does.\n\
 \n\
 The base has a display. board(title, lines) puts a recipe, a plan or a to-do list on it, and \
 stock(item) says what the base holds of something and whether AE could craft it. Asked for a \
-recipe, look it up, check the stock of each input, put the recipe with what is there and what \
-is missing on the board, and tell the player the short version in chat. Asked for a list or a \
+recipe, use recipe_plan, which brings the recipe and the stock of every input in one call, put \
+what is there and what is missing on the board, and tell the player the short version in chat. \
+stock reads the network once for every name you give it, so ask for all the names at once, and \
+never ask again for something you already know from this conversation. A request to reword or \
+reformat needs no new tool call: rewrite the board from what you already have. An empty mesh \
+answer means nobody replied in time: say so, and do not ask a second tool to confirm it. Asked for a list or a \
 plan, keep it on the board and update it as things get done. Keep the board current without \
 being asked: when something on it changes because of what you did or learned, put the new \
 version up, and say so in one short line.\n\
@@ -365,6 +369,12 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
 
     let start = |line: ChatLine, history: &[Message]| -> (JoinHandle<Turn>, Instant, bool) {
         let player = line.player.clone();
+        // the mesh is asked while the model reads the question, so a status
+        // tool a few seconds later finds the answer already there
+        let warm = bridge.clone();
+        tokio::spawn(async move {
+            let _ = warm.status(3.0).await;
+        });
         let fut = turn(
             Arc::clone(&config),
             Arc::clone(&client),

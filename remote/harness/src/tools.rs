@@ -13,10 +13,12 @@ use crate::recipes::{Direction, Recipes};
 
 /// how much of a tool result the model sees
 const RESULT_CAP: usize = 6000;
-/// how long a mesh question collects answers
-const MESH_WAIT: f64 = 5.0;
-/// how many recipes one search brings back
+/// how long a mesh question collects answers; a base of a dozen machines
+/// answers inside a second, and the rest of the wait was silence
+const MESH_WAIT: f64 = 3.0;
+/// how many recipes one search brings back, and how many a plan checks stock for
 const RECIPE_RESULTS: usize = 8;
+const PLAN_RECIPES: usize = 3;
 /// how wide a board line may be; the screen behind it is not wide
 const BOARD_WIDTH: usize = 60;
 const CONFIRM_WAIT: Duration = Duration::from_secs(60);
@@ -78,9 +80,9 @@ pub fn definitions(web: bool, recipes: bool) -> Vec<Value> {
         ),
         tool(
             "stock",
-            "What the base holds of an item, by name, from Applied Energistics and Logistics Pipes, and whether AE could craft it. Check every input of a recipe before saying what is missing.",
-            json!({ "item": { "type": "string" } }),
-            vec!["item"],
+            "What the base holds of some items, by name, from Applied Energistics and Logistics Pipes, and whether AE could craft each. One call for all the names you need: the network is read once, and every extra call costs seconds.",
+            json!({ "items": { "type": "array", "items": { "type": "string" } } }),
+            vec!["items"],
         ),
         tool(
             "remember",
@@ -90,6 +92,12 @@ pub fn definitions(web: bool, recipes: bool) -> Vec<Value> {
         ),
     ];
     if recipes {
+        out.push(tool(
+            "recipe_plan",
+            "The cheapest recipes that make an item, and what the base holds of every input, in one call. Use this for any question about making something, then put the plan on the board.",
+            json!({ "item": { "type": "string" }, "machine": { "type": "string", "description": "only this kind of machine" } }),
+            vec!["item"],
+        ));
         out.push(tool(
             "recipe_search",
             "Every recipe in this pack, from the planner dataset. Ask what makes an item or what uses it, by display name, optionally in one kind of machine. Returns the cheapest few as one line each: machine, tier, EU/t, seconds, inputs -> outputs. Fluids are in L.",
@@ -388,12 +396,12 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
     let outcome = match name {
         "base_status" => context
             .bridge
-            .ask("status", None, MESH_WAIT)
+            .status(MESH_WAIT)
             .await
             .map(|hosts| status_text(&hosts)),
         "fluid_totals" => context
             .bridge
-            .ask("status", None, MESH_WAIT)
+            .status(MESH_WAIT)
             .await
             .map(|hosts| fluid_totals_text(&hosts)),
         "base_log" => {
@@ -550,9 +558,55 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
                 }
             })
         }
+        "recipe_plan" => match &context.recipes {
+            Some(recipes) => {
+                let item = arguments.get("item").and_then(Value::as_str).unwrap_or("");
+                let machine = arguments.get("machine").and_then(Value::as_str);
+                let found = recipes.search(item, Direction::Makes, machine, PLAN_RECIPES);
+                if found.is_empty() {
+                    Ok(format!("no recipe makes {item}"))
+                } else {
+                    let mut inputs: Vec<String> = Vec::new();
+                    for recipe in &found {
+                        for stack in &recipe.inputs {
+                            if !inputs.iter().any(|name| name == &stack.name) {
+                                inputs.push(stack.name.clone());
+                            }
+                        }
+                    }
+                    let lines = found
+                        .iter()
+                        .map(|recipe| recipe.line())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    match context.bridge.stock(inputs).await {
+                        Ok(outcome) if outcome.ok => Ok(format!(
+                            "{lines}\n\nin stock:\n{}",
+                            outcome.output.unwrap_or_default()
+                        )),
+                        Ok(outcome) => Ok(format!(
+                            "{lines}\n\nstock unknown: {}",
+                            outcome.error.unwrap_or_default()
+                        )),
+                        Err(why) => Ok(format!("{lines}\n\nstock unknown: {why:#}")),
+                    }
+                }
+            }
+            None => Err(anyhow::anyhow!("no recipe dataset is loaded")),
+        },
         "stock" => {
-            let item = arguments.get("item").and_then(Value::as_str).unwrap_or("");
-            context.bridge.stock(item).await.map(|outcome| {
+            let items: Vec<String> = arguments
+                .get("items")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            context.bridge.stock(items).await.map(|outcome| {
                 if outcome.ok {
                     outcome.output.unwrap_or_else(|| "nothing".into())
                 } else {

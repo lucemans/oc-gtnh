@@ -166,7 +166,18 @@ impl Client {
         if let Some(key) = &settings.api_key {
             request = request.bearer_auth(key);
         }
-        let response = request.send().await.context("calling the model")?;
+        let mut response = request
+            .try_clone()
+            .context("cloning the request")?
+            .send()
+            .await
+            .context("calling the model")?;
+        // a gateway that answers 5xx once usually answers the retry, and the
+        // tool work behind this call is worth one more try
+        if response.status().is_server_error() {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            response = request.send().await.context("calling the model again")?;
+        }
         let status = response.status();
         let body = response
             .text()

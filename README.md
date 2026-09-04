@@ -267,11 +267,18 @@ current board rides in every system prompt, so the agent updates it rather
 than rewriting it, and the prompt tells it to keep the board current on its
 own when what it lists has changed.
 
-`stock(item)` asks Applied Energistics and Logistics Pipes, whichever the
-agent computer touches, what they hold of an item and whether AE could craft
-it. The system prompt puts the two together: asked for a recipe, the agent
-looks it up, checks the stock of every input, puts the recipe with what is
-there and what is missing on the board, and gives the short version in chat.
+`stock(items)` asks Applied Energistics and Logistics Pipes, whichever the
+agent computer touches, what they hold of a list of names and whether AE
+could craft each, from one read of each network, since the read is the slow
+part. `recipe_plan(item)` is the cheapest recipes that make something and
+the stock of every input in one call, which is what a recipe question turns
+into: the plan goes on the board with what is there and what is missing, and
+the short version goes to chat.
+
+The mesh status stands for ten seconds once fetched, and it is fetched in the
+background the moment a chat line starts a turn, so a status question rarely
+waits on the mesh. A mesh question now collects answers for three seconds. A
+5xx from the model provider is retried once before a turn is given up.
 
 Every tool call the model makes in one turn runs at the same time, so five
 chunks or three mesh questions cost one round trip. A reasoning model that

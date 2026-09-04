@@ -97,7 +97,7 @@ pub enum Outbound {
         lines: Vec<String>,
     },
     #[serde(rename = "stock")]
-    Stock { id: String, query: String },
+    Stock { id: String, queries: Vec<String> },
 }
 
 #[derive(Serialize)]
@@ -134,7 +134,14 @@ pub struct Handle {
     outgoing: mpsc::Sender<Outbound>,
     pending: Arc<Mutex<HashMap<String, Pending>>>,
     counter: Arc<Mutex<u64>>,
+    status_cache: Arc<Mutex<Option<StatusSnapshot>>>,
 }
+
+/// a mesh status answer and when it was taken
+type StatusSnapshot = (std::time::Instant, Vec<(String, Value)>);
+
+/// how long a status answer stands in for a fresh one
+const STATUS_FRESH: Duration = Duration::from_secs(10);
 
 impl Handle {
     pub async fn say(&self, text: &str) {
@@ -236,16 +243,30 @@ impl Handle {
         .await
     }
 
-    /// What Applied Energistics and Logistics Pipes hold of something.
-    pub async fn stock(&self, query: &str) -> Result<Outcome> {
+    /// What Applied Energistics and Logistics Pipes hold of some things, from
+    /// one read of each network.
+    pub async fn stock(&self, queries: Vec<String>) -> Result<Outcome> {
         self.request(
-            |id| Outbound::Stock {
-                id,
-                query: query.to_string(),
-            },
+            |id| Outbound::Stock { id, queries },
             Duration::from_secs(30),
         )
         .await
+    }
+
+    /// The mesh's status, no older than STATUS_FRESH. Two questions in a row,
+    /// or fluid_totals after base_status, cost the mesh one broadcast; the
+    /// prefetch at the start of a turn means the first one is often free too.
+    pub async fn status(&self, wait_seconds: f64) -> Result<Vec<(String, Value)>> {
+        if let Some((at, hosts)) = self.status_cache.lock().await.as_ref() {
+            if at.elapsed() < STATUS_FRESH {
+                return Ok(hosts.clone());
+            }
+        }
+        let hosts = self.ask("status", None, wait_seconds).await?;
+        if !hosts.is_empty() {
+            *self.status_cache.lock().await = Some((std::time::Instant::now(), hosts.clone()));
+        }
+        Ok(hosts)
     }
 }
 
@@ -399,6 +420,7 @@ pub async fn session(link: &mut Link, config: Arc<Config>) -> Result<()> {
         outgoing: outgoing.clone(),
         pending: Arc::clone(&pending),
         counter: Arc::new(Mutex::new(0)),
+        status_cache: Arc::new(Mutex::new(None)),
     };
     outgoing
         .send(Outbound::Welcome)

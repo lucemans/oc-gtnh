@@ -25,7 +25,7 @@ local link = require("oclink")
 local lp = require("oclogistics")
 local serialization = require("serialization")
 
-local VERSION = "0.9.0"
+local VERSION = "0.10.0"
 
 net.running("ocagent", VERSION)
 
@@ -112,21 +112,35 @@ local function show(title, lines)
   return #kept
 end
 
--- What the base holds of something, asked of Applied Energistics and of
+-- What the base holds of some things, asked of Applied Energistics and of
 -- Logistics Pipes, whichever this computer touches. AE says whether it could
 -- craft more; Logistics Pipes says only what is there.
-local function stock(query)
-  local wanted = tostring(query or ""):lower()
-  if wanted == "" then
+--
+-- Every name is answered from one read of each network. Reading the AE
+-- network is the slow part, seconds on a full base, so a recipe with five
+-- inputs is one read and not five.
+local function stock(queries)
+  local wanted = {}
+  for _, query in ipairs(type(queries) == "table" and queries or {}) do
+    local lowered = tostring(query or ""):lower()
+    if lowered ~= "" then
+      wanted[#wanted + 1] = { asked = tostring(query), lowered = lowered, exact = {}, loose = {} }
+    end
+  end
+  if not wanted[1] then
     return false, "nothing to look for"
   end
   lp.reclaim()
-  local lines, seen = {}, {}
 
-  local function add(line)
-    if #lines < STOCK_LINES and not seen[line] then
-      seen[line] = true
-      lines[#lines + 1] = line
+  -- an exact name first, then whatever contains it, a few of each
+  local function place(label, line)
+    local lowered = label:lower()
+    for _, want in ipairs(wanted) do
+      if lowered == want.lowered then
+        want.exact[#want.exact + 1] = line
+      elseif lowered:find(want.lowered, 1, true) and #want.loose < STOCK_LINES then
+        want.loose[#want.loose + 1] = line
+      end
     end
   end
 
@@ -137,8 +151,8 @@ local function stock(query)
       if ok and type(items) == "table" then
         for _, item in ipairs(items) do
           local label = tostring(item.label or item.name or "")
-          if label:lower():find(wanted, 1, true) then
-            add(string.format("AE %s x%d%s", label, tonumber(item.size) or 0,
+          if label ~= "" then
+            place(label, string.format("AE %s x%d%s", label, tonumber(item.size) or 0,
               item.isCraftable and " (craftable)" or ""))
           end
         end
@@ -148,8 +162,8 @@ local function stock(query)
         for _, craftable in ipairs(craftables) do
           local got, stack = pcall(craftable.getItemStack)
           local label = got and type(stack) == "table" and tostring(stack.label or stack.name or "") or ""
-          if label ~= "" and label:lower():find(wanted, 1, true) then
-            add("AE " .. label .. " x0 (craftable)")
+          if label ~= "" then
+            place(label, "AE " .. label .. " x0 (craftable)")
           end
         end
       end
@@ -161,16 +175,28 @@ local function stock(query)
   if pipe then
     local items = lp.available(pipe)
     for _, item in ipairs(items or {}) do
-      if tostring(item.name):lower():find(wanted, 1, true) then
-        add(string.format("LP %s x%d", item.name, item.amount or 0))
-      end
+      place(tostring(item.name), string.format("LP %s x%d", item.name, item.amount or 0))
     end
   end
 
-  if not lines[1] then
-    return true, "nothing matching " .. query .. " in AE or Logistics Pipes"
+  local out = {}
+  for _, want in ipairs(wanted) do
+    out[#out + 1] = want.asked .. ":"
+    local seen, count = {}, 0
+    for _, group in ipairs({ want.exact, want.loose }) do
+      for _, line in ipairs(group) do
+        if not seen[line] and count < STOCK_LINES then
+          seen[line] = true
+          count = count + 1
+          out[#out + 1] = "  " .. line
+        end
+      end
+    end
+    if count == 0 then
+      out[#out + 1] = "  nothing in AE or Logistics Pipes"
+    end
   end
-  return true, table.concat(lines, "\n")
+  return true, table.concat(out, "\n")
 end
 
 local function log(text, level)
@@ -368,8 +394,9 @@ local function obey(command)
     me.send({ kind = "result", id = command.id, ok = true,
       output = held > 0 and ("showing " .. held .. " lines") or "board cleared" })
   elseif command.kind == "stock" then
-    local ok, text = stock(command.query)
-    say("stock " .. tostring(command.query), ok and GREEN or RED)
+    local queries = type(command.queries) == "table" and command.queries or { command.query }
+    local ok, text = stock(queries)
+    say("stock " .. table.concat(queries, ", "), ok and GREEN or RED)
     if ok then
       me.send({ kind = "result", id = command.id, ok = true, output = text })
     else
