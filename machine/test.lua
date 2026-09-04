@@ -7310,6 +7310,13 @@ test("ocagent puts up a board, keeps it, and answers ocview for it", function()
     end
   end
   check(answered ~= nil and answered.dest == "tablet", "did not answer the board question")
+  local pushed = false
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 9) == "ocboard!\n" and packet.dest == "~" then
+      pushed = true
+    end
+  end
+  check(pushed, "did not push the new board to the mesh when it changed")
   local answer = answered and require("serialization").unserialize(answered.data:sub(10))
   check(answer and answer.title == "Steel Ingot" and #answer.lines == 2, "answered with a different board")
 end)

@@ -257,8 +257,10 @@ read back and a restart found.
 The base has a display. `board(title, lines)` hands up to eighteen lines to
 the agent computer, which keeps them and answers `ocboard?` with them, and
 `ocview` gained a `board` view that asks the mesh for it and draws it on the
-base's monitor. The agent computer's own screen stays the running log. The
-board survives a reboot of the agent computer, and no lines takes it down. A line may carry `&a` colour codes as Minecraft
+base's monitor. A new board is also pushed to everyone the moment it is
+written, so the monitor changes as the agent writes rather than on the next
+poll. The agent computer's own screen stays the running log. The board
+survives a reboot of the agent computer, and no lines takes it down. A line may carry `&a` colour codes as Minecraft
 writes them, and `{bar:42}` draws a bar that full, on both screens. The
 current board rides in every system prompt, so the agent updates it rather
 than rewriting it, and the prompt tells it to keep the board current on its

@@ -25,7 +25,7 @@ local link = require("oclink")
 local lp = require("oclogistics")
 local serialization = require("serialization")
 
-local VERSION = "0.7.0"
+local VERSION = "0.8.0"
 
 net.running("ocagent", VERSION)
 
@@ -355,6 +355,16 @@ local function obey(command)
   elseif command.kind == "show" then
     local held = show(command.title, command.lines)
     say("board " .. (held > 0 and (held .. " lines") or "cleared"), GREEN)
+    -- said to everybody at once rather than waited for: ocview asks every two
+    -- seconds, and a board should change the moment it is written
+    if board then
+      local payload = net.BOARD_REPLY .. "\n"
+        .. serialization.serialize({ title = board.title, lines = board.lines })
+      minitel.usend(net.EVERYONE, core.PORT, payload)
+      for _, host in ipairs(net.peers(config)) do
+        minitel.usend(host, core.PORT, payload)
+      end
+    end
     me.send({ kind = "result", id = command.id, ok = true,
       output = held > 0 and ("showing " .. held .. " lines") or "board cleared" })
   elseif command.kind == "stock" then
