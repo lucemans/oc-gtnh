@@ -215,6 +215,7 @@ PROXY_ADDR=vps:7071 PROXY_SECRET=... LINK_KEY=... DEVICE=agent-01 \
 | `LLM_BASE_URL` | harness | an OpenAI-compatible base, up to and including `/v1` |
 | `LLM_API_KEY` | harness | sent as a bearer token when set |
 | `LLM_MODEL` | harness | the model name the proxy knows |
+| `LLM_REASONING` | harness | `low`, `medium` or `high`: asks a reasoning model to think that hard and share it, which the console then shows as `think` lines |
 | `GTNH_RECIPES` | harness | where the recipe dataset lives, `recipes.json.gz` when unset; `none` turns `recipe_search` off |
 | `GTNH_PLANNER_URL` | harness | where the dataset is fetched from when the file is missing, gtnhplanner.com when unset |
 | `SEARXNG_URL` | harness | a SearXNG instance; when set the model gets `web_search` and `web_fetch` |

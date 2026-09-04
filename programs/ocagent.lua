@@ -25,7 +25,7 @@ local link = require("oclink")
 local lp = require("oclogistics")
 local serialization = require("serialization")
 
-local VERSION = "0.8.0"
+local VERSION = "0.9.0"
 
 net.running("ocagent", VERSION)
 
@@ -491,33 +491,55 @@ local function flushHeld()
   end
 end
 
+-- How long a phase of the loop may take before it is named on the screen. A
+-- loop that reads the keyboard late is a loop with a slow phase in it, and
+-- this is how the phase is found rather than guessed at.
+local SLOW = 0.25
+local complained = {}
+
+local function timed(phase, work)
+  local started = computer.uptime()
+  work()
+  local took = computer.uptime() - started
+  if took >= SLOW and computer.uptime() - (complained[phase] or -60) >= 5 then
+    complained[phase] = computer.uptime()
+    say(string.format("slow  %s took %.2fs", phase, took), RED)
+  end
+end
+
 local function tick()
   local name, _, _, code = event.pull(REST)
   if name == "interrupted" or (name == "key_down" and code == keyboard.keys.q) then
     return false
   end
 
-  me.pump()
+  timed("link", me.pump)
   if me.state ~= shown then
     shown = me.state
     say("link  " .. shown .. (me.reason and (", " .. me.reason) or ""),
       shown == "open" and GREEN or DIM)
   end
 
-  if me.state == "open" then
-    flushHeld()
-  end
-  while chats[1] do
-    forwardChat(table.remove(chats, 1))
-  end
-  while packets[1] do
-    heard(table.remove(packets, 1))
-  end
-  local command = me.take()
-  while command do
-    obey(command)
-    command = me.take()
-  end
+  timed("chat", function()
+    if me.state == "open" then
+      flushHeld()
+    end
+    while chats[1] do
+      forwardChat(table.remove(chats, 1))
+    end
+  end)
+  timed("mesh", function()
+    while packets[1] do
+      heard(table.remove(packets, 1))
+    end
+  end)
+  timed("command", function()
+    local command = me.take()
+    while command do
+      obey(command)
+      command = me.take()
+    end
+  end)
   finishAsking()
 
   if me.state == "open" and computer.uptime() >= heartbeatDue then

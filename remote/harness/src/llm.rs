@@ -8,6 +8,14 @@ pub struct Settings {
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
+    /// asks a reasoning model to think this hard and to share the thinking,
+    /// as OpenRouter and LiteLLM understand the request
+    pub reasoning: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Reasoning<'a> {
+    effort: &'a str,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -111,6 +119,8 @@ struct Request<'a> {
     messages: &'a [Message],
     tools: &'a [Value],
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<Reasoning<'a>>,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +158,10 @@ impl Client {
                 messages,
                 tools,
                 temperature: 0.2,
+                reasoning: settings
+                    .reasoning
+                    .as_deref()
+                    .map(|effort| Reasoning { effort }),
             });
         if let Some(key) = &settings.api_key {
             request = request.bearer_auth(key);

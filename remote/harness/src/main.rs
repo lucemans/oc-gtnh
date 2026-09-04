@@ -63,12 +63,16 @@ fn config(device: Option<String>, with_model: bool) -> Result<Config> {
                 .to_string(),
             api_key: std::env::var("LLM_API_KEY").ok(),
             model: env_required("LLM_MODEL")?,
+            reasoning: std::env::var("LLM_REASONING")
+                .ok()
+                .filter(|e| !e.is_empty()),
         }
     } else {
         llm::Settings {
             base_url: String::new(),
             api_key: None,
             model: String::new(),
+            reasoning: None,
         }
     };
     Ok(Config {
