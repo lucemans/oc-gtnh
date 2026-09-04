@@ -26,7 +26,7 @@ local lp = require("oclogistics")
 local serialization = require("serialization")
 local term = require("term")
 
-local VERSION = "0.5.0"
+local VERSION = "0.6.0"
 
 net.running("ocagent", VERSION)
 
@@ -82,6 +82,36 @@ local function fit(text, width)
   return text .. string.rep(" ", width - #text)
 end
 
+-- What the link is doing, kept on the last row of the board, since the
+-- commentary is off the screen while a board is up.
+local footer = ""
+
+local BAR_WIDTH = 20
+local FULL_BLOCK = "\226\150\136"
+local LIGHT_BLOCK = "\226\150\145"
+
+-- A board line as the model wrote it, with &a colour codes as Minecraft
+-- writes them and {bar:42} for a bar, turned into what the screen shows.
+local function boardText(line)
+  line = tostring(line or ""):gsub("{bar:(%d+)}", function(percent)
+    local filled = math.floor(math.min(100, tonumber(percent)) / 100 * BAR_WIDTH + 0.5)
+    return string.rep(FULL_BLOCK, filled) .. string.rep(LIGHT_BLOCK, BAR_WIDTH - filled)
+  end)
+  return (line:gsub("&(%x)", core.SECTION .. "%1"))
+end
+
+local function drawLine(x, y, text, width, default)
+  local at = x
+  for _, segment in ipairs(core.segments(boardText(text), default)) do
+    if at > x + width - 1 then
+      break
+    end
+    gpu.setForeground(segment.color)
+    gpu.set(at, y, segment.text:sub(1, x + width - at))
+    at = at + #segment.text
+  end
+end
+
 local function drawBoard()
   if not gpu or not board then
     return
@@ -89,16 +119,16 @@ local function drawBoard()
   local width, height = core.viewport(gpu)
   gpu.setBackground(0x000000)
   gpu.fill(1, 1, width, height, " ")
-  gpu.setForeground(WHITE)
-  gpu.set(2, 1, fit(board.title, width - 2))
+  drawLine(2, 1, board.title, width - 2, WHITE)
   gpu.setForeground(DIM)
   gpu.set(2, 2, string.rep("-", width - 2))
-  gpu.setForeground(WHITE)
   for index, line in ipairs(board.lines) do
-    if index + 2 <= height then
-      gpu.set(2, index + 2, fit(line, width - 2))
+    if index + 2 < height then
+      drawLine(2, index + 2, line, width - 2, WHITE)
     end
   end
+  gpu.setForeground(DIM)
+  gpu.set(2, height, fit(footer, width - 2))
 end
 
 local function saveBoard()
@@ -284,7 +314,15 @@ end
 local chats = {}
 local packets = {}
 
+-- The chat box raises the same line twice within a tick on this server, and
+-- one question answered twice costs two turns; the second copy is dropped.
+local lastChat = { player = "", text = "", at = -1 }
 local heardChat = function(_, _, player, text)
+  local now = computer.uptime()
+  if player == lastChat.player and text == lastChat.text and now - lastChat.at < 1 then
+    return
+  end
+  lastChat = { player = player, text = text, at = now }
   chats[#chats + 1] = { player = player, text = text }
 end
 event.listen("chat_message", heardChat)
@@ -492,8 +530,14 @@ local function tick()
   me.pump()
   if me.state ~= shown then
     shown = me.state
+    footer = "link " .. shown .. (me.reason and (", " .. me.reason) or "")
     say("link  " .. shown .. (me.reason and (", " .. me.reason) or ""),
       shown == "open" and GREEN or DIM)
+    if board and gpu then
+      local width, height = core.viewport(gpu)
+      gpu.setForeground(DIM)
+      gpu.set(2, height, fit(footer, width - 2))
+    end
   end
 
   while chats[1] do

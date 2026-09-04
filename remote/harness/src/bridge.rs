@@ -32,6 +32,8 @@ pub enum Inbound {
         protocol: i64,
         host: String,
         nonce: String,
+        /// why the device's last link died, when it knows
+        dropped: Option<String>,
     },
     #[serde(rename = "chat")]
     Chat { player: String, text: String },
@@ -303,7 +305,11 @@ async fn hello(link: &mut Link, link_keys: &Keys) -> Result<(Keys, String, i64)>
             protocol,
             host,
             nonce,
+            dropped,
         } => {
+            if let Some(why) = dropped {
+                crate::console::status(&format!("{host} says its last link ended: {why}"));
+            }
             if protocol != PROTOCOL {
                 bail!("{host} speaks protocol {protocol}, this harness speaks {PROTOCOL}");
             }

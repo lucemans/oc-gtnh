@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.18.0"
+local VERSION = "0.19.0"
 
 -- what this machine tells the network it is running, in every report it sends
 net.running("ocview", VERSION)
@@ -160,6 +160,30 @@ end
 
 -- What the agent has put on its board, as it last answered.
 local board = nil
+
+local BAR_WIDTH = 20
+
+-- A board line as the agent wrote it: &a colour codes as Minecraft writes
+-- them, and {bar:42} for a bar of that much.
+local function boardText(line)
+  line = tostring(line or ""):gsub("{bar:(%d+)}", function(percent)
+    local filled = math.floor(math.min(100, tonumber(percent)) / 100 * BAR_WIDTH + 0.5)
+    return string.rep(FULL_BLOCK, filled) .. string.rep(LIGHT_BLOCK, BAR_WIDTH - filled)
+  end)
+  return (line:gsub("&(%x)", core.SECTION .. "%1"))
+end
+
+local function writeBoardLine(y, text, width)
+  write(2, y, fit("", width), FG, BG)
+  local at = 2
+  for _, segment in ipairs(core.segments(boardText(text), FG)) do
+    if at > width + 1 then
+      break
+    end
+    write(at, y, segment.text:sub(1, width + 2 - at), segment.color, BG)
+    at = at + #segment.text
+  end
+end
 
 local function absorbBoard(from, port, data)
   local answer = net.decodeBoard(port, from, data)
@@ -1003,10 +1027,10 @@ local function render()
   -- its lines, and nothing of the base's own.
   if mode == "board" then
     if board then
-      write(2, 3, fit(board.title, W - 2), FG, BG)
+      writeBoardLine(3, board.title, W - 2)
       write(2, 4, string.rep("-", W - 2), DIM, BG)
       for line = 1, H - 6 do
-        write(2, 4 + line, fit(board.lines[line] or "", W - 2), FG, BG)
+        writeBoardLine(4 + line, board.lines[line] or "", W - 2)
       end
     else
       write(3, 3, fit("asking the agent what is on its board", W - 4), DIM, BG)

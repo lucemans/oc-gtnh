@@ -36,7 +36,14 @@ const QUEUE: usize = 4;
 const LINE: usize = 200;
 const LINES: usize = 6;
 
-fn system_prompt(host: &str, web: bool, recipes: bool, notes: &str, extra: Option<&str>) -> String {
+fn system_prompt(
+    host: &str,
+    web: bool,
+    recipes: bool,
+    board: Option<&(String, Vec<String>)>,
+    notes: &str,
+    extra: Option<&str>,
+) -> String {
     let mut text = format!(
         "You are the computer of a GregTech: New Horizons base, answering players in Minecraft chat. \
 You are addressed as @c or @computer. You run on an OpenComputers machine called {host}, and you \
@@ -83,7 +90,14 @@ The base has a display. board(title, lines) puts a recipe, a plan or a to-do lis
 stock(item) says what the base holds of something and whether AE could craft it. Asked for a \
 recipe, look it up, check the stock of each input, put the recipe with what is there and what \
 is missing on the board, and tell the player the short version in chat. Asked for a list or a \
-plan, keep it on the board and update it as things get done.\n\
+plan, keep it on the board and update it as things get done. Keep the board current without \
+being asked: when something on it changes because of what you did or learned, put the new \
+version up, and say so in one short line.\n\
+\n\
+A board line may carry colour: &a green, &c red, &e yellow, &b aqua, &6 gold, &7 grey, &f white, \
+&d pink, &9 blue, &r back to plain, anywhere in the line, and {{bar:42}} draws a bar that full. \
+Colour what matters: green for what is there, red for what is missing, yellow for what is in \
+progress. These codes work on the board only, never in chat.\n\
 \n\
 run_lua runs on OpenOS with Lua 5.3. component.list(kind) iterates components with their \
 full addresses, component.invoke(address, method, ...) calls one, component.proxy(address) \
@@ -110,6 +124,12 @@ an energy hatch or battery buffer is gt_energyContainer with the voltage and EU 
             "\n\nweb_search and web_fetch reach the internet through the base's search engine, for \
              mod mechanics and anything not about this base.",
         );
+    }
+    if let Some((title, lines)) = board {
+        text.push_str("\n\nOn the board now, titled ");
+        text.push_str(title);
+        text.push_str(":\n");
+        text.push_str(&lines.join("\n"));
     }
     if !notes.trim().is_empty() {
         text.push_str("\n\nWhat players have taught you about this base, newest last:\n");
@@ -212,13 +232,16 @@ async fn turn(
     history: Vec<Message>,
     line: ChatLine,
     confirm: mpsc::Sender<ConfirmRequest>,
+    board: tools::Board,
 ) -> Result<String> {
     let web = config.searxng.is_some();
     let notes = tools::notes(&config.notes).await;
+    let on_board = board.lock().await.clone();
     let mut messages = vec![Message::system(system_prompt(
         &bridge.host,
         web,
         config.recipes.is_some(),
+        on_board.as_ref(),
         &notes,
         config.extra_prompt.as_deref(),
     ))];
@@ -237,6 +260,7 @@ async fn turn(
                 .to_lowercase()
                 .contains(&no_questions_note(&line.player).to_lowercase()),
         recipes: config.recipes.clone(),
+        board,
     };
 
     let mut nudges = 0;
@@ -337,6 +361,7 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
     let mut running: Option<(JoinHandle<Turn>, Instant, bool)> = None;
     let mut waiting: Option<ConfirmRequest> = None;
     let (confirm_tx, mut confirm_rx) = mpsc::channel::<ConfirmRequest>(4);
+    let board: tools::Board = Arc::default();
 
     let start = |line: ChatLine, history: &[Message]| -> (JoinHandle<Turn>, Instant, bool) {
         let player = line.player.clone();
@@ -347,6 +372,7 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
             history.to_vec(),
             line,
             confirm_tx.clone(),
+            Arc::clone(&board),
         );
         let task = tokio::spawn(async move {
             let reply = match tokio::time::timeout(TURN_TIMEOUT, fut).await {

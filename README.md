@@ -253,10 +253,15 @@ read back and a restart found.
 ### The board and the stock
 
 The agent has a display. `board(title, lines)` puts up to eighteen lines on
-the agent computer's own screen, which stops showing its commentary while a
-board is up, and `ocview` gained a `board` view that asks the mesh for it and
-draws the same thing on the base's monitor. The board survives a reboot of
-the agent computer, and no lines takes it down.
+the agent computer's own screen, which shows the board instead of its
+commentary while one is up, with the link state on the last row, and `ocview`
+gained a `board` view that asks the mesh for it and draws the same thing on
+the base's monitor. The board survives a reboot of the agent computer, and
+no lines takes it down. A line may carry `&a` colour codes as Minecraft
+writes them, and `{bar:42}` draws a bar that full, on both screens. The
+current board rides in every system prompt, so the agent updates it rather
+than rewriting it, and the prompt tells it to keep the board current on its
+own when what it lists has changed.
 
 `stock(item)` asks Applied Energistics and Logistics Pipes, whichever the
 agent computer touches, what they hold of an item and whether AE could craft

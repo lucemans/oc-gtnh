@@ -34,7 +34,7 @@ local serialization = require("serialization")
 
 local link = {}
 
-link.VERSION = "0.3.0"
+link.VERSION = "0.4.0"
 link.PROTOCOL = 1
 
 link.CONTROL = 0
@@ -163,6 +163,8 @@ function link.connect(settings, data, hostname)
     handle, proxyKeys, keys, buffer, inbox = nil, nil, nil, "", {}
     me.state = "idle"
     me.reason = why
+    -- carried in the next hello, so the far end learns why the last link died
+    me.dropped = why
     me.failures = me.failures + 1
     local wait = math.min(BACKOFF_FIRST * 2 ^ (me.failures - 1), BACKOFF_LAST)
     me.retryAt = computer.uptime() + wait
@@ -210,8 +212,9 @@ function link.connect(settings, data, hostname)
     me.seqOut = 1
     local said = write(link.RELAY, keys, {
       kind = "hello", protocol = link.PROTOCOL, host = hostname,
-      nonce = hex(nonce), seq = me.seqOut,
+      nonce = hex(nonce), seq = me.seqOut, dropped = me.dropped,
     })
+    me.dropped = nil
     if said then
       keys = link.session(data, farStatic, nonce)
       me.state = "hello"

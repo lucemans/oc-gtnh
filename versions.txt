@@ -8,7 +8,7 @@ lib/ocsecurity.lua 0.1.0:2180
 lib/ocnotify.lua 0.2.0:10220
 lib/ocnet.lua 0.18.0:30286
 lib/ocgtp.lua 0.2.0:10853
-lib/oclink.lua 0.3.0:17342
+lib/oclink.lua 0.4.0:17485
 lib/minitel.lua minitel-c679ae36:4352
 lib/syslog.lua minitel-c679ae36:849
 etc/minitel.lua minitel-c679ae36:9976
@@ -27,6 +27,6 @@ programs/ocmkfs.lua 0.7.0:13430
 programs/ocinstall.lua 0.1.0:5572
 programs/ocglass.lua 0.3.0:10845
 programs/ocserve.lua 0.7.0:5525
-programs/ocview.lua 0.18.0:39005
+programs/ocview.lua 0.19.0:39798
 programs/ocping.lua 0.3.0:6265
-programs/ocagent.lua 0.5.0:17441
+programs/ocagent.lua 0.6.0:19138

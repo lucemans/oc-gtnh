@@ -124,8 +124,13 @@ pub struct ConfirmRequest {
     pub answer: oneshot::Sender<String>,
 }
 
+/// What is on the board now, kept so the model can update it rather than
+/// rewrite it, and so a new turn knows what is up.
+pub type Board = Arc<tokio::sync::Mutex<Option<(String, Vec<String>)>>>;
+
 #[derive(Clone)]
 pub struct Context {
+    pub board: Board,
     pub bridge: Handle,
     pub player: String,
     pub confirm: mpsc::Sender<ConfirmRequest>,
@@ -528,17 +533,22 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
                         .collect()
                 })
                 .unwrap_or_default();
-            context
-                .bridge
-                .show(&crate::agent::ascii(title), lines)
-                .await
-                .map(|outcome| {
-                    if outcome.ok {
-                        outcome.output.unwrap_or_else(|| "shown".into())
-                    } else {
-                        format!("failed: {}", outcome.error.unwrap_or_default())
-                    }
-                })
+            let title = crate::agent::ascii(title);
+            let outcome = context.bridge.show(&title, lines.clone()).await;
+            if outcome.as_ref().is_ok_and(|outcome| outcome.ok) {
+                *context.board.lock().await = if lines.is_empty() {
+                    None
+                } else {
+                    Some((title, lines))
+                };
+            }
+            outcome.map(|outcome| {
+                if outcome.ok {
+                    outcome.output.unwrap_or_else(|| "shown".into())
+                } else {
+                    format!("failed: {}", outcome.error.unwrap_or_default())
+                }
+            })
         }
         "stock" => {
             let item = arguments.get("item").and_then(Value::as_str).unwrap_or("");
