@@ -180,7 +180,9 @@ enough. Three loop errors in a minute, or memory that stays gone after a
 collection, reboot the machine, and the reboot lands back in `ocagent`.
 
 When the proxy is away, chat is told so, once every thirty seconds at most,
-and the bridge reconnects with a pause that doubles up to a minute. A connect,
+and the bridge reconnects with a pause that doubles up to a minute, holding
+up to five chat lines typed into the gap for ninety seconds and sending them
+once the link is back. A connect,
 a challenge or a join that never completes is dropped after ten seconds, since
 the card itself never gives up. When the harness is away the proxy says
 `detached`, the bridge goes back to waiting, and greets the next controller
@@ -252,12 +254,11 @@ read back and a restart found.
 
 ### The board and the stock
 
-The agent has a display. `board(title, lines)` puts up to eighteen lines on
-the agent computer's own screen, which shows the board instead of its
-commentary while one is up, with the link state on the last row, and `ocview`
-gained a `board` view that asks the mesh for it and draws the same thing on
-the base's monitor. The board survives a reboot of the agent computer, and
-no lines takes it down. A line may carry `&a` colour codes as Minecraft
+The base has a display. `board(title, lines)` hands up to eighteen lines to
+the agent computer, which keeps them and answers `ocboard?` with them, and
+`ocview` gained a `board` view that asks the mesh for it and draws it on the
+base's monitor. The agent computer's own screen stays the running log. The
+board survives a reboot of the agent computer, and no lines takes it down. A line may carry `&a` colour codes as Minecraft
 writes them, and `{bar:42}` draws a bar that full, on both screens. The
 current board rides in every system prompt, so the agent updates it rather
 than rewriting it, and the prompt tells it to keep the board current on its

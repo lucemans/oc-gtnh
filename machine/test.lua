@@ -7158,6 +7158,24 @@ test("ocagent forwards a chat line addressed to it and ignores the rest", functi
   check(chats[2] and chats[2].text == "Status", "did not take the long trigger in any case")
 end)
 
+test("ocagent holds a chat line typed while the link was down and sends it once up", function()
+  agentMachine()
+  oc.idle = 16
+  -- typed before the proxy has even answered the connect
+  oc.pushAfter(2, "chat_message", "c4a7b0c0", "Steve", "@c are you there?")
+  local received = proxy()
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local chats = {}
+  for _, message in ipairs(received) do
+    if message.kind == "chat" then
+      chats[#chats + 1] = message
+    end
+  end
+  check(#chats == 1 and chats[1].text == "are you there?", "lost the line typed into the gap: " .. kinds(received))
+end)
+
 test("ocagent tells chat when the proxy is away", function()
   agentMachine()
   oc.socket.refuse = true
@@ -7166,7 +7184,7 @@ test("ocagent tells chat when the proxy is away", function()
 
   local ok, reason = oc.run("ocagent")
   check(ok, "ocagent crashed: " .. tostring(reason))
-  check(oc.said[1] ~= nil and contains(oc.said[1], "not connected"),
+  check(oc.said[1] ~= nil and contains(oc.said[1], "reconnecting"),
     "said nothing about being away: " .. tostring(oc.said[1]))
 end)
 
@@ -7283,8 +7301,6 @@ test("ocagent puts up a board, keeps it, and answers ocview for it", function()
   local got = results(received)
   check(got.b1 and got.b1.ok == true and contains(got.b1.output or "", "2 lines"),
     "did not report the board: " .. kinds(received))
-  check(contains(oc.screen(), "Steel Ingot") and contains(oc.screen(), "Iron Dust"),
-    "did not draw the board on its own screen")
   check(contains(oc.files["/home/board.cfg"] or "", "Steel Ingot"), "did not keep the board on disk")
 
   local answered
