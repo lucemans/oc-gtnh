@@ -104,6 +104,13 @@ pub enum Outbound {
     },
     #[serde(rename = "stock")]
     Stock { id: String, queries: Vec<String> },
+    #[serde(rename = "inventory")]
+    Inventory {
+        id: String,
+        source: String,
+        sort: String,
+        limit: i64,
+    },
 }
 
 /// A button on the board: a label, and the line it types to the agent.
@@ -269,6 +276,20 @@ impl Handle {
         self.request(
             |id| Outbound::Stock { id, queries },
             Duration::from_secs(30),
+        )
+        .await
+    }
+
+    /// A whole network summed and listed: the most, the least or the craftable.
+    pub async fn inventory(&self, source: &str, sort: &str, limit: i64) -> Result<Outcome> {
+        self.request(
+            |id| Outbound::Inventory {
+                id,
+                source: source.to_string(),
+                sort: sort.to_string(),
+                limit,
+            },
+            Duration::from_secs(45),
         )
         .await
     }

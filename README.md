@@ -219,7 +219,7 @@ PROXY_ADDR=vps:7071 PROXY_SECRET=... LINK_KEY=... DEVICE=agent-01 \
 | `GTNH_RECIPES` | harness | where the recipe dataset lives, `recipes.json.gz` when unset; `none` turns `recipe_search` off |
 | `GTNH_PLANNER_URL` | harness | where the dataset is fetched from when the file is missing, gtnhplanner.com when unset |
 | `SEARXNG_URL` | harness | a SearXNG instance; when set the model gets `web_search` and `web_fetch` |
-| `TRUSTED_PLAYERS` | harness | comma-separated player names whose `confirm` answers yes without asking |
+| `TRUSTED_PLAYERS` | harness | comma-separated player names whose `confirm` answers yes without asking, and who are not rate limited |
 | `AGENT_NOTES_FILE` | harness | where `remember` writes what players teach it, `agent-notes.txt` when unset |
 | `AGENT_PROMPT_FILE` | harness | a file appended to the system prompt, for what the base is like |
 | `AGENT_LOG_FILE` | harness | where every console event is appended as JSON lines, `agent-log.jsonl` when unset |
@@ -271,6 +271,11 @@ writes them, and `{bar:42}` draws a bar that full, on both screens. The
 current board rides in every system prompt, so the agent updates it rather
 than rewriting it, and the prompt tells it to keep the board current on its
 own when what it lists has changed.
+
+`inventory(source, sort, limit)` reads a whole network once and answers about
+the stock as a whole: how many kinds, units and craftables each network has,
+then the items with the most, the least, or the craftable ones, up to forty.
+That is what "is AE or Logistics Pipes richer" and "what are we low on" call.
 
 `stock(items)` asks Applied Energistics and Logistics Pipes, whichever the
 agent computer touches, what they hold of a list of names and whether AE

@@ -7425,6 +7425,49 @@ test("ocagent reads stock from applied energistics", function()
   check(not contains(text, "Copper"), "answered with an item that was not asked for")
 end)
 
+test("ocagent sums a whole network and lists the most, the least and the craftable", function()
+  oc.components = { INTERNET, fakeData(), fakeChat(), fakeModem("aa000000-0000-0000-0000-000000000009"),
+    {
+      address = "ae000000-0000-0000-0000-000000000001",
+      kind = "me_interface",
+      methods = { getItemsInNetwork = "f", getCraftables = "f" },
+      values = {
+        getItemsInNetwork = function()
+          return {
+            { label = "Iron Ingot", size = 6400, isCraftable = false },
+            { label = "Iron Plate", size = 3, isCraftable = true },
+            { label = "Copper Ingot", size = 90, isCraftable = false },
+          }
+        end,
+        getCraftables = function() return {} end,
+      },
+    } }
+  linkConfig()
+  startMinitel("agent-01")
+  oc.idle = 18
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "inventory", id = "i1", source = "ae", sort = "most", limit = 2 })
+      far.send({ kind = "inventory", id = "i2", source = "ae", sort = "least", limit = 1 })
+      far.send({ kind = "inventory", id = "i3", source = "both", sort = "craftable", limit = 5 })
+    end
+  end)
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local got = results(received)
+  local most = got.i1 and got.i1.output or ""
+  check(contains(most, "AE: 3 kinds, 6,493 units, 1 craftable"), "did not sum the network: " .. most)
+  check(contains(most, "most 2 of 3:\n  AE Iron Ingot x6,400\n  AE Copper Ingot x90"),
+    "did not list the most: " .. most)
+  local least = got.i2 and got.i2.output or ""
+  check(contains(least, "least 1 of 3:\n  AE Iron Plate x3"), "did not list the least: " .. least)
+  local craftable = got.i3 and got.i3.output or ""
+  check(contains(craftable, "LP: not connected")
+    and contains(craftable, "craftable 1 of 1:\n  AE Iron Plate x3 (craftable)"),
+    "did not list the craftable or say LP is absent: " .. craftable)
+end)
+
 test("ocagent drops a frame that goes backwards", function()
   agentMachine()
   oc.idle = 16

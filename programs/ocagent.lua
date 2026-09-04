@@ -25,7 +25,7 @@ local link = require("oclink")
 local lp = require("oclogistics")
 local serialization = require("serialization")
 
-local VERSION = "0.11.0"
+local VERSION = "0.13.0"
 
 net.running("ocagent", VERSION)
 
@@ -129,6 +129,101 @@ local function show(title, lines, buttons)
   end
   saveBoard()
   return #kept
+end
+
+-- Everything a network holds, read once: a count of kinds and units and
+-- craftables per network, then the most, the least or the craftable items,
+-- as many as asked for. This is how "is AE or Logistics Pipes richer" and
+-- "what are we low on" get an answer instead of a request for names.
+local INVENTORY_LIMIT = 40
+
+local function gather(source)
+  local entries = {}
+  if source ~= "lp" then
+    for address in component.list("me_") do
+      local proxy = component.proxy(address)
+      if proxy and proxy.getItemsInNetwork then
+        local ok, items = pcall(proxy.getItemsInNetwork)
+        if ok and type(items) == "table" then
+          for _, item in ipairs(items) do
+            local label = tostring(item.label or item.name or "")
+            if label ~= "" then
+              entries[#entries + 1] = { from = "AE", name = label,
+                amount = tonumber(item.size) or 0, craftable = item.isCraftable == true }
+            end
+          end
+        end
+        break
+      end
+    end
+  end
+  if source ~= "ae" then
+    local pipe = lp.requestPipe()
+    if pipe then
+      for _, item in ipairs(lp.available(pipe) or {}) do
+        entries[#entries + 1] = { from = "LP", name = tostring(item.name),
+          amount = item.amount or 0, craftable = false }
+      end
+    end
+  end
+  return entries
+end
+
+local function inventory(source, sort, limit)
+  source = tostring(source or "both"):lower()
+  sort = tostring(sort or "most"):lower()
+  limit = math.min(INVENTORY_LIMIT, math.max(1, tonumber(limit) or 20))
+  lp.reclaim()
+  local entries = gather(source)
+
+  local totals = {}
+  for _, entry in ipairs(entries) do
+    local sum = totals[entry.from] or { kinds = 0, units = 0, craftable = 0 }
+    sum.kinds = sum.kinds + 1
+    sum.units = sum.units + entry.amount
+    if entry.craftable then
+      sum.craftable = sum.craftable + 1
+    end
+    totals[entry.from] = sum
+  end
+  local out = {}
+  for _, from in ipairs({ "AE", "LP" }) do
+    local sum = totals[from]
+    if sum then
+      out[#out + 1] = string.format("%s: %d kinds, %s units, %d craftable",
+        from, sum.kinds, core.comma(sum.units), sum.craftable)
+    elseif source == "both" or source == from:lower() then
+      out[#out + 1] = from .. ": not connected to this computer"
+    end
+  end
+
+  local chosen = {}
+  for _, entry in ipairs(entries) do
+    if sort == "craftable" then
+      if entry.craftable then
+        chosen[#chosen + 1] = entry
+      end
+    elseif sort == "least" then
+      if entry.amount > 0 then
+        chosen[#chosen + 1] = entry
+      end
+    else
+      chosen[#chosen + 1] = entry
+    end
+  end
+  table.sort(chosen, function(a, b)
+    if sort == "least" then
+      return a.amount < b.amount
+    end
+    return a.amount > b.amount
+  end)
+  out[#out + 1] = string.format("%s %d of %d:", sort, math.min(limit, #chosen), #chosen)
+  for index = 1, math.min(limit, #chosen) do
+    local entry = chosen[index]
+    out[#out + 1] = string.format("  %s %s x%s%s", entry.from, entry.name,
+      core.comma(entry.amount), entry.craftable and " (craftable)" or "")
+  end
+  return true, table.concat(out, "\n")
 end
 
 -- What the base holds of some things, asked of Applied Energistics and of
@@ -411,6 +506,10 @@ local function obey(command)
     end
     me.send({ kind = "result", id = command.id, ok = true,
       output = held > 0 and ("showing " .. held .. " lines") or "board cleared" })
+  elseif command.kind == "inventory" then
+    local ok, text = inventory(command.source, command.sort, command.limit)
+    say("inventory " .. tostring(command.source) .. " " .. tostring(command.sort), GREEN)
+    me.send({ kind = "result", id = command.id, ok = ok, output = text })
   elseif command.kind == "stock" then
     local queries = type(command.queries) == "table" and command.queries or { command.query }
     local ok, text = stock(queries)
@@ -564,7 +663,15 @@ local function timed(phase, work)
 end
 
 local function tick()
+  -- the wait is where every listener on this machine runs: the daemons, the
+  -- gateway, the chat box. A wait far past REST is one of them being slow.
+  local waited = computer.uptime()
   local name, _, _, code = event.pull(REST)
+  waited = computer.uptime() - waited
+  if waited >= SLOW + REST and computer.uptime() - (complained.wait or -60) >= 5 then
+    complained.wait = computer.uptime()
+    say(string.format("slow  wait took %.2fs", waited), RED)
+  end
   if name == "interrupted" or (name == "key_down" and code == keyboard.keys.q) then
     return false
   end

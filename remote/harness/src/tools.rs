@@ -89,6 +89,16 @@ pub fn definitions(web: bool, recipes: bool) -> Vec<Value> {
             vec!["items"],
         ),
         tool(
+            "inventory",
+            "Everything a network holds, read once: how many kinds, units and craftables Applied Energistics and Logistics Pipes each have, then the items with the most, the least, or the craftable ones, up to a limit. Use it for anything about the whole stock: what we are low on, what is richest, which network holds more, what AE can craft.",
+            json!({
+                "source": { "type": "string", "enum": ["ae", "lp", "both"] },
+                "sort": { "type": "string", "enum": ["most", "least", "craftable"] },
+                "limit": { "type": "integer", "description": "how many items to list, up to 40" }
+            }),
+            vec!["source", "sort"],
+        ),
+        tool(
             "remember",
             "Write down one fact a player taught you about the base, so you know it in every later conversation: what a machine is for, which door is which, what an address belongs to, how they like things done. One short line.",
             json!({ "note": { "type": "string" } }),
@@ -642,6 +652,28 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
                     format!("failed: {}", outcome.error.unwrap_or_default())
                 }
             })
+        }
+        "inventory" => {
+            let source = arguments
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("both");
+            let sort = arguments
+                .get("sort")
+                .and_then(Value::as_str)
+                .unwrap_or("most");
+            let limit = arguments.get("limit").and_then(Value::as_i64).unwrap_or(20);
+            context
+                .bridge
+                .inventory(source, sort, limit)
+                .await
+                .map(|outcome| {
+                    if outcome.ok {
+                        outcome.output.unwrap_or_else(|| "nothing".into())
+                    } else {
+                        format!("failed: {}", outcome.error.unwrap_or_default())
+                    }
+                })
         }
         "remember" => {
             let note = arguments

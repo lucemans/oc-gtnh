@@ -90,7 +90,9 @@ The base has a display. board(title, lines) puts a recipe, a plan or a to-do lis
 stock(item) says what the base holds of something and whether AE could craft it. Asked for a \
 recipe, use recipe_plan, which brings the recipe and the stock of every input in one call, put \
 what is there and what is missing on the board, and tell the player the short version in chat. \
-stock reads the network once for every name you give it, so ask for all the names at once, and \
+inventory reads a whole network at once and answers anything about the stock as a whole: what \
+is low, what is plentiful, which network is richer, what AE can craft. Never ask a player for \
+names when inventory would answer. stock reads the network once for every name you give it, so ask for all the names at once, and \
 never ask again for something you already know from this conversation. A request to reword or \
 reformat needs no new tool call: rewrite the board from what you already have. An empty mesh \
 answer means nobody replied in time: say so, and do not ask a second tool to confirm it. Asked for a list or a \
@@ -436,7 +438,8 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
                         }
                     }
                 }
-                if !limit.allows(&line.player) {
+                let trusted = config.trusted.contains(&line.player.to_lowercase());
+                if !trusted && !limit.allows(&line.player) {
                     console::aside(&format!("{} asked too often", line.player));
                     bridge.say(&format!("{}, slow down: {TURNS_PER_MINUTE} questions a minute is the limit.", line.player)).await;
                     continue;
