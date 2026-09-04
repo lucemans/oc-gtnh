@@ -101,7 +101,10 @@ version up, and say so in one short line.\n\
 A board line may carry colour: &a green, &c red, &e yellow, &b aqua, &6 gold, &7 grey, &f white, \
 &d pink, &9 blue, &r back to plain, anywhere in the line, and {{bar:42}} draws a bar that full. \
 Colour what matters: green for what is there, red for what is missing, yellow for what is in \
-progress. These codes work on the board only, never in chat.\n\
+progress. These codes work on the board only, never in chat. A board may also carry up to six \
+buttons, each a short label and the line it types to you when somebody touches it on the \
+monitor: give a button a line you would act on, such as \"make the computer beep\" or \"refresh \
+the fluid board\". Keep the buttons when you update a board unless asked to drop them.\n\
 \n\
 run_lua runs on OpenOS with Lua 5.3. component.list(kind) iterates components with their \
 full addresses, component.invoke(address, method, ...) calls one, component.proxy(address) \
@@ -188,6 +191,19 @@ pub fn asks_for_no_questions(text: &str) -> bool {
     .any(|phrase| lowered.contains(phrase))
 }
 
+impl ChatLine {
+    /// The line as the model reads it: who said it, or which button they pressed.
+    pub fn as_prompt(&self) -> String {
+        match &self.pressed {
+            Some(label) => format!(
+                "{} pressed the board button \"{label}\": {}",
+                self.player, self.text
+            ),
+            None => format!("{}: {}", self.player, self.text),
+        }
+    }
+}
+
 /// Splits an answer into chat-sized lines, on whitespace where it can.
 pub fn lines(text: &str) -> Vec<String> {
     let text = ascii(text);
@@ -250,7 +266,7 @@ async fn turn(
         config.extra_prompt.as_deref(),
     ))];
     messages.extend(history);
-    messages.push(Message::user(format!("{}: {}", line.player, line.text)));
+    messages.push(Message::user(line.as_prompt()));
     let definitions = tools::definitions(web, config.recipes.is_some());
     let context = tools::Context {
         bridge: bridge.clone(),
@@ -434,7 +450,7 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
                     }
                     continue;
                 }
-                history.push(Message::user(format!("{}: {}", line.player, line.text)));
+                history.push(Message::user(line.as_prompt()));
                 running = Some(start(line, &history[..history.len() - 1]));
             }
             request = confirm_rx.recv() => {
@@ -474,7 +490,7 @@ pub async fn run(bridge: Handle, mut chat: mpsc::Receiver<ChatLine>, config: Arc
                     history.remove(0);
                 }
                 if let Some(line) = queue.pop_front() {
-                    history.push(Message::user(format!("{}: {}", line.player, line.text)));
+                    history.push(Message::user(line.as_prompt()));
                     running = Some(start(line, &history[..history.len() - 1]));
                 }
             }

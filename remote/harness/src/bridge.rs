@@ -36,7 +36,12 @@ pub enum Inbound {
         dropped: Option<String>,
     },
     #[serde(rename = "chat")]
-    Chat { player: String, text: String },
+    Chat {
+        player: String,
+        text: String,
+        /// the button whose line this is, when it came from one
+        pressed: Option<String>,
+    },
     #[serde(rename = "partial")]
     Partial {
         id: String,
@@ -95,9 +100,17 @@ pub enum Outbound {
         id: String,
         title: String,
         lines: Vec<String>,
+        buttons: Vec<Button>,
     },
     #[serde(rename = "stock")]
     Stock { id: String, queries: Vec<String> },
+}
+
+/// A button on the board: a label, and the line it types to the agent.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Button {
+    pub label: String,
+    pub command: String,
 }
 
 #[derive(Serialize)]
@@ -125,6 +138,7 @@ struct Pending {
 pub struct ChatLine {
     pub player: String,
     pub text: String,
+    pub pressed: Option<String>,
 }
 
 /// The side of a device the agent holds: say things, ask things, run things.
@@ -231,12 +245,18 @@ impl Handle {
 
     /// Puts a title and some lines on the agent computer's screen, and on the
     /// board view of every ocview; no lines takes the board down.
-    pub async fn show(&self, title: &str, lines: Vec<String>) -> Result<Outcome> {
+    pub async fn show(
+        &self,
+        title: &str,
+        lines: Vec<String>,
+        buttons: Vec<Button>,
+    ) -> Result<Outcome> {
         self.request(
             |id| Outbound::Show {
                 id,
                 title: title.to_string(),
                 lines,
+                buttons,
             },
             Duration::from_secs(20),
         )
@@ -447,9 +467,21 @@ pub async fn session(link: &mut Link, config: Arc<Config>) -> Result<()> {
         };
         match message {
             Inbound::Hello { .. } => break Err(anyhow!("a second hello mid-session")),
-            Inbound::Chat { player, text } => {
+            Inbound::Chat {
+                player,
+                text,
+                pressed,
+            } => {
                 console::chat(&player, &text);
-                if chat_tx.send(ChatLine { player, text }).await.is_err() {
+                if chat_tx
+                    .send(ChatLine {
+                        player,
+                        text,
+                        pressed,
+                    })
+                    .await
+                    .is_err()
+                {
                     break Err(anyhow!("the agent task ended"));
                 }
             }

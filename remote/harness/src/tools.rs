@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use std::sync::Arc;
 
-use crate::bridge::Handle;
+use crate::bridge::{Button, Handle};
 use crate::recipes::{Direction, Recipes};
 
 /// how much of a tool result the model sees
@@ -74,8 +74,12 @@ pub fn definitions(web: bool, recipes: bool) -> Vec<Value> {
         ),
         tool(
             "board",
-            "Put a title and up to 18 short lines on the base's display: the agent computer's own screen and the board view of every ocview. Use it for a recipe, a to-do list, a shopping list, a plan. Plain ASCII, 60 characters a line. Call it again to replace the board; no lines takes it down. Say in chat what you put up.",
-            json!({ "title": { "type": "string" }, "lines": { "type": "array", "items": { "type": "string" } } }),
+            "Put a title, up to 18 short lines and up to 6 buttons on the base's monitor, the board view of every ocview. Use it for a recipe, a to-do list, a plan, a status board. Plain ASCII, 60 characters a line, &a colour codes and {bar:42} allowed. A button is a label and the line it types to you when touched. Call it again to replace the board; no lines takes it down. Say in chat what you put up.",
+            json!({
+                "title": { "type": "string" },
+                "lines": { "type": "array", "items": { "type": "string" } },
+                "buttons": { "type": "array", "items": { "type": "object", "properties": { "label": { "type": "string" }, "command": { "type": "string" } }, "required": ["label", "command"] } }
+            }),
             vec!["title", "lines"],
         ),
         tool(
@@ -542,12 +546,37 @@ pub async fn call(name: &str, arguments: &Value, context: &Context) -> String {
                 })
                 .unwrap_or_default();
             let title = crate::agent::ascii(title);
-            let outcome = context.bridge.show(&title, lines.clone()).await;
+            let buttons: Vec<Button> = arguments
+                .get("buttons")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            let label = item.get("label").and_then(Value::as_str)?.trim();
+                            let command = item.get("command").and_then(Value::as_str)?.trim();
+                            (!label.is_empty() && !command.is_empty()).then(|| Button {
+                                label: crate::agent::ascii(label).chars().take(16).collect(),
+                                command: crate::agent::ascii(command),
+                            })
+                        })
+                        .take(6)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let outcome = context
+                .bridge
+                .show(&title, lines.clone(), buttons.clone())
+                .await;
             if outcome.as_ref().is_ok_and(|outcome| outcome.ok) {
+                let mut shown = lines.clone();
+                for button in &buttons {
+                    shown.push(format!("[button] {} -> {}", button.label, button.command));
+                }
                 *context.board.lock().await = if lines.is_empty() {
                     None
                 } else {
-                    Some((title, lines))
+                    Some((title, shown))
                 };
             }
             outcome.map(|outcome| {

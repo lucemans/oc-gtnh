@@ -27,7 +27,7 @@ local tank = require("octank")
 
 local net = {}
 
-net.VERSION = "0.18.0"
+net.VERSION = "0.19.0"
 
 net.ASK = "ocstatus?"
 net.REPLY = "ocstatus!"
@@ -74,6 +74,11 @@ net.RUN_REPLY = "ocrun!"
 -- so a recipe or a list the agent wrote up is on the base's own screen.
 net.BOARD_ASK = "ocboard?"
 net.BOARD_REPLY = "ocboard!"
+
+-- A button on the board pressed on some screen: the preset line goes to the
+-- agent computer, which hands it to the harness as if the player had typed
+-- it. Sent to the machine whose board it was, never broadcast.
+net.PRESS = "ocpress?"
 
 -- how many records travel. Beyond a screenful nobody is reading them here.
 local RECORDS = 40
@@ -732,7 +737,12 @@ function net.decodeBoard(port, from, data)
   if not ok or type(answer) ~= "table" or type(answer.lines) ~= "table" then
     return nil, "unreadable"
   end
-  return { host = from, title = tostring(answer.title or ""), lines = answer.lines }
+  return {
+    host = from,
+    title = tostring(answer.title or ""),
+    lines = answer.lines,
+    buttons = type(answer.buttons) == "table" and answer.buttons or {},
+  }
 end
 
 -- Reads a machine's answer to net.askRun.

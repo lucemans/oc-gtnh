@@ -1838,6 +1838,36 @@ test("ocview shows the agent's board", function()
   check(asked, "never asked for the board")
 end)
 
+test("ocview draws the board's buttons and sends a touch on one to the agent", function()
+  oc.width, oc.height = 80, 20
+  oc.reset()
+  local modem = fakeModem("cc000000-0000-0000-0000-000000000002", true)
+  oc.components = { modem }
+  oc.files["/etc/ocgt.cfg"] = require("serialization").serialize({ view = "board" })
+  startMinitel("tablet")
+  deliver(modem, "bb000000", "tablet", "agent-01", "ocboard!\n"
+    .. require("serialization").serialize({ title = "Doors", lines = { "the airlock" },
+      buttons = { { label = "beep", command = "make the computer beep" } } }))
+  -- a finger on the first button, on the row above the bottom bar
+  oc.pushAfter(3, "touch", "screen", 4, 19, 0, "Steve")
+  oc.idle = 4
+
+  local ok, reason = oc.run("ocview")
+  check(ok, "ocview crashed: " .. tostring(reason))
+  -- the frame at the last wait, since the screen is cleared on the way out
+  check(contains(oc.frame(), "[ beep ]"), "did not draw the button")
+  local pressed
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 9) == "ocpress?\n" then
+      pressed = packet
+    end
+  end
+  check(pressed ~= nil and pressed.dest == "agent-01", "did not send the press to the agent")
+  local press = pressed and require("serialization").unserialize(pressed.data:sub(10))
+  check(press and press.command == "make the computer beep" and press.player == "Steve",
+    "the press does not carry the line and the player")
+end)
+
 test("ocview remembers a satellite so the next question is routed to it", function()
   oc.width, oc.height = 120, 30
   oc.reset()
@@ -7319,6 +7349,40 @@ test("ocagent puts up a board, keeps it, and answers ocview for it", function()
   check(pushed, "did not push the new board to the mesh when it changed")
   local answer = answered and require("serialization").unserialize(answered.data:sub(10))
   check(answer and answer.title == "Steel Ingot" and #answer.lines == 2, "answered with a different board")
+end)
+
+test("ocagent keeps buttons on the board and types a pressed one to the harness", function()
+  local modem = agentMachine()
+  oc.idle = 26
+  local received = proxy(function(message, far)
+    if message.kind == "hello" then
+      far.send({ kind = "show", id = "b1", title = "Doors", lines = { "the airlock" },
+        buttons = { { label = "beep", command = "make the computer beep" } } })
+    end
+  end)
+  deliverAfter(14, modem, "bb000000", "agent-01", "tablet", "ocboard?")
+  deliverAfter(16, modem, "bb000000", "agent-01", "tablet", "ocpress?\n"
+    .. require("serialization").serialize({ label = "beep", command = "make the computer beep", player = "Steve" }))
+
+  local ok, reason = oc.run("ocagent")
+  check(ok, "ocagent crashed: " .. tostring(reason))
+  local answer
+  for _, packet in ipairs(outbound(modem)) do
+    if type(packet.data) == "string" and packet.data:sub(1, 9) == "ocboard!\n" and packet.dest == "tablet" then
+      answer = require("serialization").unserialize(packet.data:sub(10))
+    end
+  end
+  check(answer and answer.buttons and answer.buttons[1] and answer.buttons[1].label == "beep",
+    "the board answer carries no button")
+  local pressed
+  for _, message in ipairs(received) do
+    if message.kind == "chat" and message.pressed == "beep" then
+      pressed = message
+    end
+  end
+  check(pressed ~= nil, "the press did not reach the harness as chat: " .. kinds(received))
+  check(pressed and pressed.player == "Steve" and pressed.text == "make the computer beep",
+    "the press did not carry the player and the line")
 end)
 
 test("ocagent reads stock from applied energistics", function()

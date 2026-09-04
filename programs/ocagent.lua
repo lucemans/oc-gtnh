@@ -25,7 +25,7 @@ local link = require("oclink")
 local lp = require("oclogistics")
 local serialization = require("serialization")
 
-local VERSION = "0.10.0"
+local VERSION = "0.11.0"
 
 net.running("ocagent", VERSION)
 
@@ -47,8 +47,11 @@ local STRIKES = 3
 local AWAY_EVERY = 30
 -- where the board survives a reboot
 local BOARD_PATH = "/home/board.cfg"
--- how many lines a board holds, and how many stock lines an answer holds
+-- how many lines a board holds, how many buttons, and how many stock lines an
+-- answer holds
 local BOARD_LINES = 18
+local BOARD_BUTTONS = 6
+local BUTTON_LABEL = 16
 local STOCK_LINES = 20
 
 local WHITE = 0xFFFFFF
@@ -69,11 +72,17 @@ local function say(text, color)
   print(text)
 end
 
+-- the board as it travels: to disk, to whoever asks, and to everybody when
+-- it changes
+local function boardPayload()
+  return serialization.serialize({ title = board.title, lines = board.lines, buttons = board.buttons })
+end
+
 local function saveBoard()
   if board then
     local file = io.open(BOARD_PATH, "w")
     if file then
-      file:write(serialization.serialize({ title = board.title, lines = board.lines }))
+      file:write(boardPayload())
       file:close()
     end
   else
@@ -90,21 +99,31 @@ local function loadBoard()
   file:close()
   local ok, saved = pcall(serialization.unserialize, text or "")
   if ok and type(saved) == "table" and type(saved.lines) == "table" and saved.lines[1] then
-    board = { title = tostring(saved.title or ""), lines = saved.lines }
+    board = { title = tostring(saved.title or ""), lines = saved.lines,
+      buttons = type(saved.buttons) == "table" and saved.buttons or {} }
   end
 end
 
 -- Replaces the board, or takes it down when there are no lines. Lines are cut
 -- to what a screen holds, since the harness sends what a model wrote.
-local function show(title, lines)
+local function show(title, lines, buttons)
   local kept = {}
   for _, line in ipairs(type(lines) == "table" and lines or {}) do
     if #kept < BOARD_LINES then
       kept[#kept + 1] = tostring(line)
     end
   end
+  -- a button is a label and the line it types; one without either is nothing
+  local pressable = {}
+  for _, button in ipairs(type(buttons) == "table" and buttons or {}) do
+    local label = tostring(button.label or ""):sub(1, BUTTON_LABEL)
+    local command = tostring(button.command or "")
+    if label ~= "" and command ~= "" and #pressable < BOARD_BUTTONS then
+      pressable[#pressable + 1] = { label = label, command = command }
+    end
+  end
   if kept[1] then
-    board = { title = tostring(title or ""), lines = kept }
+    board = { title = tostring(title or ""), lines = kept, buttons = pressable }
   else
     board = nil
   end
@@ -379,13 +398,12 @@ local function obey(command)
   elseif command.kind == "ask" then
     ask(command)
   elseif command.kind == "show" then
-    local held = show(command.title, command.lines)
+    local held = show(command.title, command.lines, command.buttons)
     say("board " .. (held > 0 and (held .. " lines") or "cleared"), GREEN)
     -- said to everybody at once rather than waited for: ocview asks every two
     -- seconds, and a board should change the moment it is written
     if board then
-      local payload = net.BOARD_REPLY .. "\n"
-        .. serialization.serialize({ title = board.title, lines = board.lines })
+      local payload = net.BOARD_REPLY .. "\n" .. boardPayload()
       minitel.usend(net.EVERYONE, core.PORT, payload)
       for _, host in ipairs(net.peers(config)) do
         minitel.usend(host, core.PORT, payload)
@@ -437,8 +455,19 @@ local function heard(packet)
   end
   if packet.data == net.BOARD_ASK then
     if board then
-      minitel.usend(packet.from, core.PORT, net.BOARD_REPLY .. "\n"
-        .. serialization.serialize({ title = board.title, lines = board.lines }))
+      minitel.usend(packet.from, core.PORT, net.BOARD_REPLY .. "\n" .. boardPayload())
+    end
+    return
+  end
+  -- a button pressed on some screen is the player typing its line; it goes
+  -- through the same queue as chat, so it waits for the link like chat does
+  local pressPrefix = net.PRESS .. "\n"
+  if packet.data:sub(1, #pressPrefix) == pressPrefix then
+    local ok, press = pcall(serialization.unserialize, packet.data:sub(#pressPrefix + 1))
+    if ok and type(press) == "table" and type(press.command) == "string" then
+      say("press " .. tostring(press.label) .. " by " .. tostring(press.player), WHITE)
+      chats[#chats + 1] = { player = tostring(press.player or "someone"),
+        text = "@c " .. press.command, pressed = tostring(press.label or "") }
     end
     return
   end
@@ -490,11 +519,11 @@ local function forwardChat(line)
     return
   end
   say("chat  " .. line.player .. ": " .. text, WHITE)
-  if me.send({ kind = "chat", player = line.player, text = text }) then
+  if me.send({ kind = "chat", player = line.player, text = text, pressed = line.pressed }) then
     return
   end
   if #held < HOLD_LINES then
-    held[#held + 1] = { player = line.player, text = text, at = computer.uptime() }
+    held[#held + 1] = { player = line.player, text = text, pressed = line.pressed, at = computer.uptime() }
   end
   if computer.uptime() - awaySaid >= AWAY_EVERY then
     awaySaid = computer.uptime()
@@ -509,7 +538,7 @@ local function flushHeld()
     local line = held[1]
     if now - line.at > HOLD_SECONDS then
       table.remove(held, 1)
-    elseif me.send({ kind = "chat", player = line.player, text = line.text }) then
+    elseif me.send({ kind = "chat", player = line.player, text = line.text, pressed = line.pressed }) then
       say("chat  sent late: " .. line.player .. ": " .. line.text, DIM)
       table.remove(held, 1)
     else

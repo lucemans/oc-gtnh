@@ -17,7 +17,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 local unicode = require("unicode")
 
-local VERSION = "0.19.0"
+local VERSION = "0.20.0"
 
 -- what this machine tells the network it is running, in every report it sends
 net.running("ocview", VERSION)
@@ -36,6 +36,8 @@ local DIM = 0x999999
 local BAR = 0x333333
 local OK_COLOR = 0x66CC66
 local ALARM = 0xCC6666
+-- a button on the board, lit so it reads as one
+local BUTTON = 0x0066CC
 -- the view being looked at, and the key that would change it
 local ACTIVE = 0x66CCFF
 -- quieter than DIM, for the rules between the parts of a bar
@@ -172,6 +174,9 @@ local function boardText(line)
   end)
   return (line:gsub("&(%x)", core.SECTION .. "%1"))
 end
+
+-- where each button was drawn on the board, so a touch finds it
+local boardButtons = {}
 
 local function writeBoardLine(y, text, width)
   write(2, y, fit("", width), FG, BG)
@@ -1029,8 +1034,22 @@ local function render()
     if board then
       writeBoardLine(3, board.title, W - 2)
       write(2, 4, string.rep("-", W - 2), DIM, BG)
-      for line = 1, H - 6 do
+      for line = 1, H - 7 do
         writeBoardLine(4 + line, board.lines[line] or "", W - 2)
+      end
+      -- the buttons sit on their own row above the bottom bar, each a label in
+      -- brackets, and a touch on one types its line to the agent
+      boardButtons = {}
+      write(2, H - 1, fit("", W - 2), FG, BG)
+      local x = 2
+      for _, button in ipairs(board.buttons or {}) do
+        local label = "[ " .. tostring(button.label) .. " ]"
+        if x + #label > W then
+          break
+        end
+        write(x, H - 1, label, FG, BUTTON)
+        boardButtons[#boardButtons + 1] = { from = x, to = x + #label - 1, y = H - 1, button = button }
+        x = x + #label + 2
       end
     else
       write(3, 3, fit("asking the agent what is on its board", W - 4), DIM, BG)
@@ -1178,6 +1197,15 @@ while true do
     break
   elseif name == "screen_resized" then
     layout()
+  elseif name == "touch" and mode == "board" and board then
+    local x, y, player = packed[3], packed[4], packed[6]
+    for _, drawn in ipairs(boardButtons) do
+      if y == drawn.y and x >= drawn.from and x <= drawn.to then
+        minitel.usend(board.host, core.PORT, net.PRESS .. "\n" .. require("serialization").serialize({
+          label = drawn.button.label, command = drawn.button.command, player = tostring(player or "someone"),
+        }))
+      end
+    end
   elseif name == "key_down" then
     local code = packed[4]
     if code == keyboard.keys.q then

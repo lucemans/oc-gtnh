@@ -261,7 +261,12 @@ the agent computer, which keeps them and answers `ocboard?` with them, and
 base's monitor. A new board is also pushed to everyone the moment it is
 written, so the monitor changes as the agent writes rather than on the next
 poll. The agent computer's own screen stays the running log. The board
-survives a reboot of the agent computer, and no lines takes it down. A line may carry `&a` colour codes as Minecraft
+survives a reboot of the agent computer, and no lines takes it down.
+A board may carry up to six buttons, each a label and the line it types: the
+`ocview` board view draws them on the row above its bar, and a touch on one
+sends that line to the agent as if the player who touched it had typed it in
+chat, with the button named. "Add a button that makes the computer beep" is
+then a button whose line is "make the computer beep". A line may carry `&a` colour codes as Minecraft
 writes them, and `{bar:42}` draws a bar that full, on both screens. The
 current board rides in every system prompt, so the agent updates it rather
 than rewriting it, and the prompt tells it to keep the board current on its
